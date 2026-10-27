@@ -6,7 +6,7 @@ Stage 1 ledger for `musicman12091/aiu-zur-visualizer`.
 
 - status: implemented on `cursor/zur-stage1-4553`, not merged
 - branch: `cursor/zur-stage1-4553`
-- commit_sha: pending-ledger
+- commit_sha: dd47857b49d8311afcaffe4c7740cbf214f47c69
 - pages_url: https://musicman12091.github.io/aiu-zur-visualizer/
 - pages_status: not enabled (`has_pages: false`; this credential has no admin right to turn Pages on)
 - contract_tests: PASS — `node tests/verify-contracts.mjs` (19 passed)
