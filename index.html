@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#07060b" />
+  <meta name="description" content="ZUR is a silent audio-reactive WebGL2 visualizer for Discord screen share." />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>ZUR Visualizer</title>
+  <link rel="manifest" href="./manifest.json" />
+  <link rel="icon" href="./icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="./icons/icon-192.png" />
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #07060b;
+      --ink: #f6f1e8;
+      --muted: #b7aea3;
+      --copper: #d4896a;
+      --teal: #1fbeb0;
+      --line: rgba(246, 241, 232, 0.14);
+      --panel: rgba(10, 9, 14, 0.78);
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: "Avenir Next", "Segoe UI", sans-serif;
+    }
+    body { overflow: hidden; }
+    #stage {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      display: block;
+      background: var(--bg);
+    }
+    #capture-sink {
+      position: fixed;
+      width: 1px;
+      height: 1px;
+      opacity: 0;
+      pointer-events: none;
+    }
+    #hud-root { position: fixed; z-index: 2; inset: 12px auto auto 12px; max-width: calc(100vw - 24px); }
+    .hud {
+      width: min(420px, calc(100vw - 24px));
+      max-height: calc(100dvh - 24px);
+      overflow: auto;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: var(--panel);
+      backdrop-filter: blur(16px);
+      box-shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
+    }
+    .hud.is-collapsed .hud-body { display: none; }
+    .hud-header, .row, .field-head, .pills { display: flex; align-items: center; gap: 8px; }
+    .hud-header { justify-content: space-between; }
+    .hud-toggle, .hud-button, .file-button {
+      min-height: 44px;
+      border: 0;
+      border-radius: 999px;
+      padding: 0 14px;
+      background: #1b1814;
+      color: var(--ink);
+      font: inherit;
+    }
+    .hud-toggle { background: linear-gradient(120deg, #8a4b32, var(--teal)); font-weight: 700; letter-spacing: 0.08em; }
+    .hud-button, .file-button { flex: 1; }
+    .file-button { display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+    .file-button input { display: none; }
+    .pill {
+      border-radius: 999px;
+      padding: 4px 8px;
+      background: #16141a;
+      color: var(--muted);
+      font-size: 11px;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+    }
+    .pill[data-state="active"], .pill[data-state="webgl2"], .pill[data-state="tab-capture"], .pill[data-state="microphone"], .pill[data-state="oscillator"] {
+      color: #06211e;
+      background: var(--teal);
+    }
+    .pill[data-state="error"], .pill[data-state="denied"], .pill[data-state="unavailable"] { background: #8d3d32; color: white; }
+    .preset-name { margin: 12px 0 8px; font-size: 14px; }
+    .meters { display: grid; gap: 6px; }
+    .meter { display: grid; grid-template-columns: 72px 1fr; gap: 8px; align-items: center; }
+    .meter-label { color: var(--muted); font-size: 12px; }
+    .meter-track { height: 10px; border-radius: 999px; background: #211d18; overflow: hidden; }
+    .meter-fill {
+      display: block;
+      height: 100%;
+      width: 100%;
+      transform: scaleX(var(--level, 0));
+      transform-origin: left center;
+      background: linear-gradient(90deg, var(--copper), var(--teal));
+    }
+    .row { margin-top: 10px; flex-wrap: wrap; }
+    .field, .check { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; font-size: 13px; }
+    .check { flex-direction: row; align-items: center; min-height: 44px; }
+    .field-head { justify-content: space-between; }
+    .field-label { color: var(--muted); }
+    .field-value { color: var(--copper); }
+    input[type="range"], select, textarea {
+      width: 100%;
+      accent-color: var(--teal);
+      background: #120f13;
+      color: var(--ink);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+    }
+    select, textarea { padding: 8px; font: inherit; }
+    textarea { min-height: 120px; resize: vertical; }
+    .diagnostics {
+      margin: 10px 0 0;
+      padding: 8px;
+      max-height: 140px;
+      overflow: auto;
+      border-radius: 10px;
+      background: #100e12;
+      color: #d9cfc3;
+      font-size: 11px;
+      line-height: 1.4;
+    }
+    .hud-error { min-height: 1.2em; color: #ffb4a8; font-size: 13px; }
+    .hint { color: var(--muted); font-size: 12px; }
+    @media (max-width: 720px) {
+      #hud-root { inset: auto 8px 8px 8px; }
+      .hud { width: 100%; max-height: 46dvh; }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="stage" width="1280" height="720" aria-label="ZUR visualizer canvas"></canvas>
+  <video id="capture-sink" muted playsinline autoplay></video>
+  <div id="hud-root"></div>
+  <noscript>ZUR needs JavaScript and WebGL2.</noscript>
+  <script type="module" src="./src/app/main.js"></script>
+</body>
+</html>
