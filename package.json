@@ -1,0 +1,9 @@
+{
+  "name": "aiu-zur-visualizer",
+  "private": true,
+  "type": "module",
+  "description": "Project ZUR Stage 1 silent audio-reactive WebGL2 visualizer.",
+  "scripts": {
+    "test": "node tests/verify-contracts.mjs"
+  }
+}
