@@ -4,11 +4,15 @@ Stage 1 ledger for `musicman12091/aiu-zur-visualizer`.
 
 ## Stage 1 — ZUR-GH-001
 
-- status: implemented on `cursor/zur-stage1-4553`, not merged
-- branch: `cursor/zur-stage1-4553`
-- commit_sha: dd47857b49d8311afcaffe4c7740cbf214f47c69
+- status: squash-merged to `main`
+- merged_to_main: yes
+- main_commit_sha: 052dc4fa1d38ff82106da4fa1c9c938ebd798b21
+- PR: https://github.com/musicman12091/aiu-zur-visualizer/pull/1 (merged)
+- implementation_commit_sha: dd47857b49d8311afcaffe4c7740cbf214f47c69
+- branch: `cursor/zur-stage1-4553` (squash-merged)
 - pages_url: https://musicman12091.github.io/aiu-zur-visualizer/
-- pages_status: not enabled (`has_pages: false`; this credential has no admin right to turn Pages on)
+- pages_status: not enabled — host must enable Pages (this credential has no admin right)
+- tests: `node tests/verify-contracts.mjs` 19 passed; headless Chrome smoke passed; `destinationConnections` 0
 - contract_tests: PASS — `node tests/verify-contracts.mjs` (19 passed)
 - headless_chrome: PASS — page boot, 7 HUD meters, WebGL2 canvas, silent test oscillator driving sub/bass/lowMid/highMid/treble/RMS with `destinationConnections: 0`
 
@@ -16,9 +20,9 @@ Headless Chrome 156 (SwiftShader) loaded `index.html`, compiled `aurora-ribbons.
 
 ## Pages
 
-GitHub reports `has_pages: false`. The agent token cannot change repository settings.
+GitHub still reports `has_pages: false`. Enabling Pages needs repository admin, which this credential does not have, so the API cannot turn it on.
 
-After this branch is on `main`:
+Stage 1 is already on `main` (`052dc4fa1d38ff82106da4fa1c9c938ebd798b21`). The host still needs to enable Pages:
 
 1. Open https://github.com/musicman12091/aiu-zur-visualizer/settings/pages
 2. Under Build and deployment, set Source to **Deploy from a branch**.
