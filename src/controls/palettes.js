@@ -14,10 +14,12 @@ function palette(...hexes) {
 }
 
 export const PALETTES = {
+  "neon-tunnel": palette("#00F5FF", "#FF00A0", "#7B2CBF", "#0066FF", "#FFFFFF"),
+  "cyber-laser": palette("#FF2D55", "#00FFC6", "#FFE600", "#7A00FF", "#FFFFFF"),
+  "solar-plasma": palette("#FFB300", "#FF5A00", "#FF1F3D", "#FFE08A", "#FFFFFF"),
+  "biolum-ocean": palette("#00FFD0", "#00B3FF", "#3D5AFE", "#B8FF5A", "#E6FFFF"),
+  "emerald-matrix": palette("#00FF6A", "#00C853", "#B6FF9E", "#00A8A8", "#EFFFF4"),
   "copper-teal": palette("#D4896A", "#E8B86D", "#F3E6D0", "#1FBEB0", "#14324A"),
-  "ember-violet": palette("#E07A3D", "#C4476A", "#F2D0A4", "#7A4EA3", "#24182E"),
-  "arctic-gold": palette("#F0C36A", "#F7E7C1", "#9FD7E8", "#3E8EAA", "#102833"),
-  "forest-signal": palette("#E2A15A", "#F2E3C4", "#6FBF8B", "#2E8B6A", "#14281C"),
 };
 
 export const PALETTE_IDS = Object.keys(PALETTES);

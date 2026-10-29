@@ -1,6 +1,6 @@
 import { clamp01 } from "../audio/FeatureExtractor.js";
 import { PALETTES, shiftPalette } from "../controls/palettes.js";
-import { PARTICLE_SCENE_ID, normalizeParticles } from "./particleMath.js";
+import { PARTICLE_SCENE_IDS, PULSE_SCENE_ID, normalizeParticles, resolveFboSize } from "./particleMath.js";
 
 /** Four hardware tiers. Tier 1 matches Mode A; Tier 2 matches Mode B. */
 export const QUALITY_TIERS = Object.freeze([
@@ -42,12 +42,15 @@ export const QUALITY_TIERS = Object.freeze([
   }),
 ]);
 
-export function resolveRenderSize(preset) {
+/** Portrait canvases (clientHeight > clientWidth) get a W/H-swapped, aspect-matched Pass 1 target. */
+export function resolveRenderSize(preset, canvas = null) {
   const visual = preset?.visual || {};
   const tier = QUALITY_TIERS.find((item) => item.id === visual.qualityTier) || QUALITY_TIERS[0];
+  const fbo = resolveFboSize(visual.width || tier.width, visual.height || tier.height, canvas?.clientWidth, canvas?.clientHeight);
   return {
-    width: visual.width || tier.width,
-    height: visual.height || tier.height,
+    width: fbo.width,
+    height: fbo.height,
+    portrait: fbo.portrait,
     fps: visual.fps || tier.fps,
     complexity: visual.complexity ?? tier.complexity,
     tier,
@@ -106,12 +109,12 @@ export class RenderHost {
 
   /** Scene actually drawn this frame: particles when requested and ready, else aurora. */
   resolveScene(preset) {
-    if (preset?.sceneId === PARTICLE_SCENE_ID && this.particleSystem?.ready) return PARTICLE_SCENE_ID;
+    if (PARTICLE_SCENE_IDS.includes(preset?.sceneId) && this.particleSystem?.ready) return preset.sceneId;
     return "aurora-ribbons";
   }
 
   applySize() {
-    const size = resolveRenderSize(this.getPreset());
+    const size = resolveRenderSize(this.getPreset(), this.canvas);
     this.shaderHost.resize(size.width, size.height);
     this.particleSystem?.resize(size.width, size.height);
     return size;
@@ -136,7 +139,7 @@ export class RenderHost {
     this._raf = requestAnimationFrame(this._loop);
     if (this.pausedForContextLoss) return;
     const preset = this.getPreset();
-    const size = resolveRenderSize(preset);
+    const size = resolveRenderSize(preset, this.canvas);
     if (this.shaderHost.width !== size.width || this.shaderHost.height !== size.height) {
       this.shaderHost.resize(size.width, size.height);
       this.particleSystem?.resize(size.width, size.height);
@@ -157,8 +160,8 @@ export class RenderHost {
       this.displayedFps = this.framesThisSecond;
       this.framesThisSecond = 0;
       this.fpsWindowStart = now;
-      if (this.activeScene === PARTICLE_SCENE_ID) {
-        this.particleSystem?.reportFps(this.displayedFps, size.fps, preset.particles?.countTier ?? "auto");
+      if (PARTICLE_SCENE_IDS.includes(this.activeScene)) {
+        this.particleSystem?.reportFps(this.displayedFps, size.fps, preset.particles?.particleCountTier ?? "auto");
       }
     }
 
@@ -197,10 +200,10 @@ export class RenderHost {
     });
     const scene = this.resolveScene(preset);
     if (scene !== this.activeScene) {
-      if (scene === PARTICLE_SCENE_ID && this.particleSystem) this.particleSystem.resetAuto();
+      if (PARTICLE_SCENE_IDS.includes(scene) && this.particleSystem) this.particleSystem.resetAuto();
       this.activeScene = scene;
     }
-    if (scene === PARTICLE_SCENE_ID) {
+    if (PARTICLE_SCENE_IDS.includes(scene)) {
       const particles = preset.particles || this._defaultParticles || (this._defaultParticles = normalizeParticles(null));
       this.particleSystem.render(
         this.shaderHost.frame,
@@ -209,6 +212,7 @@ export class RenderHost {
         visual,
         this.canvas.width,
         this.canvas.height,
+        { pulse: scene === PULSE_SCENE_ID, bands: [frame.sub, frame.bass, frame.lowMid, frame.highMid, frame.treble] },
       );
     } else {
       this.shaderHost.render();

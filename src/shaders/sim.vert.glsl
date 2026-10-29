@@ -1,5 +1,5 @@
 #version 300 es
-// ZUR Stage 2 — transform-feedback particle update (one fixed 1/60 s step per draw).
+// ZUR Stage 3 — transform-feedback particle update (one fixed 1/60 s step per draw).
 // a_pos = xyz position + w size/seed; a_vel = xyz velocity + w phase/life.
 precision highp float;
 precision highp int;
@@ -26,8 +26,19 @@ uniform float u_waveSpeed;
 uniform vec4 u_shock[4];     // xyz origin, w birth time (< 0 = empty)
 uniform sampler2D u_neighbors; // RGBA32F, 2 texels per agent, 256 agents per row
 uniform int u_useNeighbors;
+uniform int u_formationType;     // 0 free-3d, 1 neon-tunnel, 2 polygon-rings, 3 supernova-shell
+uniform int u_oscillationType;   // 0 off, 1 wave, 2 helix, 3 bounce, 4 pulse
+uniform float u_oscillationAmount;
+uniform float u_oscillationSpeed;
+uniform int u_pulseLayout;       // -1 = swarm scene, 0 band-clouds, 1 geodesic-sphere, 2 wave-grid
+uniform float u_bands[5];        // sub, bass, lowMid, highMid, treble
 
-const float BOUND_RADIUS = 6.5;
+const float BOUND_RADIUS = 7.2;
+// Spawn / formation volume: the normalized [-1.25, +1.25] cube scaled to world units.
+const float VOLUME_HALF = 1.25;
+const float WORLD_SCALE = 3.2;
+const float VOLUME_WORLD = VOLUME_HALF * WORLD_SCALE;
+const float TAU = 6.28318530718;
 
 uint hash32(uint x) {
   x ^= x >> 16u;
@@ -193,6 +204,105 @@ void ringFlock(int id, vec3 pos, vec3 vel, float sepRadius, out vec3 sep, out ve
   cohesion = sumP / 6.0 - pos;
 }
 
+
+// Distance from the axis to a regular n-gon edge at polar angle a (circumradius R).
+float polygonRadius(float a, float sides, float R) {
+  float sector = TAU / sides;
+  float offset = mod(a, sector) - sector * 0.5;
+  return R * cos(sector * 0.5) / cos(offset);
+}
+
+// Stage 3 formation target for one agent. free-3d returns pos (no pull).
+vec3 formationTarget(vec3 pos, float seed, float phase, uint uid) {
+  if (u_formationType == 1) {
+    // neon-tunnel: hex tube along Z, particles stream toward the camera and wrap
+    float a = atan(pos.y, pos.x);
+    float lane = 0.55 + 0.45 * seed;
+    float rt = polygonRadius(a, 6.0, 2.9) * lane;
+    return vec3(cos(a) * rt, sin(a) * rt, pos.z);
+  }
+  if (u_formationType == 2) {
+    // polygon-rings: 8 hexagonal rings scrolling along Z
+    float ring = floor(seed * 8.0);
+    float z = mod((ring / 8.0 + u_time * 0.05) , 1.0) * 2.0 * VOLUME_WORLD - VOLUME_WORLD;
+    float a = phase * TAU + u_time * 0.15;
+    float rt = polygonRadius(a, 6.0, 3.0);
+    return vec3(cos(a) * rt, sin(a) * rt, z);
+  }
+  if (u_formationType == 3) {
+    // supernova-shell: fibonacci shell that swells on bass / onset
+    float i = float(uid) + 0.5;
+    float n = float(max(u_count, 1));
+    float y = 1.0 - 2.0 * i / n;
+    float rr = sqrt(max(0.0, 1.0 - y * y));
+    float az = i * 2.39996323;
+    float R = 3.0 + 1.4 * u_bass + 1.8 * u_onset;
+    return vec3(cos(az) * rr, y, sin(az) * rr) * R;
+  }
+  return pos;
+}
+
+// Stage 3 oscillation offset applied to the formation target.
+vec3 oscillationOffset(vec3 pos, float seed, float phase) {
+  if (u_oscillationType == 0 || u_oscillationAmount <= 0.0) return vec3(0.0);
+  float t = u_time * u_oscillationSpeed;
+  float amt = u_oscillationAmount * (1.0 + 0.6 * u_bass);
+  float ang = pos.z * 1.1 + t * 2.0 + seed * TAU;
+  vec3 radialDir = normalize(vec3(pos.xy, 0.0) + vec3(1e-4, 0.0, 0.0));
+  if (u_oscillationType == 1) {
+    return vec3(0.0, sin(pos.z * 1.3 + t * 2.0) * 0.7 * amt, cos(pos.x * 1.1 + t * 1.7) * 0.35 * amt);
+  }
+  if (u_oscillationType == 2) {
+    return vec3(cos(ang), sin(ang), 0.0) * 0.55 * amt;
+  }
+  if (u_oscillationType == 3) {
+    return (radialDir * abs(sin(t * 2.0 + seed * TAU)) * 0.9 + vec3(0.0, 0.0, 0.0)) * amt;
+  }
+  float breathe = sin(t * 3.0 - length(pos) * 0.8);
+  return normalize(pos + vec3(1e-4)) * breathe * 0.7 * amt;
+}
+
+// Stage 3 pulse-field target: every agent belongs to band id % 5.
+vec3 pulseTarget(int id, vec3 pos, float seed, uint uid, out float stiffness) {
+  int band = id % 5;
+  float level = clamp(u_bands[band], 0.0, 1.5);
+  stiffness = 4.0;
+  if (u_pulseLayout == 1) {
+    float i = float(id) + 0.5;
+    float n = float(max(u_count, 1));
+    float y = 1.0 - 2.0 * i / n;
+    float rr = sqrt(max(0.0, 1.0 - y * y));
+    float az = i * 2.39996323 + u_time * (0.12 + 0.5 * level);
+    float R = 3.2 * (1.0 + 0.28 * level);
+    return vec3(cos(az) * rr, y, sin(az) * rr) * R;
+  }
+  if (u_pulseLayout == 2) {
+    float g = ceil(sqrt(float(max(u_count, 1))));
+    float ix = float(id % int(g));
+    float iz = float(id / int(g));
+    float x = (ix / max(g - 1.0, 1.0) - 0.5) * 2.0 * VOLUME_WORLD;
+    float z = (iz / max(g - 1.0, 1.0) - 0.5) * 2.0 * VOLUME_WORLD;
+    float h = 0.0;
+    for (int b = 0; b < 5; b++) {
+      float fb = float(b);
+      float dir = fb * 1.2566370614;
+      float k = 0.6 + 0.35 * fb;
+      float w = 0.8 + 0.7 * fb + 1.5 * clamp(u_bands[b], 0.0, 1.5);
+      h += clamp(u_bands[b], 0.0, 1.5) * sin(k * (x * cos(dir) + z * sin(dir)) + u_time * w);
+    }
+    stiffness = 7.0;
+    return vec3(x, h * 1.1, z);
+  }
+  // band-clouds: five clouds around a pentagon; level sets swirl speed and shell scale
+  float fb = float(band);
+  float a = fb * 1.2566370614;
+  vec3 center = vec3(cos(a) * 2.6, sin(a) * 1.7, sin(fb * 1.7) * 1.6);
+  vec3 rel = pos - center;
+  vec3 dir = normalize(rel + (hash3(uid) - 0.5) * 0.05 + vec3(1e-4));
+  float R = 0.7 + 0.6 * seed + 0.9 * level;
+  return center + dir * R;
+}
+
 void main() {
   int id = gl_VertexID;
   uint uid = uint(id);
@@ -282,6 +392,28 @@ void main() {
     phase = fract(phase + dt * (1.2 + 3.0 * u_high));
   }
 
+  if (u_pulseLayout >= 0) {
+    // Stage 3 pulse-field: spring to the layout target, swirl speed driven by the agent's band.
+    float stiff;
+    vec3 target = pulseTarget(id, pos, seed, uid, stiff);
+    float level = clamp(u_bands[id % 5], 0.0, 1.5);
+    F = (target - pos) * stiff - vel * 1.2;
+    if (u_pulseLayout == 0) {
+      float a = float(id % 5) * 1.2566370614;
+      vec3 center = vec3(cos(a) * 2.6, sin(a) * 1.7, sin(float(id % 5) * 1.7) * 1.6);
+      F += cross(vec3(0.0, 1.0, 0.0), pos - center) * (0.8 + 5.0 * level);
+    }
+    F += curlAnalytic(pos * 0.35 + vec3(u_time * 0.08)) * 0.6;
+    lo = 0.0;
+    hi = 14.0;
+  } else if (u_formationType != 0 || u_oscillationType != 0) {
+    // Stage 3 formations + oscillation layer on top of the active flow mode.
+    vec3 target = formationTarget(pos, seed, phase, uid) + oscillationOffset(pos, seed, phase);
+    float pull = u_formationType == 0 ? 1.5 : 7.0;
+    F += (target - pos) * pull - (u_formationType == 0 ? vec3(0.0) : vel * 2.6);
+    if (u_formationType == 1) F.z -= 1.8 + 3.0 * u_rms + 2.0 * u_bass;
+  }
+
   // Soft spherical boundary keeps every agent in the camera volume.
   float over = max(length(pos) - BOUND_RADIUS, 0.0);
   F += -normalize(pos + 1e-5) * over * over * 6.0;
@@ -294,6 +426,9 @@ void main() {
     float s = length(vel);
     if (s > hi) vel *= hi / s;
   }
+
+  // neon-tunnel streams along -Z and re-enters at the far end of the volume.
+  if (u_pulseLayout < 0 && u_formationType == 1 && pos.z < -VOLUME_WORLD) pos.z += 2.0 * VOLUME_WORLD;
 
   // NaN / runaway guard.
   if (any(isnan(pos)) || any(isinf(pos)) || length(pos) > 40.0) {

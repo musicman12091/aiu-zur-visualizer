@@ -4,19 +4,27 @@ import {
   FLOATS_PER_AGENT,
   FLOW_DAMPING_PER_STEP,
   FLOW_MODES,
+  FORMATION_TYPES,
   MAX_PARTICLES,
   MAX_STEPS_PER_FRAME,
   SIM_STEP,
   createShockBuffer,
   dampingRateFromRetention,
   lissajous,
+  OSCILLATION_TYPES,
+  PULSE_LAYOUTS,
+  TRAIL_TYPES,
+  densityScaleBoost,
+  densityTrailScale,
+  keepForDt,
   minRenderRadiusPx,
   nextAutoCount,
   normalizeParticles,
+  projectionScales,
   resolveParticleCount,
-  trailKeep,
+  tauFromKeep60,
+  trailKeepFactor,
   trailRadianceScale,
-  trailTauFromHalfLife,
   visibleThreshold,
 } from "./particleMath.js";
 
@@ -40,6 +48,8 @@ export async function loadParticleShaders(baseUrl) {
   return Object.fromEntries(entries);
 }
 
+export const SPAWN_HALF = 1.25 * 3.2;
+
 /** Deterministic initial state (allocated once). */
 export function seedParticleState(count = MAX_PARTICLES, seed = 0x2f981b9d) {
   const data = new Float32Array(count * FLOATS_PER_AGENT);
@@ -53,13 +63,10 @@ export function seedParticleState(count = MAX_PARTICLES, seed = 0x2f981b9d) {
   };
   for (let i = 0; i < count; i += 1) {
     const o = i * FLOATS_PER_AGENT;
-    const u = rand() * 2 - 1;
-    const a = rand() * Math.PI * 2;
-    const r = 4.2 * Math.cbrt(rand());
-    const ring = Math.sqrt(1 - u * u);
-    data[o] = Math.cos(a) * ring * r;
-    data[o + 1] = u * r * 0.6;
-    data[o + 2] = Math.sin(a) * ring * r;
+    // Full [-1.25, +1.25] volume (x3.2 world units): no bottom-center funnel.
+    data[o] = (rand() * 2 - 1) * SPAWN_HALF;
+    data[o + 1] = (rand() * 2 - 1) * SPAWN_HALF;
+    data[o + 2] = (rand() * 2 - 1) * SPAWN_HALF;
     data[o + 3] = rand();
     data[o + 4] = (rand() - 0.5) * 0.4;
     data[o + 5] = (rand() - 0.5) * 0.4;
@@ -110,8 +117,9 @@ function perspective(out, fovy, aspect, near, far) {
   const f = 1 / Math.tan(fovy / 2);
   const nf = 1 / (near - far);
   out.fill(0);
-  out[0] = f / aspect;
-  out[5] = f;
+  const scales = projectionScales(f, aspect);
+  out[0] = scales.x;
+  out[5] = scales.y;
   out[10] = (far + near) * nf;
   out[11] = -1;
   out[14] = 2 * far * near * nf;
@@ -159,11 +167,13 @@ function multiply(out, a, b) {
 const SIM_UNIFORMS = [
   "u_dt", "u_time", "u_mode", "u_count", "u_damping", "u_rms", "u_sub", "u_bass", "u_mid", "u_high",
   "u_onset", "u_waveSpeed", "u_shock", "u_neighbors", "u_useNeighbors",
+  "u_formationType", "u_oscillationType", "u_oscillationAmount", "u_oscillationSpeed", "u_pulseLayout", "u_bands",
 ];
 const RENDER_UNIFORMS = [
   "u_viewProj", "u_camPos", "u_resolution", "u_projScale", "u_shape", "u_size", "u_minRadiusPx",
   "u_visibleThreshold", "u_exposure", "u_palette", "u_time", "u_high", "u_rms", "u_intensity",
   "u_radianceScale", "u_lightDir", "u_rimColor",
+  "u_trailType", "u_trailLength", "u_densityScaleBoost", "u_pulseLayout", "u_bands",
 ];
 const POST_UNIFORMS = ["u_scene", "u_resolution", "u_kaleidoSegments", "u_kaleidoAngle", "u_kaleidoZoom", "u_exposure", "u_blackFloor"];
 
@@ -204,6 +214,7 @@ export class ParticleSystem3D {
     this.origin = new Float32Array(3);
     this.lightDir = new Float32Array([0.35, 0.82, 0.45]);
     this.rimColor = new Float32Array(3);
+    this.bands = new Float32Array(5);
     this.initialState = seedParticleState(MAX_PARTICLES);
     this.init();
   }
@@ -219,7 +230,7 @@ export class ParticleSystem3D {
       this.postProgram = link(gl, s.postVert, s.kaleidoFrag, "kaleido");
       this.simLoc = locations(gl, this.simProgram, SIM_UNIFORMS);
       this.renderLoc = locations(gl, this.renderProgram, RENDER_UNIFORMS);
-      this.trailLoc = locations(gl, this.trailProgram, ["u_fade"]);
+      this.trailLoc = locations(gl, this.trailProgram, ["u_fade", "u_trailType", "u_trailLength", "u_time"]);
       this.postLoc = locations(gl, this.postProgram, POST_UNIFORMS);
 
       // Ping-pong interleaved Float32 state: [a_pos vec4 | a_vel vec4] x MAX_PARTICLES.
@@ -365,16 +376,22 @@ export class ParticleSystem3D {
   /**
    * frame: ShaderHost.frame (time, delta, bands, onset, gain, trailHalfLifeMs)
    * palette: ShaderHost.palette Float32Array(15)
+   * extras: { pulse: boolean (pulse-field-3d), bands: [sub, bass, lowMid, highMid, treble] }
    */
-  render(frame, palette, particlesInput, visual, canvasWidth, canvasHeight) {
+  render(frame, palette, particlesInput, visual, canvasWidth, canvasHeight, extras = {}) {
     if (!this.ready || !this.scene) return;
     const gl = this.gl;
     const particles = particlesInput || normalizeParticles(null);
     const dt = Math.min(Math.max(frame.delta || 0, 0), 0.25);
     const modeIndex = Math.max(0, FLOW_MODES.indexOf(particles.flowMode));
-    const tierCount = resolveParticleCount(particles.countTier, this.mobile);
-    this.count = particles.countTier === "auto" ? this.autoCount : tierCount;
+    const tierCount = resolveParticleCount(particles.particleCountTier, this.mobile);
+    this.count = particles.particleCountTier === "auto" ? this.autoCount : tierCount;
     const count = this.count;
+    const pulse = Boolean(extras.pulse);
+    const pulseLayout = pulse ? Math.max(0, PULSE_LAYOUTS.indexOf(particles.pulseLayout)) : -1;
+    const trailType = Math.max(0, TRAIL_TYPES.indexOf(particles.trailType));
+    const densityBoost = densityScaleBoost(count, particles.densityAutoScale);
+    for (let i = 0; i < 5; i += 1) this.bands[i] = Math.max(0, extras.bands?.[i] || 0);
 
     // Predator shockwave ring buffer: audio onset rising edge, or an ambient pulse in silence.
     const onset = frame.onset || 0;
@@ -397,7 +414,7 @@ export class ParticleSystem3D {
     this.accumulator = Math.max(0, acc);
     this.stepsLastFrame = steps;
 
-    const useNeighbors = modeIndex >= 2 ? 1 : 0;
+    const useNeighbors = modeIndex >= 2 && !pulse ? 1 : 0;
     if (steps > 0) {
       gl.useProgram(this.simProgram);
       const L = this.simLoc;
@@ -414,6 +431,12 @@ export class ParticleSystem3D {
       gl.uniform1f(L.u_waveSpeed, 4.5);
       gl.uniform4fv(L.u_shock, this.shock);
       gl.uniform1i(L.u_useNeighbors, useNeighbors);
+      gl.uniform1i(L.u_formationType, Math.max(0, FORMATION_TYPES.indexOf(particles.formationType)));
+      gl.uniform1i(L.u_oscillationType, Math.max(0, OSCILLATION_TYPES.indexOf(particles.oscillationType)));
+      gl.uniform1f(L.u_oscillationAmount, particles.oscillationAmount);
+      gl.uniform1f(L.u_oscillationSpeed, particles.oscillationSpeed);
+      gl.uniform1i(L.u_pulseLayout, pulseLayout);
+      gl.uniform1fv(L.u_bands, this.bands);
       gl.uniform1i(L.u_neighbors, 1);
       if (useNeighbors) {
         // GPU-side copy of the current state for 6-neighbor ring flocking (no CPU readback).
@@ -446,7 +469,9 @@ export class ParticleSystem3D {
 
     // Camera: slow orbit.
     const t = this.simTime;
-    const orbit = t * 0.06;
+    // Tunnel / ring formations are viewed down the Z axis with a gentle sway instead of a full orbit.
+    const downZ = !pulse && (particles.formationType === "neon-tunnel" || particles.formationType === "polygon-rings");
+    const orbit = downZ ? Math.sin(t * 0.09) * 0.45 : t * 0.06;
     const dist = 11.5 - (frame.bass || 0) * 1.2;
     this.eye[0] = Math.sin(orbit) * dist;
     this.eye[1] = 2.2 + Math.sin(t * 0.07) * 1.6;
@@ -457,8 +482,9 @@ export class ParticleSystem3D {
     multiply(this.viewProj, this.proj, this.view);
 
     // Pass 1: scene FBO — trail fade, then particles.
-    const tau = trailTauFromHalfLife(visual?.trailHalfLifeMs ?? 220);
-    const keep = trailKeep(dt, tau);
+    const keep60 = trailKeepFactor(particles.trailType, particles.trailLength) * densityTrailScale(count, particles.densityAutoScale);
+    const tau = tauFromKeep60(keep60);
+    const keep = keepForDt(keep60, dt);
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.scene.framebuffer);
     gl.viewport(0, 0, this.width, this.height);
     gl.disable(gl.DEPTH_TEST);
@@ -466,6 +492,9 @@ export class ParticleSystem3D {
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     gl.useProgram(this.trailProgram);
     gl.uniform1f(this.trailLoc.u_fade, 1 - keep);
+    gl.uniform1i(this.trailLoc.u_trailType, trailType);
+    gl.uniform1f(this.trailLoc.u_trailLength, particles.trailLength);
+    gl.uniform1f(this.trailLoc.u_time, t);
     gl.bindVertexArray(this.emptyVao);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
 
@@ -494,6 +523,11 @@ export class ParticleSystem3D {
     gl.uniform1f(R.u_rms, frame.rms || 0);
     gl.uniform1f(R.u_intensity, Math.min(1.2, Math.max(0.18, 0.22 * Math.sqrt(16384 / count))) * (dart ? 0.55 : 0.5));
     gl.uniform1f(R.u_radianceScale, trailRadianceScale(dt, tau));
+    gl.uniform1i(R.u_trailType, trailType);
+    gl.uniform1f(R.u_trailLength, particles.trailLength);
+    gl.uniform1f(R.u_densityScaleBoost, densityBoost);
+    gl.uniform1i(R.u_pulseLayout, pulseLayout);
+    gl.uniform1fv(R.u_bands, this.bands);
     gl.uniform3fv(R.u_lightDir, this.lightDir);
     this.rimColor[0] = palette[12];
     this.rimColor[1] = palette[13];

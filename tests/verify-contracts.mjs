@@ -54,7 +54,28 @@ import {
   trailRadianceScale,
   visibleThreshold,
 } from "../src/render/particleMath.js";
-import { seedParticleState } from "../src/render/ParticleSystem3D.js";
+import { seedParticleState, SPAWN_HALF } from "../src/render/ParticleSystem3D.js";
+import {
+  COUNT_TIER_VALUES,
+  DEFAULT_PARTICLES,
+  FORMATION_TYPES,
+  GLOW,
+  OSCILLATION_TYPES,
+  PULSE_LAYOUTS,
+  PULSE_SCENE_ID,
+  TRAIL_TYPES,
+  chromaToneMap,
+  densityScaleBoost,
+  densityTrailScale,
+  glowProfile,
+  keepForDt,
+  projectionScales,
+  resolveFboSize,
+  tauFromKeep60,
+  trailKeepFactor,
+} from "../src/render/particleMath.js";
+import { PALETTES, PALETTE_IDS } from "../src/controls/palettes.js";
+import { STAGE3_DEFAULTS, stage3View } from "../src/app/AppState.js";
 
 const tests = [];
 const test = (name, fn) => tests.push({ name, fn });
@@ -550,7 +571,7 @@ test("trail radiance normalization gives identical glow at 30 and 60 fps", () =>
   assert.ok(near(trailRadianceScale(1 / 60, tau), 1, 1e-12));
   assert.ok(near(steadyStateRadiance(1 / 30, tau), steadyStateRadiance(1 / 60, tau), 1e-9));
   assert.ok(near(steadyStateRadiance(1 / 144, tau), steadyStateRadiance(1 / 60, tau), 1e-9));
-  assert.match(read("src/shaders/trail.frag.glsl"), /vec4\(0\.0, 0\.0, 0\.0, u_fade\)/);
+  assert.match(read("src/shaders/trail.frag.glsl"), /uniform float u_fade/);
   assert.match(read("src/render/ParticleSystem3D.js"), /gl\.blendFunc\(gl\.ONE, gl\.ONE_MINUS_SRC_ALPHA\)/);
 });
 
@@ -581,7 +602,7 @@ test("kaleidoscope N = 0 / 1 is a 1:1 bypass and N-fold output is mirrored", () 
   assert.deepEqual([...KALEIDO_SEGMENTS], [0, 4, 6, 8, 12, 16]);
   const frag = read("src/shaders/kaleido.frag.glsl");
   assert.match(frag, /if \(u_kaleidoSegments <= 1\.0\) return uv;/);
-  assert.match(frag, /c \/ \(1\.0 \+ c\)/);
+  assert.match(frag, /mappedPeak = peak \/ \(1\.0 \+ 0\.65 \* peak\)/);
   assert.match(frag, /u_kaleidoAngle/);
   assert.ok(near(toneMap(1), 0.5) && toneMap(1e6) < 1);
 });
@@ -661,14 +682,15 @@ test("render shader builds velocity-aligned darts and capsules from gl_VertexID"
   assert.match(vert, /gl_InstanceID/);
   const frag = read("src/shaders/render.frag.glsl");
   assert.match(frag, /float rim = pow\(1\.0 - facing, 2\.5\)/);
-  assert.match(frag, /fwidth\(d\)/);
+  assert.match(frag, /float core = exp\(-r2 \* 22\.0\)/);
 });
 
 test("particle tiers: 65,536 desktop / 16,384 mobile with FPS step-down", () => {
-  assert.deepEqual([...COUNT_TIERS], ["auto", 4096, 16384, 32768, 65536]);
+  assert.deepEqual([...COUNT_TIERS], ["auto", "64", "128", "256", "512", "1k", "2k", "4k", "16k", "32k", "64k"]);
   assert.equal(resolveParticleCount("auto", false), 65536);
   assert.equal(resolveParticleCount("auto", true), 16384);
   assert.equal(resolveParticleCount(32768, false), 32768);
+  assert.equal(resolveParticleCount("32k", false), 32768);
   assert.equal(isMobileAgent("Mozilla/5.0 (Linux; Android 15; SM-A576B) Mobile"), true);
   assert.equal(isMobileAgent("Mozilla/5.0 (X11; Linux x86_64) Chrome/141"), false);
   assert.equal(stepdownThreshold(60), 50);
@@ -700,11 +722,11 @@ test("Stage 2 preset schema, Mode A/B scene retention and ?preset= URL state", (
   assert.equal(kept.particles.flowMode, "gas");
   assert.equal(kept.visual.fps, 60);
   assert.equal(validatePreset(kept).ok, true);
-  const particles = { flowMode: "fish", shape: "capsule", particleSize: 2.5, kaleidoSegments: 12, kaleidoSpin: false, countTier: 16384 };
+  const particles = { flowMode: "fish", shape: "capsule", particleSize: 2.5, kaleidoSegments: 12, kaleidoSpin: false, particleCountTier: "16k" };
   const encoded = encodePresetParam(PARTICLE_SCENE_ID, particles);
   const decoded = decodePresetParam(encoded);
   assert.equal(decoded.sceneId, PARTICLE_SCENE_ID);
-  assert.deepEqual(normalizeParticles(decoded.particles), particles);
+  assert.deepEqual(normalizeParticles(decoded.particles), { ...DEFAULT_PARTICLES, ...particles });
   assert.equal(decodePresetParam("gas").particles.flowMode, "gas");
   assert.equal(decodePresetParam("scene:aurora").sceneId, "aurora-ribbons");
   assert.equal(decodePresetParam("<script>"), null);
@@ -773,6 +795,200 @@ test("unsupported scene IDs are rejected and cannot flip the scene through ?pres
   assert.equal(reloaded.sceneId, "aurora-ribbons");
   // Unknown scene tokens in the URL are ignored.
   assert.equal(decodePresetParam("scene:evil_flow:gas").sceneId, undefined);
+});
+
+
+test("Stage 3 frozen AppState keys, enums and defaults", () => {
+  assert.deepEqual({ ...STAGE3_DEFAULTS }, {
+    sceneId: "particle-swarm-3d",
+    paletteId: "neon-tunnel",
+    particleCountTier: "1k",
+    densityAutoScale: true,
+    trailLength: 0.28,
+    trailType: "comet",
+    formationType: "neon-tunnel",
+    oscillationType: "helix",
+    oscillationAmount: 1.0,
+    oscillationSpeed: 1.2,
+    pulseLayout: "band-clouds",
+  });
+  assert.deepEqual([...SCENE_IDS], ["particle-swarm-3d", "pulse-field-3d", "aurora-ribbons"]);
+  assert.ok(SCENE_IDS.includes("pulse-field-3d") && PULSE_SCENE_ID === "pulse-field-3d");
+  assert.deepEqual([...PALETTE_IDS].sort(), ["biolum-ocean", "copper-teal", "cyber-laser", "emerald-matrix", "neon-tunnel", "solar-plasma"]);
+  assert.equal(PALETTE_IDS[0], "neon-tunnel");
+  assert.deepEqual([...TRAIL_TYPES], ["comet", "electric", "strobe", "ribbon", "none"]);
+  assert.deepEqual([...FORMATION_TYPES], ["free-3d", "neon-tunnel", "polygon-rings", "supernova-shell"]);
+  assert.deepEqual([...OSCILLATION_TYPES], ["off", "wave", "helix", "bounce", "pulse"]);
+  assert.deepEqual([...PULSE_LAYOUTS], ["band-clouds", "geodesic-sphere", "wave-grid"]);
+  const state = new AppState(STAGE2_DEFAULT_PRESET);
+  assert.deepEqual(state.stage3, { ...STAGE3_DEFAULTS });
+  assert.deepEqual(stage3View(STAGE2_DEFAULT_PRESET), { ...STAGE3_DEFAULTS });
+  assert.equal(validatePreset(STAGE2_DEFAULT_PRESET).ok, true);
+  assert.equal(validatePreset(MODE_A_PRESET).ok, true);
+  assert.equal(validatePreset(MODE_B_PRESET).ok, true);
+  for (const [key, bad] of [
+    ["trailLength", 1.01], ["trailType", "laser"], ["formationType", "cube"], ["oscillationType", "spin"],
+    ["oscillationAmount", 3.5], ["oscillationSpeed", 0.1], ["pulseLayout", "grid"], ["particleCountTier", "8k"], ["densityAutoScale", "yes"],
+  ]) {
+    const preset = JSON.parse(JSON.stringify(STAGE2_DEFAULT_PRESET));
+    preset.particles[key] = bad;
+    assert.equal(validatePreset(preset).ok, false, key);
+  }
+  const clamped = normalizeParticles({ trailLength: 4, oscillationAmount: -2, oscillationSpeed: 99 });
+  assert.equal(clamped.trailLength, 1);
+  assert.equal(clamped.oscillationAmount, 0);
+  assert.equal(clamped.oscillationSpeed, 4);
+  assert.equal(normalizeParticles({ countTier: 16384 }).particleCountTier, "16k", "Stage 2 countTier migrates");
+  assert.equal(normalizeParticles({ countTier: "auto" }).particleCountTier, "auto");
+  assert.deepEqual(decodePresetParam("scene:pulse_count:2k"), { particles: { particleCountTier: "2k" }, sceneId: "pulse-field-3d" });
+  assert.equal(decodePresetParam("count:4096").particles.particleCountTier, "4k");
+});
+
+test("Stage 3 count tiers and density auto-scale formulas", () => {
+  assert.deepEqual({ ...COUNT_TIER_VALUES }, {
+    "64": 64, "128": 128, "256": 256, "512": 512, "1k": 1024, "2k": 2048, "4k": 4096, "16k": 16384, "32k": 32768, "64k": 65536,
+  });
+  assert.equal(DEFAULT_PARTICLES.particleCountTier, "1k");
+  assert.equal(resolveParticleCount("1k", false), 1024);
+  assert.equal(resolveParticleCount("64", true), 64);
+  assert.equal(resolveParticleCount("64k", true), 65536);
+  assert.ok(near(densityScaleBoost(1024), Math.pow(4, 0.32), 1e-12));
+  assert.ok(near(densityScaleBoost(4096), 1, 1e-12));
+  assert.equal(densityScaleBoost(65536), 1);
+  assert.ok(near(densityScaleBoost(64), 5.5, 1e-9) || densityScaleBoost(64) <= 5.5);
+  assert.ok(densityScaleBoost(1) <= 5.5);
+  assert.equal(densityScaleBoost(64, false), 1);
+  assert.ok(near(densityTrailScale(1024), Math.pow(0.25, 0.28), 1e-12));
+  assert.equal(densityTrailScale(65536), 1);
+  assert.equal(densityTrailScale(1), 0.18);
+  assert.equal(densityTrailScale(64, false), 1);
+  const ps = read("src/render/ParticleSystem3D.js");
+  assert.match(ps, /densityScaleBoost\(count, particles\.densityAutoScale\)/);
+  assert.match(ps, /densityTrailScale\(count, particles\.densityAutoScale\)/);
+});
+
+test("Stage 3 trail keepFactor formula and frame-rate independence", () => {
+  assert.equal(trailKeepFactor("none", 0.8), 0);
+  assert.equal(trailKeepFactor("comet", 0.01), 0);
+  assert.equal(trailKeepFactor("comet", 0), 0);
+  assert.ok(near(trailKeepFactor("comet", 1), 0.965, 1e-12));
+  assert.ok(near(trailKeepFactor("ribbon", 0.28), 0.15 + (0.965 - 0.15) * Math.pow(0.28, 0.65), 1e-12));
+  assert.ok(trailKeepFactor("comet", 0.5) > trailKeepFactor("comet", 0.2));
+  assert.ok(near(keepForDt(0.9, 1 / 60), 0.9, 1e-12));
+  assert.ok(near(keepForDt(0.9, 1 / 30), 0.81, 1e-12));
+  assert.equal(keepForDt(0, 0.016), 0);
+  assert.equal(tauFromKeep60(0), 0);
+  assert.ok(near(Math.exp(-1 / (60 * tauFromKeep60(0.9))), 0.9, 1e-12));
+  assert.equal(trailRadianceScale(1 / 60, 0), 1);
+  const trail = read("src/shaders/trail.frag.glsl");
+  for (const name of ["u_trailType", "u_trailLength", "u_fade"]) assert.match(trail, new RegExp(name));
+  const ps = read("src/render/ParticleSystem3D.js");
+  assert.match(ps, /trailKeepFactor\(particles\.trailType, particles\.trailLength\)/);
+});
+
+test("Stage 3 portrait FBO axis swap and Hor+ projection", () => {
+  assert.deepEqual(resolveFboSize(1280, 720, 1280, 720), { width: 1280, height: 720, portrait: false });
+  assert.deepEqual(resolveFboSize(1280, 720, 1000, 1000), { width: 1280, height: 720, portrait: false });
+  assert.deepEqual(resolveFboSize(1280, 720, 0, 0), { width: 1280, height: 720, portrait: false });
+  const portrait = resolveFboSize(1280, 720, 900, 2000);
+  assert.equal(portrait.portrait, true);
+  assert.equal(portrait.height, 1280);
+  assert.equal(portrait.width, Math.round(1280 * (900 / 2000)));
+  assert.ok(near(portrait.width / portrait.height, 900 / 2000, 1e-3), "FBO is 1:1 with the canvas pixels");
+  const size = resolveRenderSize(STAGE2_DEFAULT_PRESET, { clientWidth: 400, clientHeight: 900 });
+  assert.equal(size.portrait, true);
+  assert.ok(size.height > size.width);
+  assert.equal(resolveRenderSize(STAGE2_DEFAULT_PRESET).width, 1280);
+  const wide = projectionScales(2, 16 / 9);
+  assert.ok(near(wide.x, 2 / (16 / 9)) && near(wide.y, 2));
+  const tall = projectionScales(2, 9 / 20);
+  assert.ok(near(tall.x, 2) && near(tall.y, 2 * (9 / 20)));
+  assert.deepEqual(projectionScales(2, 1), { x: 2, y: 2 });
+  const ps = read("src/render/ParticleSystem3D.js");
+  assert.match(ps, /projectionScales\(f, aspect\)/);
+  assert.ok(near(SPAWN_HALF, 1.25 * 3.2));
+  const seed = seedParticleState(4096);
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (let i = 0; i < 4096; i += 1) {
+    for (const axis of [0, 1, 2]) assert.ok(Math.abs(seed[i * 8 + axis]) <= SPAWN_HALF + 1e-6);
+    minY = Math.min(minY, seed[i * 8 + 1]);
+    maxY = Math.max(maxY, seed[i * 8 + 1]);
+  }
+  assert.ok(minY < -0.9 * SPAWN_HALF && maxY > 0.9 * SPAWN_HALF, "spawn covers the full volume, no funnel");
+});
+
+test("Stage 3 neon glow + chroma-preserving tone map constants", () => {
+  assert.deepEqual({ ...GLOW }, { coreK: 22.0, haloK: 4.5 });
+  const g = glowProfile(0.1);
+  assert.ok(near(g.core, Math.exp(-2.2)) && near(g.halo, Math.exp(-0.45)) && g.core < g.halo);
+  const frag = read("src/shaders/render.frag.glsl");
+  assert.match(frag, /float core = exp\(-r2 \* 22\.0\);/);
+  assert.match(frag, /float halo = exp\(-r2 \* 4\.5\);/);
+  const kaleido = read("src/shaders/kaleido.frag.glsl");
+  assert.match(kaleido, /float peak = max\(c\.r, max\(c\.g, c\.b\)\);/);
+  assert.match(kaleido, /vec3 chroma = c \/ max\(peak, 1e-4\);/);
+  assert.match(kaleido, /float mappedPeak = peak \/ \(1\.0 \+ 0\.65 \* peak\);/);
+  assert.match(kaleido, /mix\(chroma \* mappedPeak, vec3\(1\.0\), smoothstep\(1\.1, 3\.2, peak\) \* 0\.65\)/);
+  const [r, gg, b] = chromaToneMap([0.2, 0.8, 0.4]);
+  assert.ok(near(gg / r, 4, 1e-9) && near(gg / b, 2, 1e-9), "hue ratios preserved below the white blend");
+  assert.ok(chromaToneMap([0.5, 0, 0])[1] === 0, "pure channel stays pure");
+  const hot = chromaToneMap([8, 2, 0.5]);
+  assert.ok(hot[1] > 0.5 && hot[2] > 0.5 && hot.every((v) => v <= 1.2), "very hot pixels bleed toward white");
+  assert.deepEqual(chromaToneMap([0, 0, 0]), [0, 0, 0]);
+  const neon = PALETTES["neon-tunnel"];
+  assert.equal(neon.length, 5);
+  const hexes = ["#00F5FF", "#FF00A0", "#7B2CBF", "#0066FF", "#FFFFFF"];
+  hexes.forEach((hex, i) => {
+    const n = Number.parseInt(hex.slice(1), 16);
+    const lin = [16, 8, 0].map((sh) => {
+      const c = ((n >> sh) & 255) / 255;
+      return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    });
+    lin.forEach((v, ch) => assert.ok(near(neon[i][ch], v, 1e-9), `${hex} ch ${ch}`));
+  });
+});
+
+test("Stage 3 shaders and HUD bind every frozen uniform/key", () => {
+  const sim = read("src/shaders/sim.vert.glsl");
+  for (const name of ["u_formationType", "u_oscillationType", "u_oscillationAmount", "u_oscillationSpeed", "u_pulseLayout"]) {
+    assert.match(sim, new RegExp(`uniform \\w+ ${name}`), `sim ${name}`);
+  }
+  const render = read("src/shaders/render.vert.glsl");
+  for (const name of ["u_trailType", "u_trailLength", "u_densityScaleBoost", "u_pulseLayout"]) {
+    assert.match(render, new RegExp(`uniform \\w+ ${name}`), `render ${name}`);
+  }
+  assert.match(read("src/shaders/trail.frag.glsl"), /uniform int u_trailType/);
+  const ps = read("src/render/ParticleSystem3D.js");
+  for (const name of [
+    "u_trailType", "u_trailLength", "u_formationType", "u_oscillationType", "u_oscillationAmount",
+    "u_oscillationSpeed", "u_densityScaleBoost", "u_pulseLayout",
+  ]) assert.match(ps, new RegExp(`"${name}"|R\\.${name}|L\\.${name}|trailLoc\\.${name}`), name);
+  for (const fn of ["polygonRadius", "formationTarget", "oscillationOffset", "pulseTarget"]) assert.match(sim, new RegExp(fn));
+  for (const type of ["neon-tunnel", "polygon-rings", "supernova-shell"]) assert.ok(FORMATION_TYPES.includes(type));
+  const hud = read("src/controls/ControlHUD.js");
+  for (const id of [
+    "sel-trail-type", "rng-trail-length", "sel-formation", "sel-oscillation", "rng-osc-amount", "rng-osc-speed",
+    "sel-pulse-layout", "chk-density",
+  ]) assert.match(hud, new RegExp(`"${id}"`), id);
+  assert.match(hud, /3D Audio Pulse Field — Stage 3/);
+  const sw = read("sw.js");
+  for (const file of ["sim.vert.glsl", "sim.frag.glsl", "render.vert.glsl", "render.frag.glsl", "post.vert.glsl", "trail.frag.glsl", "kaleido.frag.glsl"]) {
+    assert.match(sw, new RegExp(file.replace(".", "\\.")), file);
+  }
+});
+
+test("Stage 3 pulse-field-3d scene: five-band bound, no destination connection", () => {
+  const sim = read("src/shaders/sim.vert.glsl");
+  assert.match(sim, /uniform float u_bands\[5\]/);
+  assert.match(sim, /u_pulseLayout == 1/);
+  assert.match(sim, /u_pulseLayout == 2/);
+  const host = read("src/render/RenderHost.js");
+  assert.match(host, /frame\.sub, frame\.bass, frame\.lowMid, frame\.highMid, frame\.treble/);
+  assert.equal(decodePresetParam(encodePresetParam(PULSE_SCENE_ID, DEFAULT_PARTICLES)).sceneId, PULSE_SCENE_ID);
+  for (const file of ["src/render/ParticleSystem3D.js", "src/render/RenderHost.js", "src/app/main.js"]) {
+    assert.doesNotMatch(read(file), /\.destination/, file);
+  }
 });
 
 let failed = 0;
