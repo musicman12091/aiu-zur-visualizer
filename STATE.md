@@ -46,9 +46,28 @@ Headless Chrome 156 (SwiftShader) loaded `index.html`, compiled `aurora-ribbons.
 - fps: the ≥ 55 fps gate is report-only on this box because it has no GPU and headless Chrome uses the SwiftShader CPU rasterizer. Stage 1 aurora alone runs at about 21 fps there, and the particle scene at 16,384 ran at about 5 fps. Run `ZUR_STRICT_FPS=1 node tests/smoke-stage2.mjs` on a GPU machine to enforce the gate.
 - Copilot review: fixed shockwave ring buffer empty at startup; unsupported scene IDs rejected via `?preset=`.
 
+
+## Stage 3 — ZUR-GH-003
+
+- status: squash-merged to `main` — COMPLETE
+- merged_to_main: yes
+- pr_branch: `zur-stage3`
+- pr_branch_head_sha: 2f30e0ed1b0407a68285ca5487ee2f35a042b3b5 (feat + Copilot review URL-preset fix)
+- main_commit_sha: 3c2e891b4290d5d0264a97f82f1281cf015d7aa5
+- PR: https://github.com/musicman12091/aiu-zur-visualizer/pull/3 (merged, squash)
+- branch: `zur-stage3` (built in `/workspace/aiu-zur-visualizer` with GitHub Copilot Pro Claude Sonnet 5.5; no Cloud Agent, no `cursor/*` branch)
+- copilot_review_fixes: (1) clarified audited `densityTrailScale` JSDoc (v3.1 low-count → shorter trails); (2) `?preset=` encode/decode round-trips Stage 3 keys (`das`/`tl`/`tt`/`form`/`osc`/`oa`/`os`/`pl`)
+- scope: portrait-aware Pass 1 FBO + Hor+ projection; neon comet SDF + chroma-preserving tonemap; default palette `neon-tunnel`; count tiers 64…64k (default `1k`) + `densityAutoScale`; `trailLength`/`trailType`; `formationType`/`oscillationType`; Scene 3 `pulse-field-3d` (`band-clouds`/`geodesic-sphere`/`wave-grid`)
+- contract_tests: PASS — `node tests/verify-contracts.mjs` (45/45)
+- headless_chrome_stage3: PASS — `node tests/smoke-stage3.mjs` (0 console/page/WebGL errors, `destinationConnections` 0, portrait FBO 576×1280 at 450×1000)
+- pages_url: https://musicman12091.github.io/aiu-zur-visualizer/
+- pages_status: live (Stage 3 assets)
+- pages_verified_http: 200; `particleMath.js` serves `pulse-field-3d` / `neon-tunnel` (Last-Modified Thu, 29 Oct 2026 03:11:02 GMT)
+- pages_live_chrome: PASS — live github.io `?debug=1`: `pulse-field-3d` + `geodesic-sphere`, palette `neon-tunnel`, count `1k`, formation `neon-tunnel`, osc `helix`, `destinationConnections` 0, console/page errors 0
+
 ## Pages
 
-Pages is enabled and serving Stage 2 from the `main` branch root (`/`). https://musicman12091.github.io/aiu-zur-visualizer/ returned HTTP 200 on 2026-10-28 (America/Regina). Stage 2 assets (`ParticleSystem3D.js`, `sim.vert.glsl`, `kaleido.frag.glsl`) returned 200. Live headless Chrome smoke against github.io passed with 0 console/page/WebGL errors and `destinationConnections` 0.
+Pages is enabled and serving Stage 3 from the `main` branch root (`/`). https://musicman12091.github.io/aiu-zur-visualizer/ returned HTTP 200 on 2026-10-28 (America/Regina) with Stage 3 markers (`pulse-field-3d`, `neon-tunnel`). Live headless Chrome smoke against github.io passed with 0 console/page/WebGL errors and `destinationConnections` 0.
 
 ## Not in this stage
 
