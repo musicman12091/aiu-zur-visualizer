@@ -986,6 +986,30 @@ test("Stage 3 pulse-field-3d scene: five-band bound, no destination connection",
   const host = read("src/render/RenderHost.js");
   assert.match(host, /frame\.sub, frame\.bass, frame\.lowMid, frame\.highMid, frame\.treble/);
   assert.equal(decodePresetParam(encodePresetParam(PULSE_SCENE_ID, DEFAULT_PARTICLES)).sceneId, PULSE_SCENE_ID);
+  {
+    const round = decodePresetParam(encodePresetParam(PARTICLE_SCENE_ID, {
+      ...DEFAULT_PARTICLES,
+      densityAutoScale: false,
+      trailLength: 0.55,
+      trailType: "electric",
+      formationType: "polygon-rings",
+      oscillationType: "bounce",
+      oscillationAmount: 2.25,
+      oscillationSpeed: 0.75,
+      pulseLayout: "geodesic-sphere",
+      particleCountTier: "2k",
+    }));
+    assert.equal(round.sceneId, PARTICLE_SCENE_ID);
+    assert.equal(round.particles.particleCountTier, "2k");
+    assert.equal(round.particles.densityAutoScale, false);
+    assert.equal(round.particles.trailLength, 0.55);
+    assert.equal(round.particles.trailType, "electric");
+    assert.equal(round.particles.formationType, "polygon-rings");
+    assert.equal(round.particles.oscillationType, "bounce");
+    assert.equal(round.particles.oscillationAmount, 2.25);
+    assert.equal(round.particles.oscillationSpeed, 0.75);
+    assert.equal(round.particles.pulseLayout, "geodesic-sphere");
+  }
   for (const file of ["src/render/ParticleSystem3D.js", "src/render/RenderHost.js", "src/app/main.js"]) {
     assert.doesNotMatch(read(file), /\.destination/, file);
   }

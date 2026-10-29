@@ -246,7 +246,8 @@ export function densityScaleBoost(count, enabled = true) {
   return Math.min(5.5, Math.max(1.0, (4096.0 / count) ** 0.32));
 }
 
-/** Stage 3 density auto-scale: dense swarms need shorter trails to avoid saturation. */
+/** Stage 3 density auto-scale (audited v3.1): low counts get punchier/shorter trails
+ *  via clamp((N/4096)^0.28, 0.18, 1.0); high counts keep full trail persistence. */
 export function densityTrailScale(count, enabled = true) {
   if (!enabled) return 1;
   return Math.min(1.0, Math.max(0.18, (count / 4096.0) ** 0.28));
@@ -408,6 +409,14 @@ export function encodePresetParam(sceneId, particles) {
     `k:${p.kaleidoSegments}`,
     `spin:${p.kaleidoSpin ? 1 : 0}`,
     `count:${p.particleCountTier}`,
+    `das:${p.densityAutoScale ? 1 : 0}`,
+    `tl:${Number(p.trailLength.toFixed(2))}`,
+    `tt:${p.trailType}`,
+    `form:${p.formationType}`,
+    `osc:${p.oscillationType}`,
+    `oa:${Number(p.oscillationAmount.toFixed(2))}`,
+    `os:${Number(p.oscillationSpeed.toFixed(2))}`,
+    `pl:${p.pulseLayout}`,
   ].join("_");
 }
 
@@ -433,6 +442,14 @@ export function decodePresetParam(value) {
     else if (key === "k") result.particles.kaleidoSegments = Number(raw);
     else if (key === "spin") result.particles.kaleidoSpin = raw === "1";
     else if (key === "count") result.particles.particleCountTier = raw === "auto" || COUNT_TIERS.includes(raw) ? raw : tierFromCount(raw);
+    else if (key === "das") result.particles.densityAutoScale = raw === "1";
+    else if (key === "tl") result.particles.trailLength = Number(raw);
+    else if (key === "tt") result.particles.trailType = raw;
+    else if (key === "form") result.particles.formationType = raw;
+    else if (key === "osc") result.particles.oscillationType = raw;
+    else if (key === "oa") result.particles.oscillationAmount = Number(raw);
+    else if (key === "os") result.particles.oscillationSpeed = Number(raw);
+    else if (key === "pl") result.particles.pulseLayout = raw;
   }
   return matched ? result : null;
 }
