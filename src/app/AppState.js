@@ -176,6 +176,7 @@ export function validatePreset(input) {
   }
   if (input.schemaVersion !== SCHEMA_VERSION) errors.push("schemaVersion must be 1");
   if (typeof input.sceneId !== "string" || input.sceneId.length === 0) errors.push("sceneId is required");
+  else if (!SCENE_IDS.includes(input.sceneId)) errors.push(`sceneId must be one of ${SCENE_IDS.join(", ")}`);
   if (typeof input.sceneVersion !== "number" || !Number.isFinite(input.sceneVersion)) {
     errors.push("sceneVersion must be a finite number");
   }

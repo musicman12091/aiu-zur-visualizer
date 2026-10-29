@@ -25,7 +25,12 @@ import {
   KALEIDO_SEGMENTS,
   MAX_STEPS_PER_FRAME,
   PARTICLE_SCENE_ID,
+  SCENE_IDS,
+  SHOCK_EMPTY_BIRTH,
+  SHOCK_SLOTS,
   SIM_STEP,
+  createShockBuffer,
+  isShockSlotActive,
   dampingRateFromRetention,
   decodePresetParam,
   encodePresetParam,
@@ -721,6 +726,53 @@ test("HUD exposes Stage 2 controls and the service worker caches Stage 2 assets"
     assert.match(sw, new RegExp(file.replace(".", "\\.")), file);
   }
   assert.match(sw, /aurora-ribbons\.glsl/);
+});
+
+test("shockwave ring buffer starts empty: no origin shockwaves at startup (Copilot review #1)", () => {
+  const buf = createShockBuffer();
+  assert.equal(buf.length, SHOCK_SLOTS * 4);
+  assert.ok(SHOCK_EMPTY_BIRTH < 0);
+  for (let slot = 0; slot < SHOCK_SLOTS; slot++) {
+    assert.ok(buf[slot * 4 + 3] < 0, `slot ${slot} birth must be negative`);
+    for (const t of [0, 0.5, 1, 2, 3.99, 4]) assert.equal(isShockSlotActive(buf, slot, t), false, `slot ${slot} t=${t}`);
+  }
+  // The old zero-init would have produced live shockwaves for the first 4 s.
+  const zero = new Float32Array(16);
+  assert.equal(isShockSlotActive(zero, 0, 1), true);
+  // A real trigger still activates its slot.
+  buf[3] = 2; buf[0] = 1;
+  assert.equal(isShockSlotActive(buf, 0, 2.5), true);
+  assert.equal(isShockSlotActive(buf, 0, 6.1), false);
+  const ps = read("src/render/ParticleSystem3D.js");
+  assert.match(ps, /this\.shock = createShockBuffer\(\)/);
+  assert.doesNotMatch(ps, /this\.shock = new Float32Array/);
+  const sim = read("src/shaders/sim.vert.glsl");
+  assert.match(sim, /if \(s\.w < 0\.0\) continue;/);
+});
+
+test("unsupported scene IDs are rejected and cannot flip the scene through ?preset= (Copilot review #2)", () => {
+  for (const id of SCENE_IDS) {
+    assert.equal(validatePreset({ ...STAGE2_DEFAULT_PRESET, sceneId: id }).ok, true, id);
+  }
+  for (const id of ["unknown-scene", "PARTICLE-SWARM-3D", "aurora", "particles", " aurora-ribbons"]) {
+    const r = validatePreset({ ...STAGE2_DEFAULT_PRESET, sceneId: id });
+    assert.equal(r.ok, false, id);
+    assert.ok(r.errors.some((e) => /sceneId must be one of/.test(e)), id);
+  }
+  // Round trip for every supported scene preserves it.
+  for (const id of SCENE_IDS) {
+    assert.equal(decodePresetParam(encodePresetParam(id, STAGE2_DEFAULT_PRESET.particles)).sceneId, id);
+  }
+  // An unknown scene is never encoded as "particles", so a reload keeps the current scene.
+  const encoded = encodePresetParam("unknown-scene", STAGE2_DEFAULT_PRESET.particles);
+  assert.doesNotMatch(encoded, /scene:/);
+  const decoded = decodePresetParam(encoded);
+  assert.equal(decoded.sceneId, undefined);
+  const reloaded = { ...MODE_A_PRESET, particles: { ...STAGE2_DEFAULT_PRESET.particles, ...decoded.particles } };
+  if (decoded.sceneId) reloaded.sceneId = decoded.sceneId;
+  assert.equal(reloaded.sceneId, "aurora-ribbons");
+  // Unknown scene tokens in the URL are ignored.
+  assert.equal(decodePresetParam("scene:evil_flow:gas").sceneId, undefined);
 });
 
 let failed = 0;

@@ -178,6 +178,26 @@ export function shockwaveWeight(r, age, waveSpeed, width, lifetime = 1.6) {
   return Math.exp(-d * d) * gate * Math.exp(-age / lifetime);
 }
 
+/** Predator shockwave ring buffer: 4 vec4 slots (xyz origin, w birth time). */
+export const SHOCK_SLOTS = 4;
+/** Birth-time sentinel for an empty slot; sim.vert.glsl skips any slot with w < 0. */
+export const SHOCK_EMPTY_BIRTH = -1e6;
+
+/** Allocate the uniform buffer with every slot marked empty (never zero-init: w = 0 is a live shock at t = 0). */
+export function createShockBuffer() {
+  const buf = new Float32Array(SHOCK_SLOTS * 4);
+  for (let i = 0; i < SHOCK_SLOTS; i++) buf[i * 4 + 3] = SHOCK_EMPTY_BIRTH;
+  return buf;
+}
+
+/** Mirrors the slot gate in shockwaveAcceleration(): empty when w < 0, live for 0 <= age <= 4 s. */
+export function isShockSlotActive(buf, slot, time) {
+  const birth = buf[slot * 4 + 3];
+  if (birth < 0) return false;
+  const age = time - birth;
+  return age >= 0 && age <= 4;
+}
+
 /** Lissajous attractor, mirrored by lissajous() in sim.vert.glsl. */
 export function lissajous(index, time) {
   const i = index;
@@ -250,8 +270,11 @@ const SCENE_SHORT = { [PARTICLE_SCENE_ID]: "particles", [AURORA_SCENE_ID]: "auro
 /** `?preset=scene:particles_flow:fish_shape:dart_size:1.5_k:6_spin:1_count:auto` */
 export function encodePresetParam(sceneId, particles) {
   const p = normalizeParticles(particles);
+  // Only supported scenes get a token; an unknown ID is omitted rather than coerced to "particles",
+  // so a reload can never flip the scene.
+  const short = SCENE_IDS.includes(sceneId) ? SCENE_SHORT[sceneId] : null;
   return [
-    `scene:${SCENE_SHORT[sceneId] || "particles"}`,
+    ...(short ? [`scene:${short}`] : []),
     `flow:${p.flowMode}`,
     `shape:${p.shape}`,
     `size:${Number(p.particleSize.toFixed(2))}`,

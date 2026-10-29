@@ -7,6 +7,7 @@ import {
   MAX_PARTICLES,
   MAX_STEPS_PER_FRAME,
   SIM_STEP,
+  createShockBuffer,
   dampingRateFromRetention,
   lissajous,
   minRenderRadiusPx,
@@ -195,7 +196,7 @@ export class ParticleSystem3D {
     this.prevOnset = 0;
     this.lastShockAt = -10;
     this.shockCursor = 0;
-    this.shock = new Float32Array(16);
+    this.shock = createShockBuffer(); // every slot starts empty (w < 0), see sim.vert.glsl
     this.viewProj = new Float32Array(16);
     this.view = new Float32Array(16);
     this.proj = new Float32Array(16);
