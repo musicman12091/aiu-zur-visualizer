@@ -228,7 +228,7 @@ Source: ZUR Blueprint v2.1 Part 4 and the ZUR-GH-002 ticket. Stage 2 adds a seco
 | `particleSize` | 0.5 – 4.0 (× base size) |
 | `kaleidoSegments` | 0 (off), 4, 6, 8, 12, 16 |
 | `kaleidoSpin` | boolean — beat-synced rotation |
-| `countTier` | `auto`, 4096, 16384, 32768, 65536 |
+| `particleCountTier` | `auto`, 64, 128, 256, 512, 1k, 2k, 4k, 16k, 32k, 64k (default `1k`); Stage 3 also adds densityAutoScale, trailLength, trailType, formationType, oscillationType, oscillationAmount, oscillationSpeed, pulseLayout |
 
 Settings persist in `localStorage["zur.preset.v2"]` and in the URL as `?preset=scene:particles_flow:fish_shape:dart_size:1.5_k:6_spin:1_count:auto` (a bare flow name such as `?preset=gas` also works). URL state wins over storage on load.
 

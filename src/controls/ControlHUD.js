@@ -2,12 +2,22 @@ import { PALETTE_IDS, PALETTES } from "./palettes.js";
 import { QUALITY_TIERS } from "../render/RenderHost.js";
 import {
   COUNT_TIERS,
+  COUNT_TIER_LABELS,
   DEFAULT_PARTICLES,
   FLOW_LABELS,
   FLOW_MODES,
+  FORMATION_TYPES,
   KALEIDO_SEGMENTS,
+  OSCILLATION_AMOUNT_RANGE,
+  OSCILLATION_SPEED_RANGE,
+  OSCILLATION_TYPES,
   PARTICLE_SCENE_ID,
+  PARTICLE_SCENE_IDS,
   PARTICLE_SIZE_RANGE,
+  PULSE_LAYOUTS,
+  PULSE_SCENE_ID,
+  TRAIL_LENGTH_RANGE,
+  TRAIL_TYPES,
 } from "../render/particleMath.js";
 
 const METERS = [
@@ -19,6 +29,18 @@ const METERS = [
   ["rms", "RMS"],
   ["onset", "Onset"],
 ];
+
+const PULSE_SCENE_LABEL = "3D Audio Pulse Field — Stage 3";
+const LABELS = {
+  trail: { comet: "Comet", electric: "Electric", strobe: "Strobe", ribbon: "Ribbon", none: "None" },
+  formation: { "free-3d": "Free 3D", "neon-tunnel": "Neon Tunnel", "polygon-rings": "Polygon Rings", "supernova-shell": "Supernova Shell" },
+  oscillation: { off: "Off", wave: "Wave", helix: "Helix", bounce: "Bounce", pulse: "Pulse" },
+  layout: { "band-clouds": "Band Clouds", "geodesic-sphere": "Geodesic Sphere", "wave-grid": "Wave Grid" },
+};
+
+function labelPairs(ids, labels) {
+  return ids.map((id) => [id, labels[id]]);
+}
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -104,9 +126,10 @@ export class ControlHUD {
     // Stage 2 — scene + 3D particle swarm controls.
     const stage2 = el("fieldset", "stage2");
     stage2.id = "stage2-controls";
-    stage2.append(el("legend", "field-label", "Stage 2 · 3D swarm"));
+    stage2.append(el("legend", "field-label", "Stage 3 · 3D swarm"));
     this.scene = this._select("sel-scene", "Scene", [
       [PARTICLE_SCENE_ID, "3D Particle Swarm"],
+      [PULSE_SCENE_ID, PULSE_SCENE_LABEL],
       ["aurora-ribbons", "Aurora Ribbons (Stage 1)"],
     ], (value) => this.handlers.scene?.(value));
     this.flow = this._select("sel-flow", "Flow mode", FLOW_MODES.map((id) => [id, FLOW_LABELS[id]]), (value) => {
@@ -131,10 +154,38 @@ export class ControlHUD {
     this.count = this._select(
       "sel-count",
       "Particle count tier",
-      COUNT_TIERS.map((tier) => [String(tier), tier === "auto" ? "Auto (65k desktop / 16k mobile)" : `${Math.round(tier / 1024)}k`]),
-      (value) => this.handlers.particles?.({ countTier: value === "auto" ? "auto" : Number(value) }),
+      COUNT_TIERS.map((tier) => [tier, COUNT_TIER_LABELS[tier] || tier]),
+      (value) => this.handlers.particles?.({ particleCountTier: value }),
     );
-    stage2.append(this.scene.wrap, this.flow.wrap, this.shape.wrap, this.size.wrap, this.kaleido.wrap, this.spin.label, this.count.wrap);
+    this.density = this._checkbox("chk-density", "Density auto-scale", (checked) => {
+      this.handlers.particles?.({ densityAutoScale: checked });
+    });
+    this.trailType = this._select("sel-trail-type", "Trail type", labelPairs(TRAIL_TYPES, LABELS.trail), (value) => {
+      this.handlers.particles?.({ trailType: value });
+    });
+    this.trailLength = this._range("rng-trail-length", "Trail length", TRAIL_LENGTH_RANGE[0], TRAIL_LENGTH_RANGE[1], 0.01, (value) => {
+      this.handlers.particles?.({ trailLength: value });
+    });
+    this.formation = this._select("sel-formation", "Formation", labelPairs(FORMATION_TYPES, LABELS.formation), (value) => {
+      this.handlers.particles?.({ formationType: value });
+    });
+    this.oscillation = this._select("sel-oscillation", "Oscillation", labelPairs(OSCILLATION_TYPES, LABELS.oscillation), (value) => {
+      this.handlers.particles?.({ oscillationType: value });
+    });
+    this.oscAmount = this._range("rng-osc-amount", "Oscillation amount", OSCILLATION_AMOUNT_RANGE[0], OSCILLATION_AMOUNT_RANGE[1], 0.05, (value) => {
+      this.handlers.particles?.({ oscillationAmount: value });
+    });
+    this.oscSpeed = this._range("rng-osc-speed", "Oscillation speed", OSCILLATION_SPEED_RANGE[0], OSCILLATION_SPEED_RANGE[1], 0.05, (value) => {
+      this.handlers.particles?.({ oscillationSpeed: value });
+    });
+    this.pulseLayout = this._select("sel-pulse-layout", "Pulse field layout", labelPairs(PULSE_LAYOUTS, LABELS.layout), (value) => {
+      this.handlers.particles?.({ pulseLayout: value });
+    });
+    stage2.append(
+      this.scene.wrap, this.flow.wrap, this.shape.wrap, this.size.wrap, this.kaleido.wrap, this.spin.label, this.count.wrap,
+      this.density.label, this.trailType.wrap, this.trailLength.wrap, this.formation.wrap, this.oscillation.wrap,
+      this.oscAmount.wrap, this.oscSpeed.wrap, this.pulseLayout.wrap,
+    );
     this.body.append(stage2);
 
     const captureRow = el("div", "row");
@@ -264,7 +315,7 @@ export class ControlHUD {
     this.body.append(this.json);
     this.body.append(this._button("btn-import", "Apply JSON", () => this.handlers.importPreset?.(this.json.value)));
 
-    this.hint = el("p", "hint", "H hides the panel. 1 / 2 load Mode A / B. T starts the silent test oscillator. P switches scene, F cycles flow mode, K cycles kaleidoscope.");
+    this.hint = el("p", "hint", "H hides the panel. 1 / 2 load Mode A / B. T starts the silent test oscillator. P cycles scene, F cycles flow mode, K cycles kaleidoscope.");
     this.body.append(this.hint);
     panel.append(this.body);
     this.root.append(panel);
@@ -386,9 +437,10 @@ export class ControlHUD {
     this.pills.fps.textContent = fps ? `${fps} FPS` : "FPS";
     this.frameTick += 1;
     if (this.particleSystem && this.frameTick % 30 === 0) {
-      const active = this.state.preset.sceneId === PARTICLE_SCENE_ID && this.particleSystem.ready;
+      const active = PARTICLE_SCENE_IDS.includes(this.state.preset.sceneId) && this.particleSystem.ready;
       const count = this.particleSystem.count;
-      const text = active ? `${Math.round(count / 1024)}k · ${this.particleSystem.sceneFormat}` : "Swarm off";
+      const countText = count >= 1024 ? `${Math.round(count / 1024)}k` : String(count);
+      const text = active ? `${countText} · ${this.particleSystem.sceneFormat}` : "Swarm off";
       if (this.pills.particles.textContent !== text) {
         this.pills.particles.textContent = text;
         this.pills.particles.dataset.state = active ? "active" : "off";
@@ -428,14 +480,25 @@ export class ControlHUD {
     this.hue.input.value = String(visual.hueShift || 0);
     this.hue.value.textContent = Number(visual.hueShift || 0).toFixed(2);
     const particles = { ...DEFAULT_PARTICLES, ...(preset.particles || {}) };
-    this.scene.select.value = preset.sceneId === PARTICLE_SCENE_ID ? PARTICLE_SCENE_ID : "aurora-ribbons";
+    this.scene.select.value = PARTICLE_SCENE_IDS.includes(preset.sceneId) ? preset.sceneId : "aurora-ribbons";
     this.flow.select.value = particles.flowMode;
     this.shape.select.value = particles.shape;
     this.size.input.value = String(particles.particleSize);
     this.size.value.textContent = `${Number(particles.particleSize).toFixed(2)}×`;
     this.kaleido.select.value = String(particles.kaleidoSegments);
     this.spin.input.checked = particles.kaleidoSpin;
-    this.count.select.value = String(particles.countTier);
+    this.count.select.value = particles.particleCountTier;
+    this.density.input.checked = particles.densityAutoScale;
+    this.trailType.select.value = particles.trailType;
+    this.trailLength.input.value = String(particles.trailLength);
+    this.trailLength.value.textContent = Number(particles.trailLength).toFixed(2);
+    this.formation.select.value = particles.formationType;
+    this.oscillation.select.value = particles.oscillationType;
+    this.oscAmount.input.value = String(particles.oscillationAmount);
+    this.oscAmount.value.textContent = Number(particles.oscillationAmount).toFixed(2);
+    this.oscSpeed.input.value = String(particles.oscillationSpeed);
+    this.oscSpeed.value.textContent = `${Number(particles.oscillationSpeed).toFixed(2)}×`;
+    this.pulseLayout.select.value = particles.pulseLayout;
     this._setPill(this.pills.wakeLock, this.state.status.wakeLock, `Wake ${this.state.status.wakeLock}`);
     this._setPill(this.pills.capture, this.state.status.capture, `Capture ${this.state.status.capture}`);
     this._setPill(this.pills.webgl, this.state.status.webgl, this.state.status.webgl === "webgl2" ? "WebGL2" : `WebGL ${this.state.status.webgl}`);

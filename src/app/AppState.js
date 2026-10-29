@@ -3,11 +3,19 @@ import {
   COUNT_TIERS,
   DEFAULT_PARTICLES,
   FLOW_MODES,
+  FORMATION_TYPES,
   KALEIDO_SEGMENTS,
+  OSCILLATION_AMOUNT_RANGE,
+  OSCILLATION_SPEED_RANGE,
+  OSCILLATION_TYPES,
   PARTICLE_SCENE_ID,
   PARTICLE_SHAPES,
   PARTICLE_SIZE_RANGE,
+  PULSE_LAYOUTS,
   SCENE_IDS,
+  TRAIL_LENGTH_RANGE,
+  TRAIL_TYPES,
+  normalizeParticles,
 } from "../render/particleMath.js";
 
 export { SCENE_IDS, PARTICLE_SCENE_ID };
@@ -130,9 +138,35 @@ export const MODE_B_PRESET = {
 export const STAGE2_DEFAULT_PRESET = {
   ...MODE_A_PRESET,
   sceneId: PARTICLE_SCENE_ID,
-  name: "Stage 2 — 3D Particle Swarm",
+  name: "Stage 3 — Neon 3D Particle Swarm",
+  visual: { ...MODE_A_PRESET.visual, paletteId: "neon-tunnel" },
   particles: { ...DEFAULT_PARTICLES },
 };
+
+/** Frozen Stage 3 AppState keys with their defaults. */
+export const STAGE3_DEFAULTS = Object.freeze({
+  sceneId: PARTICLE_SCENE_ID,
+  paletteId: "neon-tunnel",
+  particleCountTier: DEFAULT_PARTICLES.particleCountTier,
+  densityAutoScale: DEFAULT_PARTICLES.densityAutoScale,
+  trailLength: DEFAULT_PARTICLES.trailLength,
+  trailType: DEFAULT_PARTICLES.trailType,
+  formationType: DEFAULT_PARTICLES.formationType,
+  oscillationType: DEFAULT_PARTICLES.oscillationType,
+  oscillationAmount: DEFAULT_PARTICLES.oscillationAmount,
+  oscillationSpeed: DEFAULT_PARTICLES.oscillationSpeed,
+  pulseLayout: DEFAULT_PARTICLES.pulseLayout,
+});
+
+/** Flat view of the Stage 3 keys for a preset (scene + palette + particles.*). */
+export function stage3View(preset) {
+  const particles = { ...DEFAULT_PARTICLES, ...(preset?.particles || {}) };
+  const out = { sceneId: preset?.sceneId ?? STAGE3_DEFAULTS.sceneId, paletteId: preset?.visual?.paletteId ?? STAGE3_DEFAULTS.paletteId };
+  for (const key of Object.keys(STAGE3_DEFAULTS)) {
+    if (key !== "sceneId" && key !== "paletteId") out[key] = particles[key];
+  }
+  return out;
+}
 
 /** Applies a capture/visual mode preset while keeping the current scene and Stage 2 controls. */
 export function applyModeKeepingScene(modePreset, current) {
@@ -239,7 +273,21 @@ export function validatePreset(input) {
         errors.push(`particles.kaleidoSegments must be one of ${KALEIDO_SEGMENTS.join(", ")}`);
       }
       if (typeof particles.kaleidoSpin !== "boolean") errors.push("particles.kaleidoSpin must be boolean");
-      if (!COUNT_TIERS.includes(particles.countTier)) errors.push(`particles.countTier must be one of ${COUNT_TIERS.join(", ")}`);
+      if (!COUNT_TIERS.includes(particles.particleCountTier)) {
+        errors.push(`particles.particleCountTier must be one of ${COUNT_TIERS.join(", ")}`);
+      }
+      if (typeof particles.densityAutoScale !== "boolean") errors.push("particles.densityAutoScale must be boolean");
+      numberIn(particles.trailLength, TRAIL_LENGTH_RANGE[0], TRAIL_LENGTH_RANGE[1], "particles.trailLength", errors);
+      if (!TRAIL_TYPES.includes(particles.trailType)) errors.push(`particles.trailType must be one of ${TRAIL_TYPES.join(", ")}`);
+      if (!FORMATION_TYPES.includes(particles.formationType)) {
+        errors.push(`particles.formationType must be one of ${FORMATION_TYPES.join(", ")}`);
+      }
+      if (!OSCILLATION_TYPES.includes(particles.oscillationType)) {
+        errors.push(`particles.oscillationType must be one of ${OSCILLATION_TYPES.join(", ")}`);
+      }
+      numberIn(particles.oscillationAmount, OSCILLATION_AMOUNT_RANGE[0], OSCILLATION_AMOUNT_RANGE[1], "particles.oscillationAmount", errors);
+      numberIn(particles.oscillationSpeed, OSCILLATION_SPEED_RANGE[0], OSCILLATION_SPEED_RANGE[1], "particles.oscillationSpeed", errors);
+      if (!PULSE_LAYOUTS.includes(particles.pulseLayout)) errors.push(`particles.pulseLayout must be one of ${PULSE_LAYOUTS.join(", ")}`);
     }
   }
 
@@ -300,6 +348,10 @@ export class AppState {
     return this.replacePreset(draft);
   }
 
+  get stage3() {
+    return stage3View(this.preset);
+  }
+
   exportPreset() {
     return JSON.stringify(this.preset, null, 2);
   }
@@ -311,6 +363,8 @@ export class AppState {
     } catch {
       return { ok: false, errors: ["preset JSON could not be parsed"] };
     }
+    // Stage 2 presets lack the Stage 3 keys (and use `countTier`); fill them from defaults.
+    if (isObject(parsed) && isObject(parsed.particles)) parsed.particles = normalizeParticles(parsed.particles);
     return this.replacePreset(parsed);
   }
 }

@@ -28,7 +28,7 @@ import { ParticleSystem3D, loadParticleShaders } from "../render/ParticleSystem3
 import {
   FLOW_MODES,
   KALEIDO_SEGMENTS,
-  PARTICLE_SCENE_ID,
+  SCENE_IDS,
   decodePresetParam,
   encodePresetParam,
   isMobileAgent,
@@ -42,7 +42,9 @@ function loadStoredPreset() {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (!saved) return STAGE2_DEFAULT_PRESET;
-    const result = validatePreset(JSON.parse(saved));
+    const parsed = JSON.parse(saved);
+    if (parsed && typeof parsed.particles === "object") parsed.particles = normalizeParticles(parsed.particles);
+    const result = validatePreset(parsed);
     return result.ok ? result.preset : STAGE2_DEFAULT_PRESET;
   } catch {
     return STAGE2_DEFAULT_PRESET;
@@ -274,7 +276,7 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "t" || event.key === "T") hud.handlers.oscillator?.();
   if (event.key === "Escape") hud.toggle(true);
   if (event.key === "p" || event.key === "P") {
-    hud.handlers.scene?.(state.preset.sceneId === PARTICLE_SCENE_ID ? "aurora-ribbons" : PARTICLE_SCENE_ID);
+    hud.handlers.scene?.(SCENE_IDS[(SCENE_IDS.indexOf(state.preset.sceneId) + 1) % SCENE_IDS.length]);
   }
   if (event.key === "f" || event.key === "F") {
     const current = FLOW_MODES.indexOf(state.preset.particles?.flowMode);

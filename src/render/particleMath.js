@@ -6,7 +6,10 @@
 
 export const PARTICLE_SCENE_ID = "particle-swarm-3d";
 export const AURORA_SCENE_ID = "aurora-ribbons";
-export const SCENE_IDS = Object.freeze([PARTICLE_SCENE_ID, AURORA_SCENE_ID]);
+export const PULSE_SCENE_ID = "pulse-field-3d";
+export const SCENE_IDS = Object.freeze([PARTICLE_SCENE_ID, PULSE_SCENE_ID, AURORA_SCENE_ID]);
+/** Scenes drawn by the transform-feedback ParticleSystem3D. */
+export const PARTICLE_SCENE_IDS = Object.freeze([PARTICLE_SCENE_ID, PULSE_SCENE_ID]);
 
 /** Flow modes, in the order of the `u_mode` integer in sim.vert.glsl. */
 export const FLOW_MODES = Object.freeze(["fluid", "gas", "murmuration", "fish"]);
@@ -18,7 +21,27 @@ export const FLOW_LABELS = Object.freeze({
 });
 export const PARTICLE_SHAPES = Object.freeze(["dart", "capsule"]);
 export const KALEIDO_SEGMENTS = Object.freeze([0, 4, 6, 8, 12, 16]);
-export const COUNT_TIERS = Object.freeze(["auto", 4096, 16384, 32768, 65536]);
+export const COUNT_TIERS = Object.freeze(["auto", "64", "128", "256", "512", "1k", "2k", "4k", "16k", "32k", "64k"]);
+export const COUNT_TIER_VALUES = Object.freeze({
+  "64": 64,
+  "128": 128,
+  "256": 256,
+  "512": 512,
+  "1k": 1024,
+  "2k": 2048,
+  "4k": 4096,
+  "16k": 16384,
+  "32k": 32768,
+  "64k": 65536,
+});
+export const COUNT_TIER_LABELS = Object.freeze({ auto: "Auto (64k desktop / 16k mobile)" });
+export const TRAIL_TYPES = Object.freeze(["comet", "electric", "strobe", "ribbon", "none"]);
+export const FORMATION_TYPES = Object.freeze(["free-3d", "neon-tunnel", "polygon-rings", "supernova-shell"]);
+export const OSCILLATION_TYPES = Object.freeze(["off", "wave", "helix", "bounce", "pulse"]);
+export const PULSE_LAYOUTS = Object.freeze(["band-clouds", "geodesic-sphere", "wave-grid"]);
+export const TRAIL_LENGTH_RANGE = Object.freeze([0, 1]);
+export const OSCILLATION_AMOUNT_RANGE = Object.freeze([0, 3]);
+export const OSCILLATION_SPEED_RANGE = Object.freeze([0.25, 4]);
 export const MAX_PARTICLES = 65536;
 export const MIN_PARTICLES = 4096;
 export const DESKTOP_PARTICLES = 65536;
@@ -42,11 +65,19 @@ export const FLOW_DAMPING_PER_STEP = Object.freeze({
 
 export const DEFAULT_PARTICLES = Object.freeze({
   flowMode: "murmuration",
-  shape: "dart",
+  shape: "capsule",
   particleSize: 1.0,
   kaleidoSegments: 0,
   kaleidoSpin: true,
-  countTier: "auto",
+  particleCountTier: "1k",
+  densityAutoScale: true,
+  trailLength: 0.28,
+  trailType: "comet",
+  formationType: "neon-tunnel",
+  oscillationType: "helix",
+  oscillationAmount: 1.0,
+  oscillationSpeed: 1.2,
+  pulseLayout: "band-clouds",
 });
 
 /** Converts a per-step retention factor (e.g. 0.985 per 1/60 s) into a continuous damping rate (1/s). */
@@ -139,6 +170,7 @@ export function trailTauFromHalfLife(halfLifeMs) {
  * at 30 and 60 fps: (1 - E) / (1 - exp(-1 / (60 tau))).
  */
 export function trailRadianceScale(dt, trailTauSeconds) {
+  if (!(trailTauSeconds > 0)) return 1;
   const E = trailKeep(dt, trailTauSeconds);
   const ref = 1 - Math.exp(-1 / (60 * trailTauSeconds));
   return (1 - E) / Math.max(ref, 1e-4);
@@ -163,9 +195,81 @@ export function kaleidoFold(u, v, segments, angle, aspect, zoom = 1) {
   return [(Math.cos(a) * r) / aspect + 0.5, Math.sin(a) * r + 0.5];
 }
 
-/** Reinhard x / (1 + x) per channel (the ticket's filmic c / (1 + c)). */
+/** Reinhard x / (1 + x) per channel (Stage 2; kept for reference, no longer used by kaleido.frag.glsl). */
 export function toneMap(x) {
   return x / (1 + x);
+}
+
+export const TONEMAP = Object.freeze({ shoulder: 0.65, whiteLo: 1.1, whiteHi: 3.2, whiteMix: 0.65 });
+
+function smoothstep(lo, hi, x) {
+  const t = Math.min(1, Math.max(0, (x - lo) / (hi - lo)));
+  return t * t * (3 - 2 * t);
+}
+
+/** JS mirror of the chroma-preserving tone map in kaleido.frag.glsl. */
+export function chromaToneMap([r, g, b]) {
+  const peak = Math.max(r, Math.max(g, b));
+  const inv = 1 / Math.max(peak, 1e-4);
+  const mappedPeak = peak / (1 + TONEMAP.shoulder * peak);
+  const white = smoothstep(TONEMAP.whiteLo, TONEMAP.whiteHi, peak) * TONEMAP.whiteMix;
+  return [r, g, b].map((c) => c * inv * mappedPeak * (1 - white) + white);
+}
+
+/** Neon comet sprite falloff (render.frag.glsl): white-hot core + wide halo. */
+export const GLOW = Object.freeze({ coreK: 22.0, haloK: 4.5 });
+export function glowProfile(r2) {
+  return { core: Math.exp(-r2 * GLOW.coreK), halo: Math.exp(-r2 * GLOW.haloK) };
+}
+
+/**
+ * Pass 1 FBO size. Portrait viewports (clientHeight > clientWidth) swap the tier W/H and
+ * derive the width from the aspect, so the offscreen target is 1:1 with the canvas.
+ */
+export function resolveFboSize(targetWidth, targetHeight, clientWidth, clientHeight) {
+  if (!(clientWidth > 0) || !(clientHeight > 0) || clientHeight <= clientWidth) {
+    return { width: targetWidth, height: targetHeight, portrait: false };
+  }
+  const aspect = clientWidth / clientHeight;
+  const height = Math.max(targetWidth, targetHeight);
+  return { width: Math.max(2, Math.round(height * aspect)), height, portrait: true };
+}
+
+/** Hor+ projection scales: X shrinks only when landscape, Y shrinks only when portrait. */
+export function projectionScales(f, aspect) {
+  return { x: f * Math.min(1.0, 1.0 / aspect), y: f * Math.min(1.0, aspect) };
+}
+
+/** Stage 3 density auto-scale: fewer particles get bigger/brighter sprites. */
+export function densityScaleBoost(count, enabled = true) {
+  if (!enabled) return 1;
+  return Math.min(5.5, Math.max(1.0, (4096.0 / count) ** 0.32));
+}
+
+/** Stage 3 density auto-scale (audited v3.1): low counts get punchier/shorter trails
+ *  via clamp((N/4096)^0.28, 0.18, 1.0); high counts keep full trail persistence. */
+export function densityTrailScale(count, enabled = true) {
+  if (!enabled) return 1;
+  return Math.min(1.0, Math.max(0.18, (count / 4096.0) ** 0.28));
+}
+
+/** Frame-rate independent history kept for a per-60 Hz keep factor. */
+export function keepForDt(keep60, dt) {
+  if (!(keep60 > 0)) return 0;
+  return keep60 ** (Math.max(0, dt) * 60);
+}
+
+/** Time constant (s) equivalent to a per-60 Hz keep factor; 0 when no history is kept. */
+export function tauFromKeep60(keep60) {
+  if (!(keep60 > 0) || keep60 >= 1) return 0;
+  return -1 / (60 * Math.log(keep60));
+}
+
+/** Per-60 Hz-frame history kept by the trail pass. */
+export function trailKeepFactor(trailType, trailLength) {
+  if (trailType === "none" || !(trailLength > 0.01)) return 0.0;
+  const t = Math.min(1, Math.max(0, trailLength));
+  return 0.15 + (0.965 - 0.15) * t ** 0.65;
 }
 
 /** Causal Gaussian predator shockwave weight. Zero ahead of the front. */
@@ -226,8 +330,15 @@ export function isMobileAgent(userAgent = "", maxTouchPoints = 0, width = 1920) 
 }
 
 export function resolveParticleCount(countTier, mobile) {
-  if (typeof countTier === "number" && COUNT_TIERS.includes(countTier)) return countTier;
+  if (typeof countTier === "number" && Object.values(COUNT_TIER_VALUES).includes(countTier)) return countTier;
+  if (Object.hasOwn(COUNT_TIER_VALUES, countTier)) return COUNT_TIER_VALUES[countTier];
   return mobile ? MOBILE_PARTICLES : DESKTOP_PARTICLES;
+}
+
+/** Maps a legacy Stage 2 numeric countTier (4096, 16384, ...) to a Stage 3 tier id. */
+export function tierFromCount(value) {
+  const hit = Object.entries(COUNT_TIER_VALUES).find(([, n]) => n === Number(value));
+  return hit ? hit[0] : null;
 }
 
 /** FPS floor for auto step-down: 50 fps at a 60 fps cap, scaled for lower caps (Mode A 30 fps → 25). */
@@ -251,6 +362,10 @@ export function nextAutoCount(count, fps, targetFps, slowWindows, windows = 2) {
   return { count: Math.max(MIN_PARTICLES, count >> 1), slowWindows: 0 };
 }
 
+function clampRange(value, [min, max]) {
+  return Math.min(max, Math.max(min, value));
+}
+
 export function normalizeParticles(input) {
   const src = input && typeof input === "object" ? input : {};
   const out = { ...DEFAULT_PARTICLES };
@@ -261,11 +376,24 @@ export function normalizeParticles(input) {
   }
   if (KALEIDO_SEGMENTS.includes(src.kaleidoSegments)) out.kaleidoSegments = src.kaleidoSegments;
   if (typeof src.kaleidoSpin === "boolean") out.kaleidoSpin = src.kaleidoSpin;
-  if (COUNT_TIERS.includes(src.countTier)) out.countTier = src.countTier;
+  if (COUNT_TIERS.includes(src.particleCountTier)) out.particleCountTier = src.particleCountTier;
+  else if (src.countTier != null) {
+    // Stage 2 stored presets / URLs used `countTier` (auto or a number).
+    const legacy = src.countTier === "auto" ? "auto" : tierFromCount(src.countTier);
+    if (legacy) out.particleCountTier = legacy;
+  }
+  if (typeof src.densityAutoScale === "boolean") out.densityAutoScale = src.densityAutoScale;
+  if (Number.isFinite(src.trailLength)) out.trailLength = clampRange(src.trailLength, TRAIL_LENGTH_RANGE);
+  if (TRAIL_TYPES.includes(src.trailType)) out.trailType = src.trailType;
+  if (FORMATION_TYPES.includes(src.formationType)) out.formationType = src.formationType;
+  if (OSCILLATION_TYPES.includes(src.oscillationType)) out.oscillationType = src.oscillationType;
+  if (Number.isFinite(src.oscillationAmount)) out.oscillationAmount = clampRange(src.oscillationAmount, OSCILLATION_AMOUNT_RANGE);
+  if (Number.isFinite(src.oscillationSpeed)) out.oscillationSpeed = clampRange(src.oscillationSpeed, OSCILLATION_SPEED_RANGE);
+  if (PULSE_LAYOUTS.includes(src.pulseLayout)) out.pulseLayout = src.pulseLayout;
   return out;
 }
 
-const SCENE_SHORT = { [PARTICLE_SCENE_ID]: "particles", [AURORA_SCENE_ID]: "aurora" };
+const SCENE_SHORT = { [PARTICLE_SCENE_ID]: "particles", [PULSE_SCENE_ID]: "pulse", [AURORA_SCENE_ID]: "aurora" };
 
 /** `?preset=scene:particles_flow:fish_shape:dart_size:1.5_k:6_spin:1_count:auto` */
 export function encodePresetParam(sceneId, particles) {
@@ -280,7 +408,15 @@ export function encodePresetParam(sceneId, particles) {
     `size:${Number(p.particleSize.toFixed(2))}`,
     `k:${p.kaleidoSegments}`,
     `spin:${p.kaleidoSpin ? 1 : 0}`,
-    `count:${p.countTier}`,
+    `count:${p.particleCountTier}`,
+    `das:${p.densityAutoScale ? 1 : 0}`,
+    `tl:${Number(p.trailLength.toFixed(2))}`,
+    `tt:${p.trailType}`,
+    `form:${p.formationType}`,
+    `osc:${p.oscillationType}`,
+    `oa:${Number(p.oscillationAmount.toFixed(2))}`,
+    `os:${Number(p.oscillationSpeed.toFixed(2))}`,
+    `pl:${p.pulseLayout}`,
   ].join("_");
 }
 
@@ -299,12 +435,21 @@ export function decodePresetParam(value) {
     if (key === "scene") {
       if (raw === "aurora") result.sceneId = AURORA_SCENE_ID;
       else if (raw === "particles") result.sceneId = PARTICLE_SCENE_ID;
+      else if (raw === "pulse") result.sceneId = PULSE_SCENE_ID;
     } else if (key === "flow") result.particles.flowMode = raw;
     else if (key === "shape") result.particles.shape = raw;
     else if (key === "size") result.particles.particleSize = Number(raw);
     else if (key === "k") result.particles.kaleidoSegments = Number(raw);
     else if (key === "spin") result.particles.kaleidoSpin = raw === "1";
-    else if (key === "count") result.particles.countTier = raw === "auto" ? "auto" : Number(raw);
+    else if (key === "count") result.particles.particleCountTier = raw === "auto" || COUNT_TIERS.includes(raw) ? raw : tierFromCount(raw);
+    else if (key === "das") result.particles.densityAutoScale = raw === "1";
+    else if (key === "tl") result.particles.trailLength = Number(raw);
+    else if (key === "tt") result.particles.trailType = raw;
+    else if (key === "form") result.particles.formationType = raw;
+    else if (key === "osc") result.particles.oscillationType = raw;
+    else if (key === "oa") result.particles.oscillationAmount = Number(raw);
+    else if (key === "os") result.particles.oscillationSpeed = Number(raw);
+    else if (key === "pl") result.particles.pulseLayout = raw;
   }
   return matched ? result : null;
 }

@@ -1,6 +1,6 @@
 #version 300 es
-// ZUR Stage 2 — Pass 2: aspect-correct polar N-fold mirror kaleidoscope,
-// filmic c / (1 + c) tone map, single sRGB encode.
+// ZUR Stage 3 — Pass 2: aspect-correct polar N-fold mirror kaleidoscope,
+// chroma-preserving tone map (hue survives bright cores), single sRGB encode.
 precision highp float;
 precision highp sampler2D;
 
@@ -27,8 +27,12 @@ vec2 kaleidoFold(vec2 uv) {
   return vec2(cos(a) * r / aspect, sin(a) * r) + 0.5;
 }
 
+// Tone-map the peak channel only so saturated neon stays saturated; very hot pixels bleed to white.
 vec3 toneMap(vec3 c) {
-  return c / (1.0 + c);
+  float peak = max(c.r, max(c.g, c.b));
+  vec3 chroma = c / max(peak, 1e-4);
+  float mappedPeak = peak / (1.0 + 0.65 * peak);
+  return mix(chroma * mappedPeak, vec3(1.0), smoothstep(1.1, 3.2, peak) * 0.65);
 }
 
 vec3 linearToSRGB(vec3 c) {

@@ -1,5 +1,5 @@
 #version 300 es
-// ZUR Stage 2 — instanced 3D darts / velocity capsules built from gl_VertexID.
+// ZUR Stage 3 — instanced 3D darts / velocity capsules built from gl_VertexID.
 // Per-instance state (divisor = 1): a_pos = xyz + size/seed, a_vel = xyz + phase/life.
 precision highp float;
 precision highp int;
@@ -21,6 +21,11 @@ uniform float u_time;
 uniform float u_high;
 uniform float u_rms;
 uniform float u_intensity;
+uniform int u_trailType;        // 0 comet, 1 electric, 2 strobe, 3 ribbon, 4 none
+uniform float u_trailLength;    // 0..1
+uniform float u_densityScaleBoost;
+uniform int u_pulseLayout;      // -1 = swarm scene, 0 band-clouds, 1 geodesic-sphere, 2 wave-grid
+uniform float u_bands[5];       // sub, bass, lowMid, highMid, treble
 
 out vec3 v_color;
 out vec2 v_local;               // capsule: pixel coords along/perp velocity
@@ -97,7 +102,10 @@ void main() {
   vec4 clipCenter = u_viewProj * vec4(center, 1.0);
   float w = max(clipCenter.w, 0.05);
   float pxPerUnit = u_projScale * 0.5 * u_resolution.y / w;
-  float worldSize = 0.055 * u_size * (0.65 + 0.7 * seed);
+  bool pulse = u_pulseLayout >= 0;
+  int band = int(iid % 5u);
+  float bandLevel = pulse ? clamp(u_bands[band], 0.0, 1.5) : 0.0;
+  float worldSize = 0.055 * u_size * u_densityScaleBoost * (0.65 + 0.7 * seed) * (1.0 + 0.45 * bandLevel);
   float radiusPx = worldSize * pxPerUnit;
   float floorScale = radiusPx < u_minRadiusPx ? u_minRadiusPx / max(radiusPx, 1e-4) : 1.0;
 
@@ -108,6 +116,16 @@ void main() {
   float energy = 0.55 + 0.35 * clamp(speed * 0.25, 0.0, 1.0) + 0.35 * u_rms;
   float depthCue = clamp(1.25 - w * 0.045, 0.35, 1.15);
   v_color = mix(base, accent, clamp(speed * 0.18, 0.0, 0.6)) * energy * shimmer * depthCue * u_intensity;
+  if (pulse) {
+    // each band owns one palette color; its level drives the flash
+    v_color = mix(paletteAt(uint(band)), paletteAt(uint(band + 2) % 5u), 0.2) * (0.45 + 2.6 * bandLevel) * depthCue * u_intensity;
+  }
+  if (u_trailType == 1) {
+    float flick = float(hash32(iid + uint(u_time * 30.0)) & 255u) * (1.0 / 255.0);
+    v_color *= 0.55 + 0.95 * flick;
+  } else if (u_trailType == 2) {
+    v_color *= mix(0.35, 1.7, step(0.5, fract(u_time * (3.0 + 5.0 * u_trailLength) + seed)));
+  }
 
   if (u_shape == 0) {
     int face = gl_VertexID / 3;
@@ -121,6 +139,8 @@ void main() {
     vec3 world = center + frame * (local * s);
     v_normal = normalize(frame * cross(b - a, c - a));
     v_view = normalize(u_camPos - world);
+    // glow radius: 0 at the nose, 1 at the base (render.frag.glsl core/halo falloff)
+    v_local = vec2(corner == 0 ? 0.0 : 1.0, 0.0);
     gl_Position = u_viewProj * vec4(world, 1.0);
     return;
   }
@@ -135,12 +155,18 @@ void main() {
   vec2 dir = length(deltaPx) > 1e-3 ? normalize(deltaPx) : vec2(1.0, 0.0);
   vec2 perp = vec2(-dir.y, dir.x);
   float radius = max(radiusPx, u_minRadiusPx);
-  float halfSeg = min(0.5 * pixelSpeed * u_exposure, 18.0 * u_size);
-  vec2 extent = vec2(halfSeg + radius + 1.0, radius + 1.0);
+  float stretch = 1.0;
+  if (u_trailType == 0) stretch = 1.0 + 2.0 * u_trailLength;
+  else if (u_trailType == 1) stretch = 1.0 + 1.2 * u_trailLength;
+  else if (u_trailType == 3) stretch = 1.0 + 5.0 * u_trailLength;
+  else if (u_trailType == 4) stretch = 0.0;
+  float halfSeg = min(0.5 * pixelSpeed * u_exposure * stretch, 18.0 * u_size * (1.0 + 2.0 * u_trailLength));
+  float glowRadius = radius * 2.4;
+  vec2 extent = vec2(halfSeg + glowRadius + 1.0, glowRadius + 1.0);
   vec2 offsetPx = dir * corner.x * extent.x + perp * corner.y * extent.y;
   v_local = corner * extent;
   v_halfSeg = halfSeg;
-  v_radius = radius;
+  v_radius = glowRadius;
   // keep brightness per area roughly constant when the floor enlarges tiny capsules
   v_color *= clamp((radiusPx * radiusPx) / max(radius * radius, 1e-4), 0.35, 1.0);
   gl_Position = vec4((ndc0 + offsetPx * 2.0 / u_resolution) * w, clipCenter.z, w);

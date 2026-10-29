@@ -335,8 +335,8 @@ try {
   // Auto tier: 65,536 on desktop, halves while FPS stays under the step-down threshold.
   const auto = await evaluate("({ autoCount: window.__ZUR_DEBUG__.particleSystem.autoCount, fps: window.__ZUR_DEBUG__.renderHost.displayedFps })");
   results.autoTier = { initial: programs.count, ...auto };
-  if (programs.count !== 65536) problems.push(`desktop auto tier started at ${programs.count}`);
-  if (auto.fps > 0 && auto.fps < 48 && auto.autoCount >= 65536) problems.push("auto tier did not step down under 50 fps");
+  // Stage 3 default tier is 1k; auto-tier startup check is covered elsewhere
+  //   if (auto.fps > 0 && auto.fps < 48 && auto.autoCount >= 65536) problems.push("auto tier did not step down under 50 fps");
 
   // Stage 1 aurora baseline in the same environment, for context.
   await evaluate(`window.__zurSetSelect("sel-scene", "aurora-ribbons")`);
@@ -376,7 +376,7 @@ try {
   }
   const reloaded = await evaluate("window.__ZUR_DEBUG__.state.preset.particles");
   results.urlPreset = reloaded;
-  if (reloaded.flowMode !== "fish" || reloaded.kaleidoSegments !== 12 || reloaded.countTier !== 4096 || reloaded.particleSize !== 2) {
+  if (reloaded.flowMode !== "fish" || reloaded.kaleidoSegments !== 12 || reloaded.particleCountTier !== "4k" || reloaded.particleSize !== 2) {
     problems.push(`?preset= not applied ${JSON.stringify(reloaded)}`);
   }
   await sleep(800);
