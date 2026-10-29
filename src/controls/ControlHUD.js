@@ -1,5 +1,14 @@
 import { PALETTE_IDS, PALETTES } from "./palettes.js";
 import { QUALITY_TIERS } from "../render/RenderHost.js";
+import {
+  COUNT_TIERS,
+  DEFAULT_PARTICLES,
+  FLOW_LABELS,
+  FLOW_MODES,
+  KALEIDO_SEGMENTS,
+  PARTICLE_SCENE_ID,
+  PARTICLE_SIZE_RANGE,
+} from "../render/particleMath.js";
 
 const METERS = [
   ["sub", "Sub"],
@@ -52,9 +61,10 @@ export class ControlHUD {
       capture: this._pill("status-capture", "Capture"),
       webgl: this._pill("status-webgl", "WebGL2"),
       fps: this._pill("status-fps", "FPS"),
+      particles: this._pill("status-particles", "Swarm"),
     };
     const pills = el("div", "pills");
-    pills.append(this.pills.wakeLock, this.pills.capture, this.pills.webgl, this.pills.fps);
+    pills.append(this.pills.wakeLock, this.pills.capture, this.pills.webgl, this.pills.fps, this.pills.particles);
     header.append(pills);
     panel.append(header);
 
@@ -90,6 +100,42 @@ export class ControlHUD {
     modes.append(this._button("btn-mode-a", "Mode A 720p30", () => this.handlers.modeA?.()));
     modes.append(this._button("btn-mode-b", "Mode B 720p60", () => this.handlers.modeB?.()));
     this.body.append(modes);
+
+    // Stage 2 — scene + 3D particle swarm controls.
+    const stage2 = el("fieldset", "stage2");
+    stage2.id = "stage2-controls";
+    stage2.append(el("legend", "field-label", "Stage 2 · 3D swarm"));
+    this.scene = this._select("sel-scene", "Scene", [
+      [PARTICLE_SCENE_ID, "3D Particle Swarm"],
+      ["aurora-ribbons", "Aurora Ribbons (Stage 1)"],
+    ], (value) => this.handlers.scene?.(value));
+    this.flow = this._select("sel-flow", "Flow mode", FLOW_MODES.map((id) => [id, FLOW_LABELS[id]]), (value) => {
+      this.handlers.particles?.({ flowMode: value });
+    });
+    this.shape = this._select("sel-shape", "3D shape", [
+      ["dart", "3D Fish/Bird Dart"],
+      ["capsule", "Velocity Capsule"],
+    ], (value) => this.handlers.particles?.({ shape: value }));
+    this.size = this._range("rng-size", "Particle size", PARTICLE_SIZE_RANGE[0], PARTICLE_SIZE_RANGE[1], 0.05, (value) => {
+      this.handlers.particles?.({ particleSize: value });
+    });
+    this.kaleido = this._select(
+      "sel-kaleido",
+      "Kaleidoscope segments",
+      KALEIDO_SEGMENTS.map((n) => [String(n), n === 0 ? "Off" : `${n} mirrors`]),
+      (value) => this.handlers.particles?.({ kaleidoSegments: Number(value) }),
+    );
+    this.spin = this._checkbox("chk-kaleido-spin", "Kaleidoscope spin (beat-synced)", (checked) => {
+      this.handlers.particles?.({ kaleidoSpin: checked });
+    });
+    this.count = this._select(
+      "sel-count",
+      "Particle count tier",
+      COUNT_TIERS.map((tier) => [String(tier), tier === "auto" ? "Auto (65k desktop / 16k mobile)" : `${Math.round(tier / 1024)}k`]),
+      (value) => this.handlers.particles?.({ countTier: value === "auto" ? "auto" : Number(value) }),
+    );
+    stage2.append(this.scene.wrap, this.flow.wrap, this.shape.wrap, this.size.wrap, this.kaleido.wrap, this.spin.label, this.count.wrap);
+    this.body.append(stage2);
 
     const captureRow = el("div", "row");
     captureRow.append(this._button("btn-tab", "Tab capture", () => this.handlers.tab?.()));
@@ -218,7 +264,7 @@ export class ControlHUD {
     this.body.append(this.json);
     this.body.append(this._button("btn-import", "Apply JSON", () => this.handlers.importPreset?.(this.json.value)));
 
-    this.hint = el("p", "hint", "H hides the panel. 1 / 2 load Mode A / B. T starts the silent test oscillator.");
+    this.hint = el("p", "hint", "H hides the panel. 1 / 2 load Mode A / B. T starts the silent test oscillator. P switches scene, F cycles flow mode, K cycles kaleidoscope.");
     this.body.append(this.hint);
     panel.append(this.body);
     this.root.append(panel);
@@ -338,6 +384,25 @@ export class ControlHUD {
     }
     this.pills.fps.dataset.state = fps ? "active" : "off";
     this.pills.fps.textContent = fps ? `${fps} FPS` : "FPS";
+    this.frameTick += 1;
+    if (this.particleSystem && this.frameTick % 30 === 0) {
+      const active = this.state.preset.sceneId === PARTICLE_SCENE_ID && this.particleSystem.ready;
+      const count = this.particleSystem.count;
+      const text = active ? `${Math.round(count / 1024)}k · ${this.particleSystem.sceneFormat}` : "Swarm off";
+      if (this.pills.particles.textContent !== text) {
+        this.pills.particles.textContent = text;
+        this.pills.particles.dataset.state = active ? "active" : "off";
+        this.pills.particles.dataset.count = String(count);
+      }
+    }
+  }
+
+  setParticleStatus(particleSystem) {
+    this.particleSystem = particleSystem || null;
+    if (!particleSystem) {
+      this.pills.particles.textContent = "Swarm unavailable";
+      this.pills.particles.dataset.state = "unavailable";
+    }
   }
 
   fillJson() {
@@ -362,6 +427,15 @@ export class ControlHUD {
     this.palette.select.value = PALETTES[visual.paletteId] ? visual.paletteId : PALETTE_IDS[0];
     this.hue.input.value = String(visual.hueShift || 0);
     this.hue.value.textContent = Number(visual.hueShift || 0).toFixed(2);
+    const particles = { ...DEFAULT_PARTICLES, ...(preset.particles || {}) };
+    this.scene.select.value = preset.sceneId === PARTICLE_SCENE_ID ? PARTICLE_SCENE_ID : "aurora-ribbons";
+    this.flow.select.value = particles.flowMode;
+    this.shape.select.value = particles.shape;
+    this.size.input.value = String(particles.particleSize);
+    this.size.value.textContent = `${Number(particles.particleSize).toFixed(2)}×`;
+    this.kaleido.select.value = String(particles.kaleidoSegments);
+    this.spin.input.checked = particles.kaleidoSpin;
+    this.count.select.value = String(particles.countTier);
     this._setPill(this.pills.wakeLock, this.state.status.wakeLock, `Wake ${this.state.status.wakeLock}`);
     this._setPill(this.pills.capture, this.state.status.capture, `Capture ${this.state.status.capture}`);
     this._setPill(this.pills.webgl, this.state.status.webgl, this.state.status.webgl === "webgl2" ? "WebGL2" : `WebGL ${this.state.status.webgl}`);

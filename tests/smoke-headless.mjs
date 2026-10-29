@@ -133,7 +133,15 @@ try {
     expression: "document.getElementById('btn-oscillator').click()",
     returnByValue: true,
   });
-  await sleep(1200);
+  // Poll up to 6 s: software rasterizers (SwiftShader) can run the render loop at a few fps.
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    await sleep(200);
+    const active = await send("Runtime.evaluate", {
+      expression: "[...document.querySelectorAll('[data-meter]')].some((node) => Number(node.dataset.level) > 0.02)",
+      returnByValue: true,
+    });
+    if (active.result.value && attempt >= 5) break;
+  }
   const after = await send("Runtime.evaluate", {
     expression: `(() => {
       const debug = window.__ZUR_DEBUG__;
@@ -155,8 +163,9 @@ try {
   const shot = await send("Page.captureScreenshot", { format: "png" });
   const png = Buffer.from(shot.data, "base64");
   const { mkdir, writeFile } = await import("node:fs/promises");
-  await mkdir("/opt/cursor/artifacts/screenshots", { recursive: true });
-  await writeFile("/opt/cursor/artifacts/screenshots/zur-stage1-oscillator.png", png);
+  const shotDir = process.env.ZUR_SHOTS || "/workspace/artifacts/screenshots";
+  await mkdir(shotDir, { recursive: true });
+  await writeFile(`${shotDir}/zur-stage1-oscillator.png`, png);
   const summary = { boot, before: before.result.value, after: after.result.value, logs };
   console.log(JSON.stringify(summary, null, 2));
   const value = after.result.value;

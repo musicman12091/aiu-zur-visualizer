@@ -1,6 +1,6 @@
 # ZUR STATE
 
-Stage 1 ledger for `musicman12091/aiu-zur-visualizer`.
+Stage ledger for `musicman12091/aiu-zur-visualizer`.
 
 ## Stage 1 — ZUR-GH-001
 
@@ -25,6 +25,19 @@ Headless Chrome 156 (SwiftShader) loaded `index.html`, compiled `aurora-ribbons.
 
 Pages is enabled and serving Stage 1 from the `main` branch root (`/`). https://musicman12091.github.io/aiu-zur-visualizer/ returned HTTP 200 on 2026-10-27.
 
+## Stage 2 — ZUR-GH-002
+
+- status: implemented on branch `zur-stage2`; pending review and merge to `main`
+- merged_to_main: no (parent merges after review)
+- branch: `zur-stage2` (built directly in `/workspace/aiu-zur-visualizer`, no Cloud Agent, no `cursor/*` branch)
+- scope: WebGL2 transform-feedback particles (65,536 desktop / 16,384 mobile, auto step-down), Fluid / Gas / Murmuration / School of Fish flow modes, instanced 3D darts and velocity capsules with rim lighting, a scene FBO with frame-rate-independent trails, the N-fold kaleidoscope (Off/4/6/8/12/16, beat-synced spin) with `c/(1+c)` tone mapping, HUD controls, and `localStorage` plus `?preset=` persistence
+- Stage 1 preserved: AudioEngine, FeatureExtractor, Wake Lock, PWA and `aurora-ribbons.glsl` unchanged. Aurora is still a selectable scene.
+- contract_tests: PASS — `node tests/verify-contracts.mjs` (36 passed: 19 Stage 1 + 17 Stage 2)
+- node_check: PASS — every `.js` / `.mjs` file
+- headless_chrome_stage1: PASS — `node tests/smoke-headless.mjs` (silent oscillator, `destinationConnections` 0)
+- headless_chrome_stage2: PASS — `node tests/smoke-stage2.mjs` on `http://localhost:8080`. All 4 programs linked with empty info logs, there were 2 interleaved TF varyings, buffers were 2,097,152 bytes `DYNAMIC_COPY`, TF advanced state, the scene FBO was RGBA16F, all 4 flow modes, 4 sizes and 6 kaleidoscope settings rendered non-black with 0 GL errors, `console.error` was 0, `pageerror` was 0, auto tier stepped down 65,536 → 4,096, and URL plus localStorage persistence worked.
+- fps: the ≥ 55 fps gate is report-only on this box because it has no GPU and headless Chrome uses the SwiftShader CPU rasterizer. Stage 1 aurora alone runs at about 21 fps there, and the particle scene at 16,384 ran at about 5 fps. Run `ZUR_STRICT_FPS=1 node tests/smoke-stage2.mjs` on a GPU machine to enforce the gate.
+
 ## Not in this stage
 
-`musicman12091/aiu-dj-player` was not modified. Scenes 2–4 and the Butterchurn adapter are later stages.
+`musicman12091/aiu-dj-player` was not modified. Further scenes and the Butterchurn adapter are later stages.
