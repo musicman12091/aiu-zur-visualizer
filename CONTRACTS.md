@@ -210,3 +210,54 @@ On startup, on the first capture gesture, and whenever `document.visibilityState
 ## Render loop
 
 One `requestAnimationFrame` loop in `RenderHost` caps FPS from the preset, sets the drawing buffer to the tier size, and samples the analyser only on rendered frames. `TransitionController` uses `timer-then-onset` with a 45 s dwell. Stage 1 has a single scene, so a passed gate does not swap shaders.
+
+# Stage 2 Contracts (ZUR-GH-002)
+
+Source: ZUR Blueprint v2.1 Part 4 and the ZUR-GH-002 ticket. Stage 2 adds a second scene; every Stage 1 contract above still holds (silent AudioEngine, FeatureExtractor, Wake Lock, PWA, `aurora-ribbons.glsl`).
+
+## Scenes
+
+`preset.sceneId` is `particle-swarm-3d` (Stage 2 default) or `aurora-ribbons` (Stage 1). `RenderHost` draws the particle scene only when `ParticleSystem3D` is ready; otherwise it falls back to aurora. Mode A / Mode B keep the current scene and particle settings (`applyModeKeepingScene`).
+
+## Preset `particles` (optional)
+
+| Field | Values |
+| --- | --- |
+| `flowMode` | `fluid`, `gas`, `murmuration`, `fish` |
+| `shape` | `dart` (12-vertex 3D dart), `capsule` (4-vertex velocity capsule) |
+| `particleSize` | 0.5 – 4.0 (× base size) |
+| `kaleidoSegments` | 0 (off), 4, 6, 8, 12, 16 |
+| `kaleidoSpin` | boolean — beat-synced rotation |
+| `countTier` | `auto`, 4096, 16384, 32768, 65536 |
+
+Settings persist in `localStorage["zur.preset.v2"]` and in the URL as `?preset=scene:particles_flow:fish_shape:dart_size:1.5_k:6_spin:1_count:auto` (a bare flow name such as `?preset=gas` also works). URL state wins over storage on load.
+
+## Transform-feedback state
+
+- Two preallocated interleaved Float32 VBOs (`gl.DYNAMIC_COPY`), 65,536 agents × 32 bytes: `vec4 a_pos` (xyz + size/seed) at location 0, `vec4 a_vel` (xyz + phase/life) at location 1.
+- Update VAOs use divisor 0 with `RASTERIZER_DISCARD`; render VAOs use divisor 1 with `drawArraysInstanced`.
+- After `endTransformFeedback()` the code unbinds `TRANSFORM_FEEDBACK` and `bindBufferBase(TRANSFORM_FEEDBACK_BUFFER, 0, null)` before the buffer is read as vertex input.
+- Fixed `1/60 s` steps, at most 4 per frame. Drag uses the exact frozen-force integrator (`integrateFrozenDrag`) with a Taylor fallback when `|k·dt| < 1e-3`. Ticket damping factors (fluid 0.985, gas 0.94 per step) are converted to continuous rates.
+- Murmuration / fish read a 6-neighbor topological ring (id ± 1..3) from an RGBA32F texture filled GPU-side from the read buffer through `PIXEL_UNPACK_BUFFER`. There is no CPU readback in the loop.
+- Auto tier: 65,536 on desktop, 16,384 on mobile. It halves after 2 one-second windows under the step-down threshold (50 fps at a 60 fps cap, 25 at Mode A's 30 fps cap). A window under half the threshold quarters it immediately. It never drops below 4,096.
+
+## Flow modes (`src/shaders/sim.vert.glsl`)
+
+| Mode | Forces |
+| --- | --- |
+| Fluid | unnormalized analytic simplex curl (divergence-free) + laminar swirl about Y + bass × onset radial impulse; retention 0.985 |
+| Gas | 2-octave high-frequency curl + thermal buoyancy (life/heat + onset) + treble burst dispersion + respawn at the base; retention 0.94 |
+| Murmuration | curl flow + 5 Lissajous attractors with retarded-time delay + causal Gaussian predator shockwaves (4-slot ring, onset-triggered or ambient every 7 s in silence) + ring separation/alignment/cohesion |
+| Fish | horizontal banking torus + tangential swim + random darting bursts + strong ring alignment + `u_high` lateral shimmer |
+
+## Rendering
+
+- Pass 1 (scene FBO, RGBA16F when renderable, RGBA8 fallback, `DEPTH_COMPONENT24`): the trail fade (`ONE, ONE_MINUS_SRC_ALPHA`, alpha `1 − exp(−dt/τ)`) is followed by additive particles. Particle radiance is scaled by `(1 − E) / (1 − exp(−1/(60τ)))` so 30 fps and 60 fps glow match, and depth is invalidated afterward.
+- Darts use a singularity-free `velocityFrame` (the up hint blends away from +Y when `|forward.y|` is between 0.85 and 0.99) with face-normal rim lighting. Capsules are screen-space velocity-stretched SDFs with `fwidth` antialiasing. Both keep the capture-space radius floor `1.6 px × H/720 / max(zoom, 0.25)` and hash32 ID thinning (75% visible at tier `safe`).
+- Pass 2 (default framebuffer): an aspect-correct polar N-fold mirror kaleidoscope (`u_kaleidoSegments ≤ 1` is a 1:1 bypass) runs first, then `c / (1 + c)` tone mapping, then a single sRGB encode.
+
+## Tests
+
+- `node tests/verify-contracts.mjs`: Stage 1 and Stage 2 math and source contracts.
+- `node tests/smoke-headless.mjs`: Stage 1 headless oscillator smoke.
+- `node tests/smoke-stage2.mjs`: serves `http://localhost:8080` and checks that the TF and render programs link with empty info logs, that TF advances state, that all 4 modes, 4 sizes and 6 kaleidoscope settings render non-black with 0 GL errors, 0 `console.error` and 0 page errors, and that persistence and `?preset=` work. The FPS gate (≥ 55 fps) is enforced on hardware GPUs. On software rasterizers (SwiftShader) it is report-only unless `ZUR_STRICT_FPS=1`.

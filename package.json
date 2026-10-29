@@ -2,8 +2,10 @@
   "name": "aiu-zur-visualizer",
   "private": true,
   "type": "module",
-  "description": "Project ZUR Stage 1 silent audio-reactive WebGL2 visualizer.",
+  "description": "Project ZUR silent audio-reactive WebGL2 visualizer (Stage 1 aurora + Stage 2 3D particle swarm).",
   "scripts": {
-    "test": "node tests/verify-contracts.mjs"
+    "test": "node tests/verify-contracts.mjs",
+    "smoke": "node tests/smoke-headless.mjs",
+    "smoke:stage2": "node tests/smoke-stage2.mjs"
   }
 }

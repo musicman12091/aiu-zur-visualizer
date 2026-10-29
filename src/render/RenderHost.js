@@ -1,5 +1,6 @@
 import { clamp01 } from "../audio/FeatureExtractor.js";
 import { PALETTES, shiftPalette } from "../controls/palettes.js";
+import { PARTICLE_SCENE_ID, normalizeParticles } from "./particleMath.js";
 
 /** Four hardware tiers. Tier 1 matches Mode A; Tier 2 matches Mode B. */
 export const QUALITY_TIERS = Object.freeze([
@@ -75,18 +76,44 @@ export class RenderHost {
     this.fpsWindowStart = 0;
     this.displayedFps = 0;
     this._raf = 0;
+    this.particleSystem = null;
+    this.particleError = "";
+    this.activeScene = "";
     shaderHost.onContextLost = () => {
       this.pausedForContextLoss = true;
     };
     shaderHost.onContextRestored = () => {
       this.pausedForContextLoss = false;
+      if (this.particleSystem) {
+        try {
+          this.particleSystem.gl = this.shaderHost.gl;
+          this.particleSystem.init();
+        } catch (error) {
+          this.particleError = error?.message || String(error);
+        }
+      }
       this.applySize();
     };
+  }
+
+  /** Stage 2: attach the transform-feedback particle scene (shares the ShaderHost context). */
+  setParticleSystem(particleSystem) {
+    this.particleSystem = particleSystem;
+    if (particleSystem && this.shaderHost.width) {
+      particleSystem.resize(this.shaderHost.width, this.shaderHost.height);
+    }
+  }
+
+  /** Scene actually drawn this frame: particles when requested and ready, else aurora. */
+  resolveScene(preset) {
+    if (preset?.sceneId === PARTICLE_SCENE_ID && this.particleSystem?.ready) return PARTICLE_SCENE_ID;
+    return "aurora-ribbons";
   }
 
   applySize() {
     const size = resolveRenderSize(this.getPreset());
     this.shaderHost.resize(size.width, size.height);
+    this.particleSystem?.resize(size.width, size.height);
     return size;
   }
 
@@ -112,6 +139,7 @@ export class RenderHost {
     const size = resolveRenderSize(preset);
     if (this.shaderHost.width !== size.width || this.shaderHost.height !== size.height) {
       this.shaderHost.resize(size.width, size.height);
+      this.particleSystem?.resize(size.width, size.height);
     }
     let deltaSeconds;
     if (this.lastStamp !== 0) {
@@ -129,6 +157,9 @@ export class RenderHost {
       this.displayedFps = this.framesThisSecond;
       this.framesThisSecond = 0;
       this.fpsWindowStart = now;
+      if (this.activeScene === PARTICLE_SCENE_ID) {
+        this.particleSystem?.reportFps(this.displayedFps, size.fps, preset.particles?.countTier ?? "auto");
+      }
     }
 
     const snapshot = this.readAudio?.() ?? null;
@@ -164,7 +195,24 @@ export class RenderHost {
       bloom: visual.bloom,
       palette,
     });
-    this.shaderHost.render();
+    const scene = this.resolveScene(preset);
+    if (scene !== this.activeScene) {
+      if (scene === PARTICLE_SCENE_ID && this.particleSystem) this.particleSystem.resetAuto();
+      this.activeScene = scene;
+    }
+    if (scene === PARTICLE_SCENE_ID) {
+      const particles = preset.particles || this._defaultParticles || (this._defaultParticles = normalizeParticles(null));
+      this.particleSystem.render(
+        this.shaderHost.frame,
+        this.shaderHost.palette,
+        particles,
+        visual,
+        this.canvas.width,
+        this.canvas.height,
+      );
+    } else {
+      this.shaderHost.render();
+    }
     this.onFrame?.({ frame, deltaSeconds, fps: this.displayedFps, transition, size });
   };
 }

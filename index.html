@@ -61,7 +61,8 @@
     }
     .hud.is-collapsed .hud-body { display: none; }
     .hud-header, .row, .field-head, .pills { display: flex; align-items: center; gap: 8px; }
-    .hud-header { justify-content: space-between; }
+    .hud-header { justify-content: space-between; align-items: flex-start; }
+    .hud-header .pills { flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
     .hud-toggle, .hud-button, .file-button {
       min-height: 44px;
       border: 0;
@@ -129,6 +130,8 @@
       font-size: 11px;
       line-height: 1.4;
     }
+    .stage2 { margin: 12px 0 0; padding: 4px 10px 10px; border: 1px solid var(--line); border-radius: 12px; }
+    .stage2 legend { padding: 0 6px; font-size: 12px; letter-spacing: 0.05em; text-transform: uppercase; }
     .hud-error { min-height: 1.2em; color: #ffb4a8; font-size: 13px; }
     .hint { color: var(--muted); font-size: 12px; }
     @media (max-width: 720px) {

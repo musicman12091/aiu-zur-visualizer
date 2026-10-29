@@ -1,4 +1,11 @@
-import { AppState, MODE_A_PRESET, MODE_B_PRESET, validatePreset } from "./AppState.js";
+import {
+  AppState,
+  MODE_A_PRESET,
+  MODE_B_PRESET,
+  STAGE2_DEFAULT_PRESET,
+  applyModeKeepingScene,
+  validatePreset,
+} from "./AppState.js";
 import { FeatureExtractor } from "../audio/FeatureExtractor.js";
 import {
   getAudioContext,
@@ -17,18 +24,42 @@ import { ShaderHost } from "../render/ShaderHost.js";
 import { RenderHost } from "../render/RenderHost.js";
 import { TransitionController } from "../render/TransitionController.js";
 import { ControlHUD } from "../controls/ControlHUD.js";
+import { ParticleSystem3D, loadParticleShaders } from "../render/ParticleSystem3D.js";
+import {
+  FLOW_MODES,
+  KALEIDO_SEGMENTS,
+  PARTICLE_SCENE_ID,
+  decodePresetParam,
+  encodePresetParam,
+  isMobileAgent,
+  normalizeParticles,
+} from "../render/particleMath.js";
 
-const STORAGE_KEY = "zur.preset.v1";
+// v2: Stage 2 adds `particles` + the particle scene default. Stage 1 v1 data is left untouched.
+const STORAGE_KEY = "zur.preset.v2";
 
-function loadInitialPreset() {
+function loadStoredPreset() {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
-    if (!saved) return MODE_A_PRESET;
+    if (!saved) return STAGE2_DEFAULT_PRESET;
     const result = validatePreset(JSON.parse(saved));
-    return result.ok ? result.preset : MODE_A_PRESET;
+    return result.ok ? result.preset : STAGE2_DEFAULT_PRESET;
   } catch {
-    return MODE_A_PRESET;
+    return STAGE2_DEFAULT_PRESET;
   }
+}
+
+/** Stored preset, then `?preset=` URL state on top (scene + particle controls). */
+function loadInitialPreset() {
+  const base = JSON.parse(JSON.stringify(loadStoredPreset()));
+  base.particles = normalizeParticles(base.particles);
+  const decoded = decodePresetParam(new URLSearchParams(location.search).get("preset"));
+  if (decoded) {
+    if (decoded.sceneId) base.sceneId = decoded.sceneId;
+    base.particles = normalizeParticles({ ...base.particles, ...decoded.particles });
+  }
+  const result = validatePreset(base);
+  return result.ok ? result.preset : STAGE2_DEFAULT_PRESET;
 }
 
 const state = new AppState(loadInitialPreset());
@@ -101,6 +132,21 @@ function persist() {
   } catch {
     // Private mode can reject storage; the session still runs.
   }
+  try {
+    const url = new URL(location.href);
+    url.searchParams.set("preset", encodePresetParam(state.preset.sceneId, state.preset.particles));
+    history.replaceState(history.state, "", url);
+  } catch {
+    // URL state is best-effort (file:// or sandboxed frames).
+  }
+}
+
+function updateParticles(partial) {
+  const result = state.updatePreset((draft) => {
+    draft.particles = normalizeParticles({ ...draft.particles, ...partial });
+  });
+  if (!result.ok) hud.setError(result.errors[0]);
+  return result;
 }
 
 function publishDiagnostics() {
@@ -142,13 +188,21 @@ const host = new RenderHost({
 
 hud.setHandlers({
   modeA: () => {
-    state.replacePreset(MODE_A_PRESET);
+    state.replacePreset(applyModeKeepingScene(MODE_A_PRESET, state.preset));
     hud.fillJson();
   },
   modeB: () => {
-    state.replacePreset(MODE_B_PRESET);
+    state.replacePreset(applyModeKeepingScene(MODE_B_PRESET, state.preset));
     hud.fillJson();
   },
+  scene: (sceneId) => {
+    const result = state.updatePreset((draft) => {
+      draft.sceneId = sceneId;
+      draft.particles = normalizeParticles(draft.particles);
+    });
+    if (!result.ok) hud.setError(result.errors[0]);
+  },
+  particles: (partial) => updateParticles(partial),
   tab: () => {
     const audio = state.preset.audio;
     const pending = startTabCapture({
@@ -219,6 +273,17 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "2") hud.handlers.modeB?.();
   if (event.key === "t" || event.key === "T") hud.handlers.oscillator?.();
   if (event.key === "Escape") hud.toggle(true);
+  if (event.key === "p" || event.key === "P") {
+    hud.handlers.scene?.(state.preset.sceneId === PARTICLE_SCENE_ID ? "aurora-ribbons" : PARTICLE_SCENE_ID);
+  }
+  if (event.key === "f" || event.key === "F") {
+    const current = FLOW_MODES.indexOf(state.preset.particles?.flowMode);
+    updateParticles({ flowMode: FLOW_MODES[(current + 1) % FLOW_MODES.length] });
+  }
+  if (event.key === "k" || event.key === "K") {
+    const current = KALEIDO_SEGMENTS.indexOf(state.preset.particles?.kaleidoSegments ?? 0);
+    updateParticles({ kaleidoSegments: KALEIDO_SEGMENTS[(current + 1) % KALEIDO_SEGMENTS.length] });
+  }
 });
 
 async function boot() {
@@ -232,7 +297,23 @@ async function boot() {
   const response = await fetch(new URL("../scenes/aurora-ribbons.glsl", import.meta.url));
   if (!response.ok) throw new Error("Could not load aurora-ribbons.glsl");
   shaderHost.setSceneSource(await response.text());
+  let particleSystem = null;
+  if (shaderHost.gl) {
+    try {
+      const sources = await loadParticleShaders(import.meta.url);
+      particleSystem = new ParticleSystem3D(shaderHost.gl, sources, {
+        mobile: isMobileAgent(navigator.userAgent, navigator.maxTouchPoints || 0, window.innerWidth || 1920),
+      });
+      host.setParticleSystem(particleSystem);
+    } catch (error) {
+      // Aurora stays available; surface the shader log instead of a blank screen.
+      hud.setError(`3D particles unavailable: ${error?.message || error}`);
+      console.warn(error);
+    }
+  }
+  hud.setParticleStatus?.(particleSystem);
   host.applySize();
+  persist();
   host.start();
   void acquireWakeLock();
   void refreshDevices();
@@ -247,6 +328,7 @@ async function boot() {
       extractor,
       shaderHost,
       renderHost: host,
+      particleSystem,
       getDiagnostics,
       readSnapshot,
       getAudioContext,

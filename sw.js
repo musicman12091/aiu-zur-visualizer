@@ -1,4 +1,4 @@
-const CACHE = "zur-shell-v1";
+const CACHE = "zur-shell-v2";
 const ASSETS = [
   "./",
   "./index.html",
@@ -14,6 +14,15 @@ const ASSETS = [
   "./src/controls/ControlHUD.js",
   "./src/controls/palettes.js",
   "./src/scenes/aurora-ribbons.glsl",
+  "./src/render/ParticleSystem3D.js",
+  "./src/render/particleMath.js",
+  "./src/shaders/sim.vert.glsl",
+  "./src/shaders/sim.frag.glsl",
+  "./src/shaders/render.vert.glsl",
+  "./src/shaders/render.frag.glsl",
+  "./src/shaders/post.vert.glsl",
+  "./src/shaders/trail.frag.glsl",
+  "./src/shaders/kaleido.frag.glsl",
   "./icons/icon-192.png",
   "./icons/icon-512.png",
 ];

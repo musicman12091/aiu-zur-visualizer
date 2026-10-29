@@ -1,4 +1,16 @@
 import { PALETTE_IDS } from "../controls/palettes.js";
+import {
+  COUNT_TIERS,
+  DEFAULT_PARTICLES,
+  FLOW_MODES,
+  KALEIDO_SEGMENTS,
+  PARTICLE_SCENE_ID,
+  PARTICLE_SHAPES,
+  PARTICLE_SIZE_RANGE,
+  SCENE_IDS,
+} from "../render/particleMath.js";
+
+export { SCENE_IDS, PARTICLE_SCENE_ID };
 
 export const SCHEMA_VERSION = 1;
 export const INPUT_MODES = Object.freeze(["tab-capture", "microphone", "oscillator"]);
@@ -111,6 +123,25 @@ export const MODE_B_PRESET = {
   },
 };
 
+/**
+ * Stage 2 default: Mode A capture/visual settings with the 3D particle swarm
+ * scene. Mode A / Mode B stay unchanged for Stage 1 contracts.
+ */
+export const STAGE2_DEFAULT_PRESET = {
+  ...MODE_A_PRESET,
+  sceneId: PARTICLE_SCENE_ID,
+  name: "Stage 2 — 3D Particle Swarm",
+  particles: { ...DEFAULT_PARTICLES },
+};
+
+/** Applies a capture/visual mode preset while keeping the current scene and Stage 2 controls. */
+export function applyModeKeepingScene(modePreset, current) {
+  const next = JSON.parse(JSON.stringify(modePreset));
+  if (current?.sceneId) next.sceneId = current.sceneId;
+  next.particles = { ...DEFAULT_PARTICLES, ...(current?.particles || {}) };
+  return next;
+}
+
 function isObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -145,6 +176,7 @@ export function validatePreset(input) {
   }
   if (input.schemaVersion !== SCHEMA_VERSION) errors.push("schemaVersion must be 1");
   if (typeof input.sceneId !== "string" || input.sceneId.length === 0) errors.push("sceneId is required");
+  else if (!SCENE_IDS.includes(input.sceneId)) errors.push(`sceneId must be one of ${SCENE_IDS.join(", ")}`);
   if (typeof input.sceneVersion !== "number" || !Number.isFinite(input.sceneVersion)) {
     errors.push("sceneVersion must be a finite number");
   }
@@ -192,6 +224,22 @@ export function validatePreset(input) {
     if (visual.fps != null) numberIn(visual.fps, 1, 120, "visual.fps", errors);
     if (visual.qualityTier != null && typeof visual.qualityTier !== "string") {
       errors.push("visual.qualityTier must be a string");
+    }
+  }
+
+  if (input.particles != null) {
+    const particles = input.particles;
+    if (!isObject(particles)) {
+      errors.push("particles must be an object");
+    } else {
+      if (!FLOW_MODES.includes(particles.flowMode)) errors.push(`particles.flowMode must be one of ${FLOW_MODES.join(", ")}`);
+      if (!PARTICLE_SHAPES.includes(particles.shape)) errors.push(`particles.shape must be one of ${PARTICLE_SHAPES.join(", ")}`);
+      numberIn(particles.particleSize, PARTICLE_SIZE_RANGE[0], PARTICLE_SIZE_RANGE[1], "particles.particleSize", errors);
+      if (!KALEIDO_SEGMENTS.includes(particles.kaleidoSegments)) {
+        errors.push(`particles.kaleidoSegments must be one of ${KALEIDO_SEGMENTS.join(", ")}`);
+      }
+      if (typeof particles.kaleidoSpin !== "boolean") errors.push("particles.kaleidoSpin must be boolean");
+      if (!COUNT_TIERS.includes(particles.countTier)) errors.push(`particles.countTier must be one of ${COUNT_TIERS.join(", ")}`);
     }
   }
 
