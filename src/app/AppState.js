@@ -41,7 +41,7 @@ export const BLUEPRINT_EXAMPLE_PRESET = {
     releaseMs: 180,
   },
   visual: {
-    paletteId: "copper-teal",
+    paletteId: "neon-tunnel",
     hueShift: 0.0,
     cameraMode: "orbit-3d",
     chromaticAberration: 0.30,
@@ -78,7 +78,7 @@ export const MODE_A_PRESET = {
     noiseGateThreshold: 0.02,
   },
   visual: {
-    paletteId: "copper-teal",
+    paletteId: "neon-tunnel",
     hueShift: 0.0,
     cameraMode: "orbit-3d",
     chromaticAberration: 0.30,
@@ -120,7 +120,7 @@ export const MODE_B_PRESET = {
     noiseGateThreshold: 0.015,
   },
   visual: {
-    paletteId: "copper-teal",
+    paletteId: "neon-tunnel",
     hueShift: 0.0,
     cameraMode: "orbit-3d",
     chromaticAberration: 0.30,

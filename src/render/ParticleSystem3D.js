@@ -420,6 +420,10 @@ export class ParticleSystem3D {
     const modeIndex = Math.max(0, FLOW_MODES.indexOf(particles.flowMode));
     const tierCount = resolveParticleCount(particles.particleCountTier, this.mobile);
     this.count = particles.particleCountTier === "auto" ? this.autoCount : tierCount;
+    // Logo glyph needs dense coverage; floor active agents at 16k even if HUD tier is 2k.
+    if (particles.formationType === "logo-attractor") {
+      this.count = Math.max(this.count, 16384);
+    }
     const count = this.count;
     const attractorText = particles.attractorText || DEFAULT_PARTICLES.attractorText;
     if (attractorText !== this.logoText) {

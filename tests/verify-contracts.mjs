@@ -1275,6 +1275,24 @@ test("Stage 4 copper reset is one-time, neon, and clears hue shift", () => {
 
 test("Stage 4 formation text validates and URL state round-trips custom underscores", () => {
   const p = normalizeParticles({ formationType: "logo-attractor", attractorText: "CUSTOM_ZUR" });
+
+test("ZUR-GH-005 greenlight: fresh Mode presets default to neon-tunnel hueShift 0", () => {
+  for (const preset of [BLUEPRINT_EXAMPLE_PRESET, MODE_A_PRESET, MODE_B_PRESET, STAGE2_DEFAULT_PRESET]) {
+    assert.equal(preset.visual.paletteId, "neon-tunnel", preset.name || "blueprint");
+    assert.equal(preset.visual.hueShift, 0);
+  }
+});
+
+test("ZUR-GH-005 greenlight: logo-attractor floors at 16k and tightens glyph spring", () => {
+  const ps = read("src/render/ParticleSystem3D.js");
+  assert.match(ps, /formationType === "logo-attractor"/);
+  assert.match(ps, /Math\.max\(this\.count, 16384\)/);
+  const sim = read("src/shaders/sim.vert.glsl");
+  assert.match(sim, /u_formationType == 5 \? 16\.0/);
+  assert.match(sim, /u_formationType == 5 \? 5\.5/);
+  assert.match(sim, /u_formationType == 5\) F \*= 0\.05/);
+});
+
   assert.equal(p.attractorText, "CUSTOM_ZUR");
   const decoded = decodePresetParam(encodePresetParam(MEGASTRUCTURE_SCENE_ID, p));
   assert.equal(decoded.sceneId, MEGASTRUCTURE_SCENE_ID);

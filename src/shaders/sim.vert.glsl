@@ -496,10 +496,12 @@ void main() {
   } else if (u_formationType != 0 || u_oscillationType != 0) {
     // Stage 3 formations + oscillation layer on top of the active flow mode.
     vec3 target = formationTarget(pos, seed, phase, uid) + oscillationOffset(pos, seed, phase);
-    float pull = u_formationType == 0 ? 1.5 : 7.0;
-    // Camera-facing tunnel / rings: the formation dominates the flow mode's centre-seeking forces so the full ring reads.
+    float pull = u_formationType == 0 ? 1.5 : (u_formationType == 5 ? 16.0 : 7.0);
+    // Camera-facing tunnel / rings / logo: formation dominates curl so glyphs stay crisp.
     if (u_formationType == 1 || u_formationType == 2) F *= 0.15;
-    F += (target - pos) * pull - (u_formationType == 0 ? vec3(0.0) : vel * 2.6);
+    if (u_formationType == 5) F *= 0.05; // damp random curl jitter for readable text
+    float damp = u_formationType == 0 ? 0.0 : (u_formationType == 5 ? 5.5 : 2.6);
+    F += (target - pos) * pull - vel * damp;
     if (u_formationType == 1) F += tiltToWorld(vec3(0.0, 0.0, 1.8 + 3.0 * u_rms + 2.0 * u_bass));
   }
 
