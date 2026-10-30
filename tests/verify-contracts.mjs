@@ -1453,6 +1453,31 @@ test("Service worker caches the Stage 4 JavaScript and shaders", () => {
   assert.match(sw, /networkFirst/);
 });
 
+test("Service worker treats navigations and directory URLs as network-first", () => {
+  const sw = read("sw.js");
+  assert.match(sw, /request\.mode === "navigate"/);
+  assert.match(sw, /pathname\.endsWith\("\/"\)/);
+});
+
+test("Spectral canyon lifts terrain upward with the portrait HUD offset", () => {
+  const frag = read("src/shaders/spectral-canyon.frag.glsl");
+  assert.match(frag, /uv\.y -= 0\.5 \* u_viewportYOffset;/);
+  assert.doesNotMatch(frag, /uv\.y \+= 0\.5 \* u_viewportYOffset;/);
+});
+
+test("Spectral canyon camera pitches down onto the terrain", () => {
+  const frag = read("src/shaders/spectral-canyon.frag.glsl");
+  assert.match(frag, /mat2\(cos\(pitch\), sin\(pitch\), -sin\(pitch\), cos\(pitch\)\)/);
+});
+
+test("Logo attractor spreads a small active prefix across the full glyph height", async () => {
+  const { sampleLogoTargets } = await import("../src/render/LogoAttractor.js");
+  const t = sampleLogoTargets("ZUR", 2048);
+  let minY = Infinity, maxY = -Infinity;
+  for (let i = 0; i < 256; i += 1) { minY = Math.min(minY, t[i * 4 + 1]); maxY = Math.max(maxY, t[i * 4 + 1]); }
+  assert.ok(maxY - minY > 2.0, `first 256 agents span ${maxY - minY}`);
+});
+
 test("Stage 4 docs record the new scene, post effects, autopilot, and migration", () => {
   const contracts = read("CONTRACTS.md");
   const state = read("STATE.md");

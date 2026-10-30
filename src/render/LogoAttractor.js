@@ -105,7 +105,9 @@ export function sampleLogoTargets(text = "AI: UNDERGROUND", count = 65536) {
   const targetCount = Math.max(0, Math.floor(count));
   const targets = new Float32Array(targetCount * 4);
   for (let i = 0; i < targetCount; i += 1) {
-    const [x, y] = points[i % points.length];
+    // Golden-ratio stride: any active prefix (2k..64k agents) covers the whole glyph, not just its top raster rows.
+    const pick = Math.floor(((i * 0.6180339887498949) % 1) * points.length) % points.length;
+    const [x, y] = points[pick];
     const offset = i * 4;
     targets[offset] = (x - 0.5) * 7.2;
     targets[offset + 1] = (0.5 - y) * 2.4;

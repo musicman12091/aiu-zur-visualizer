@@ -53,7 +53,7 @@ self.addEventListener("fetch", (event) => {
   if (request.method !== "GET") return;
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
-  const networkFirst = /\.(html|js|glsl)$/i.test(url.pathname);
+  const networkFirst = request.mode === "navigate" || url.pathname.endsWith("/") || /\.(html|js|glsl)$/i.test(url.pathname);
   if (!networkFirst) {
     event.respondWith(caches.match(request).then((hit) => hit || fetch(request)));
     return;

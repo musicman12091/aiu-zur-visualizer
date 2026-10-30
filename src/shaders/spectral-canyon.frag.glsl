@@ -19,11 +19,11 @@ float terrainHeight(vec3 p) {
 
 void main() {
   vec2 uv = gl_FragCoord.xy / u_resolution;
-  uv.y += 0.5 * u_viewportYOffset;
+  uv.y -= 0.5 * u_viewportYOffset; // lift terrain with the portrait HUD drawer (matches gl_Position.y += offset)
   vec2 q = (uv - 0.5) * vec2(u_resolution.x / u_resolution.y, 1.0);
   vec3 ray = normalize(vec3(q.x, q.y - 0.1, 1.1));
   float pitch = 0.5585053606; // Scene 3 terrain pitch: 32 degrees.
-  ray.yz = mat2(cos(pitch), -sin(pitch), sin(pitch), cos(pitch)) * ray.yz;
+  ray.yz = mat2(cos(pitch), sin(pitch), -sin(pitch), cos(pitch)) * ray.yz; // pitch DOWN onto the terrain
   vec3 origin = vec3(0.0, 2.2, -2.0);
   float travel = 0.0;
   float terrain = -100.0;
