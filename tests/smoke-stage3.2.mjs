@@ -40,7 +40,7 @@ await new Promise((resolve, reject) => {
   server.listen(PORT, resolve);
 });
 const base = `http://localhost:${PORT}`;
-const debugPort = 9336;
+const debugPort = Number(process.env.ZUR_DEBUG_PORT || 9336);
 const chrome = spawn("google-chrome", [
   "--headless=new",
   "--no-sandbox",
@@ -100,7 +100,7 @@ try {
     }
     if (message.method === "Log.entryAdded") {
       const entry = message.params.entry;
-      if (entry.level === "error" && !/favicon/.test(entry.url || "")) consoleErrors.push(`[log] ${entry.text}`);
+      if (entry.level === "error" && !/favicon/.test(entry.url || "")) consoleErrors.push(`[log] ${entry.text} ${entry.url || ""}`);
       if (/WebGL|GL_INVALID|GL ERROR/i.test(entry.text)) webglWarnings.push(entry.text);
     }
     if (message.id && pending.has(message.id)) {
