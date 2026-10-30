@@ -521,11 +521,11 @@ export class ParticleSystem3D {
       : downZ ? Math.sin(t * 0.09) * 0.18 : t * 0.06;
     const dist = 11.5 - (frame.bass || 0) * 1.2;
     this.eye[0] = Math.sin(orbit) * dist;
-    this.eye[1] = waveGrid ? 8.0 : cameraMode === "static" ? (downZ ? 0 : 2.2)
+    this.eye[1] = waveGrid ? 0 : cameraMode === "static" ? (downZ ? 0 : 2.2)
       : downZ ? Math.sin(t * 0.07) * 0.4 : 2.2 + Math.sin(t * 0.07) * 1.6;
     this.eye[2] = cameraMode === "tunnel-fly" ? 9.5 + Math.sin(t * 0.4) * 0.3 : Math.cos(orbit) * dist;
     const aspect = this.width / this.height;
-    perspective(this.proj, (50 * Math.PI) / 180, aspect, 0.1, 60);
+    perspective(this.proj, ((waveGrid ? 36 : 50) * Math.PI) / 180, aspect, 0.1, 60);
     lookAt(this.view, this.eye, this.origin);
     if (cameraMode === "beat-bank") {
       const bank = Math.sin(t * 2.0) * 0.07 + (frame.onset || 0) * 0.18;
