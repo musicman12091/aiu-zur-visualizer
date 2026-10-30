@@ -69,9 +69,14 @@ Headless Chrome 156 (SwiftShader) loaded `index.html`, compiled `aurora-ribbons.
 
 Pages is enabled and serving Stage 3 from the `main` branch root (`/`). https://musicman12091.github.io/aiu-zur-visualizer/ returned HTTP 200 on 2026-10-28 (America/Regina) with Stage 3 markers (`pulse-field-3d`, `neon-tunnel`). Live headless Chrome smoke against github.io passed with 0 console/page/WebGL errors and `destinationConnections` 0.
 
-## Stage 3.2 (ZUR-GH-004, branch `zur-stage3.2`)
+## Stage 3.2 — ZUR-GH-004 (merged)
 
-Neon saturation patch: `zur_state_v3_2` migration (copper-teal / older schema → neon-tunnel, 2k, 1.35, 0.28, comet), saturated neon palettes, Scene/Palette/Hue on top of the HUD with a Hide HUD button, bounded `crowdNorm` radiance and premultiplied capsules, chromatic dart shading, camera-facing XY tunnel/rings, kaleidoscope corner clamp fix and a dynamic `u_viewportYOffset`. Verified with `node tests/verify-contracts.mjs` (61 passed), `node tests/smoke-stage3.mjs` and `node tests/smoke-stage3.2.mjs` (Galaxy A57 412×915) on headless Chrome + SwiftShader. Details are in `CONTRACTS.md`.
+- commit_sha (main, squash): `4cbf1f5c7b436fa6129a7b94befe772027b94755` — PR https://github.com/musicman12091/aiu-zur-visualizer/pull/4 (branch `zur-stage3.2` heads `5ef3a6e` Copilot codegen + `7a03321` smoke harness hardening; branch deleted)
+- Six fixes: `zur_state_v3_2` migration (copper-teal / pre-v3.2 → neon-tunnel, 2k, 1.35, 0.28, comet); neon palettes all stops HSV sat ≥ 0.85, no `#FFFFFF`; Palette + Hue shift under Scene, sticky "▼ Hide HUD / Fullscreen" + tap-canvas toggle, Pulse field layout hidden unless `pulse-field-3d`; bounded `crowdNorm` radiance, premultiplied capsules (alpha 0.40·crowdNorm), pinprick core exp(-r2·42)·0.30; chromatic dart3d shading; camera-facing XY tunnel/rings with 12° tilt; kaleido mirrored radius fold + smoothstep(1.12, 0.82) vignette; `u_viewportYOffset` (+0.38 portrait drawer open, lerped to 0).
+- Contracts: `node tests/verify-contracts.mjs` → 61 passed (was 45).
+- Headless Chrome 412×915 (`tests/smoke-stage3.2.mjs`, SwiftShader): PASS — mean chroma 0.38–0.49 (> 0.35), Velocity Capsule 3.5× @16k meanLuminance 0.156 (< 0.75), neon-tunnel verticalSpanRatio 0.592 / polygon-rings 0.595 (> 0.45), console.error 0, pageerror 0, WebGL errors 0, destinationConnections 0. `smoke-stage3`, `smoke-stage2`, `smoke-headless` PASS.
+- Pages: https://musicman12091.github.io/aiu-zur-visualizer/ HTTP 200 on 2026-10-29 (America/Regina), build `built` at `4cbf1f5`; live markers `zur_state_v3_2`, `u_viewportYOffset`, `crowdNorm`, neon palette stops, `zur-shell-v4`.
+- No `@copilot` PR review (parked). Codegen offloaded to Copilot CLI `claude-sonnet-5.5`.
 
 ## Not in this stage
 
