@@ -326,7 +326,7 @@ try {
   // Persistence: URL ?preset= and localStorage.
   const persisted = await evaluate(`({
     url: location.search,
-    stored: JSON.parse(localStorage.getItem("zur.preset.v2") || "null")?.particles || null
+    stored: JSON.parse(localStorage.getItem("zur_state_v3_2") || "null")?.preset?.particles || null
   })`);
   results.persistence = persisted;
   if (!/preset=/.test(persisted.url) || !/k(%3A|:)16/.test(persisted.url)) problems.push(`URL state missing: ${persisted.url}`);

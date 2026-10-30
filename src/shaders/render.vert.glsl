@@ -26,8 +26,10 @@ uniform float u_trailLength;    // 0..1
 uniform float u_densityScaleBoost;
 uniform int u_pulseLayout;      // -1 = swarm scene, 0 band-clouds, 1 geodesic-sphere, 2 wave-grid
 uniform float u_bands[5];       // sub, bass, lowMid, highMid, treble
+uniform float u_viewportYOffset; // NDC lift (+0.38 when the portrait HUD drawer is open), lerped to 0 when hidden
 
 out vec3 v_color;
+out vec3 v_colorAlt;            // secondary palette color for the dart rim (chromatic, never white)
 out vec2 v_local;               // capsule: pixel coords along/perp velocity
 flat out float v_halfSeg;
 flat out float v_radius;
@@ -90,6 +92,7 @@ void main() {
   if (u_visibleThreshold != 0xffffffffu && hash32(iid) >= u_visibleThreshold) {
     gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
     v_color = vec3(0.0);
+    v_colorAlt = vec3(0.0);
     return;
   }
 
@@ -115,16 +118,22 @@ void main() {
   float shimmer = 1.0 + u_high * 0.9 * sin(phase * 43.0 + u_time * 27.0 + seed * 11.0);
   float energy = 0.55 + 0.35 * clamp(speed * 0.25, 0.0, 1.0) + 0.35 * u_rms;
   float depthCue = clamp(1.25 - w * 0.045, 0.35, 1.15);
-  v_color = mix(base, accent, clamp(speed * 0.18, 0.0, 0.6)) * energy * shimmer * depthCue * u_intensity;
+  float tint = energy * shimmer * depthCue * u_intensity;
+  v_color = mix(base, accent, clamp(speed * 0.18, 0.0, 0.6)) * tint;
+  v_colorAlt = accent * tint;
   if (pulse) {
     // each band owns one palette color; its level drives the flash
     v_color = mix(paletteAt(uint(band)), paletteAt(uint(band + 2) % 5u), 0.2) * (0.45 + 2.6 * bandLevel) * depthCue * u_intensity;
+    v_colorAlt = paletteAt(uint(band + 2) % 5u) * (0.45 + 2.6 * bandLevel) * depthCue * u_intensity;
   }
   if (u_trailType == 1) {
     float flick = float(hash32(iid + uint(u_time * 30.0)) & 255u) * (1.0 / 255.0);
     v_color *= 0.55 + 0.95 * flick;
+    v_colorAlt *= 0.55 + 0.95 * flick;
   } else if (u_trailType == 2) {
-    v_color *= mix(0.35, 1.7, step(0.5, fract(u_time * (3.0 + 5.0 * u_trailLength) + seed)));
+    float strobe = mix(0.35, 1.7, step(0.5, fract(u_time * (3.0 + 5.0 * u_trailLength) + seed)));
+    v_color *= strobe;
+    v_colorAlt *= strobe;
   }
 
   if (u_shape == 0) {
@@ -142,6 +151,7 @@ void main() {
     // glow radius: 0 at the nose, 1 at the base (render.frag.glsl core/halo falloff)
     v_local = vec2(corner == 0 ? 0.0 : 1.0, 0.0);
     gl_Position = u_viewProj * vec4(world, 1.0);
+    gl_Position.y += u_viewportYOffset * gl_Position.w;
     return;
   }
 
@@ -170,4 +180,5 @@ void main() {
   // keep brightness per area roughly constant when the floor enlarges tiny capsules
   v_color *= clamp((radiusPx * radiusPx) / max(radius * radius, 1e-4), 0.35, 1.0);
   gl_Position = vec4((ndc0 + offsetPx * 2.0 / u_resolution) * w, clipCenter.z, w);
+  gl_Position.y += u_viewportYOffset * gl_Position.w;
 }

@@ -174,8 +174,9 @@ const RENDER_UNIFORMS = [
   "u_visibleThreshold", "u_exposure", "u_palette", "u_time", "u_high", "u_rms", "u_intensity",
   "u_radianceScale", "u_lightDir", "u_rimColor",
   "u_trailType", "u_trailLength", "u_densityScaleBoost", "u_pulseLayout", "u_bands",
+  "u_particleSize", "u_activeCount", "u_viewportYOffset",
 ];
-const POST_UNIFORMS = ["u_scene", "u_resolution", "u_kaleidoSegments", "u_kaleidoAngle", "u_kaleidoZoom", "u_exposure", "u_blackFloor"];
+const POST_UNIFORMS = ["u_scene", "u_resolution", "u_kaleidoSegments", "u_kaleidoAngle", "u_kaleidoZoom", "u_exposure", "u_blackFloor", "u_viewportYOffset"];
 
 /**
  * WebGL2 transform-feedback particle scene. Shares the Stage 1 ShaderHost
@@ -376,7 +377,8 @@ export class ParticleSystem3D {
   /**
    * frame: ShaderHost.frame (time, delta, bands, onset, gain, trailHalfLifeMs)
    * palette: ShaderHost.palette Float32Array(15)
-   * extras: { pulse: boolean (pulse-field-3d), bands: [sub, bass, lowMid, highMid, treble] }
+   * extras: { pulse: boolean (pulse-field-3d), bands: [sub, bass, lowMid, highMid, treble],
+   *   viewportYOffset: NDC lift for the portrait HUD drawer (0 when hidden) }
    */
   render(frame, palette, particlesInput, visual, canvasWidth, canvasHeight, extras = {}) {
     if (!this.ready || !this.scene) return;
@@ -390,6 +392,7 @@ export class ParticleSystem3D {
     const pulse = Boolean(extras.pulse);
     const pulseLayout = pulse ? Math.max(0, PULSE_LAYOUTS.indexOf(particles.pulseLayout)) : -1;
     const trailType = Math.max(0, TRAIL_TYPES.indexOf(particles.trailType));
+    const viewportYOffset = extras.viewportYOffset || 0;
     const densityBoost = densityScaleBoost(count, particles.densityAutoScale);
     for (let i = 0; i < 5; i += 1) this.bands[i] = Math.max(0, extras.bands?.[i] || 0);
 
@@ -469,12 +472,12 @@ export class ParticleSystem3D {
 
     // Camera: slow orbit.
     const t = this.simTime;
-    // Tunnel / ring formations are viewed down the Z axis with a gentle sway instead of a full orbit.
+    // Tunnel / ring formations face the camera down the Z axis (sim.vert.glsl adds the 12° tilt), with a gentle sway.
     const downZ = !pulse && (particles.formationType === "neon-tunnel" || particles.formationType === "polygon-rings");
-    const orbit = downZ ? Math.sin(t * 0.09) * 0.45 : t * 0.06;
+    const orbit = downZ ? Math.sin(t * 0.09) * 0.18 : t * 0.06;
     const dist = 11.5 - (frame.bass || 0) * 1.2;
     this.eye[0] = Math.sin(orbit) * dist;
-    this.eye[1] = 2.2 + Math.sin(t * 0.07) * 1.6;
+    this.eye[1] = downZ ? Math.sin(t * 0.07) * 0.4 : 2.2 + Math.sin(t * 0.07) * 1.6;
     this.eye[2] = Math.cos(orbit) * dist;
     const aspect = this.width / this.height;
     perspective(this.proj, (50 * Math.PI) / 180, aspect, 0.1, 60);
@@ -505,7 +508,9 @@ export class ParticleSystem3D {
       gl.enable(gl.DEPTH_TEST);
       gl.depthFunc(gl.LEQUAL);
     }
-    gl.blendFunc(gl.ONE, gl.ONE);
+    // Darts add (depth-tested); capsules are premultiplied so dense 16k–64k crowds saturate instead of whiting out.
+    if (dart) gl.blendFunc(gl.ONE, gl.ONE);
+    else gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     gl.useProgram(this.renderProgram);
     const R = this.renderLoc;
     gl.uniformMatrix4fv(R.u_viewProj, false, this.viewProj);
@@ -514,6 +519,9 @@ export class ParticleSystem3D {
     gl.uniform1f(R.u_projScale, this.proj[5]);
     gl.uniform1i(R.u_shape, dart ? 0 : 1);
     gl.uniform1f(R.u_size, particles.particleSize);
+    gl.uniform1f(R.u_particleSize, particles.particleSize);
+    gl.uniform1f(R.u_activeCount, count);
+    gl.uniform1f(R.u_viewportYOffset, viewportYOffset);
     gl.uniform1f(R.u_minRadiusPx, minRenderRadiusPx(1.6, this.height, 1));
     gl.uniform1ui(R.u_visibleThreshold, visibleThreshold(visual?.qualityTier === "safe" ? 0.75 : 1));
     gl.uniform1f(R.u_exposure, 1 / 30);
@@ -560,6 +568,7 @@ export class ParticleSystem3D {
     gl.uniform1f(P.u_kaleidoZoom, 1);
     gl.uniform1f(P.u_exposure, frame.gain ?? 1);
     gl.uniform1f(P.u_blackFloor, this.sceneFormat === "RGBA8" ? 3 / 255 : 0);
+    gl.uniform1f(P.u_viewportYOffset, viewportYOffset);
     gl.bindVertexArray(this.emptyVao);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);

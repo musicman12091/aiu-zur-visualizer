@@ -57,13 +57,29 @@ export function resolveRenderSize(preset, canvas = null) {
   };
 }
 
+/** NDC lift applied to the swarm while the portrait HUD drawer covers the lower screen. */
+export const HUD_DRAWER_Y_OFFSET = 0.38;
+/** Exponential approach rate (1/s) for the u_viewportYOffset glide. */
+export const VIEWPORT_OFFSET_RATE = 7;
+
+/** Target u_viewportYOffset: lifted only when the drawer is open on a portrait canvas. */
+export function viewportYOffsetTarget(hudOpen, width, height) {
+  return hudOpen && height > width ? HUD_DRAWER_Y_OFFSET : 0;
+}
+
+/** Frame-rate independent glide toward the target; snaps once within 1e-3 so it settles exactly. */
+export function stepViewportYOffset(current, target, dt) {
+  const next = current + (target - current) * (1 - Math.exp(-VIEWPORT_OFFSET_RATE * Math.max(0, dt)));
+  return Math.abs(target - next) < 1e-3 ? target : next;
+}
+
 export function shouldRenderFrame(elapsedMs, fps) {
   if (!(fps > 0)) return true;
   return elapsedMs + 0.5 >= 1000 / fps;
 }
 
 export class RenderHost {
-  constructor({ canvas, shaderHost, extractor, getPreset, transition, onFrame, readAudio }) {
+  constructor({ canvas, shaderHost, extractor, getPreset, transition, onFrame, readAudio, isHudOpen }) {
     this.canvas = canvas;
     this.shaderHost = shaderHost;
     this.extractor = extractor;
@@ -71,6 +87,8 @@ export class RenderHost {
     this.transition = transition;
     this.onFrame = onFrame;
     this.readAudio = readAudio;
+    this.isHudOpen = isHudOpen;
+    this.viewportYOffset = 0;
     this.running = false;
     this.pausedForContextLoss = false;
     this.lastStamp = 0;
@@ -204,6 +222,12 @@ export class RenderHost {
       this.activeScene = scene;
     }
     if (PARTICLE_SCENE_IDS.includes(scene)) {
+      const hudOpen = Boolean(this.isHudOpen?.());
+      this.viewportYOffset = stepViewportYOffset(
+        this.viewportYOffset,
+        viewportYOffsetTarget(hudOpen, this.canvas.clientWidth, this.canvas.clientHeight),
+        deltaSeconds,
+      );
       const particles = preset.particles || this._defaultParticles || (this._defaultParticles = normalizeParticles(null));
       this.particleSystem.render(
         this.shaderHost.frame,
@@ -212,7 +236,11 @@ export class RenderHost {
         visual,
         this.canvas.width,
         this.canvas.height,
-        { pulse: scene === PULSE_SCENE_ID, bands: [frame.sub, frame.bass, frame.lowMid, frame.highMid, frame.treble] },
+        {
+          pulse: scene === PULSE_SCENE_ID,
+          bands: [frame.sub, frame.bass, frame.lowMid, frame.highMid, frame.treble],
+          viewportYOffset: this.viewportYOffset,
+        },
       );
     } else {
       this.shaderHost.render();
