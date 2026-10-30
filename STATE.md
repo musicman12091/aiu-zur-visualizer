@@ -81,3 +81,12 @@ Pages is enabled and serving Stage 3 from the `main` branch root (`/`). https://
 ## Not in this stage
 
 `musicman12091/aiu-dj-player` was not modified. Further scenes and the Butterchurn adapter are later stages.
+
+## Stage 4 — ZUR-GH-005
+
+- implementation: Stage 4 VJ Megastructure is wired on the current task branch (`copilot/zur-stage4`).
+- scope: Physarum Neural Web chemotaxis; bounded raymarched Mandelbulb and fractal-core particle collision; browser/Node logo attractor targets; spectral canyon waterfall terrain; camera director and nine-sample post-FX; opt-in VJ autopilot with manual-touch pause.
+- state: `zur_state_v4_0` / schema 4.0, one-time `zur_v4_neon_forced` copper-teal reset, `zur-shell-v5` service worker.
+- contracts: `node tests/verify-contracts.mjs` is expanded to 75+ checks. Run results are recorded with the implementation update.
+- PR request: `ZUR-GH-005 Stage 4 VJ Megastructure`, base `main`; leave open for Ori audit and do not request `@copilot` review.
+- Ori audit fixes (zur-stage4): spectral-canyon pitch now looks DOWN at the terrain (was all sky) and lifts with `u_viewportYOffset`; logo-attractor targets use a golden-ratio stride so any active prefix covers the whole glyph; `sw.js` treats navigations / directory URLs as network-first. `node tests/verify-contracts.mjs`: 84 passed. `tests/smoke-stage3.2.mjs` @ 412x915: PASS, consoleErrors 0, pageErrors 0, webglWarnings 0.

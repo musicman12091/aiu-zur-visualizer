@@ -18,7 +18,7 @@ import {
   normalizeParticles,
 } from "../render/particleMath.js";
 
-export { SCENE_IDS, PARTICLE_SCENE_ID };
+export { SCENE_IDS, PARTICLE_SCENE_ID, FLOW_MODES, FORMATION_TYPES };
 
 export const SCHEMA_VERSION = 1;
 export const INPUT_MODES = Object.freeze(["tab-capture", "microphone", "oscillator"]);
@@ -41,8 +41,12 @@ export const BLUEPRINT_EXAMPLE_PRESET = {
     releaseMs: 180,
   },
   visual: {
-    paletteId: "copper-teal",
+    paletteId: "neon-tunnel",
     hueShift: 0.0,
+    cameraMode: "orbit-3d",
+    chromaticAberration: 0.30,
+    godRays: 0.35,
+    vjAutopilot: false,
     bloom: 0.35,
     trailHalfLifeMs: 220,
     cameraShake: 0.05,
@@ -74,8 +78,12 @@ export const MODE_A_PRESET = {
     noiseGateThreshold: 0.02,
   },
   visual: {
-    paletteId: "copper-teal",
+    paletteId: "neon-tunnel",
     hueShift: 0.0,
+    cameraMode: "orbit-3d",
+    chromaticAberration: 0.30,
+    godRays: 0.35,
+    vjAutopilot: false,
     bloom: 0.35,
     trailHalfLifeMs: 220,
     cameraShake: 0.05,
@@ -112,8 +120,12 @@ export const MODE_B_PRESET = {
     noiseGateThreshold: 0.015,
   },
   visual: {
-    paletteId: "copper-teal",
+    paletteId: "neon-tunnel",
     hueShift: 0.0,
+    cameraMode: "orbit-3d",
+    chromaticAberration: 0.30,
+    godRays: 0.35,
+    vjAutopilot: false,
     bloom: 0.4,
     trailHalfLifeMs: 180,
     cameraShake: 0.04,
@@ -143,7 +155,7 @@ export const STAGE2_DEFAULT_PRESET = {
   particles: { ...DEFAULT_PARTICLES },
 };
 
-/** Frozen Stage 3 AppState keys with their defaults. */
+/** Flat particle-control keys exposed through AppState. */
 export const STAGE3_DEFAULTS = Object.freeze({
   sceneId: PARTICLE_SCENE_ID,
   paletteId: "neon-tunnel",
@@ -152,6 +164,7 @@ export const STAGE3_DEFAULTS = Object.freeze({
   trailLength: DEFAULT_PARTICLES.trailLength,
   trailType: DEFAULT_PARTICLES.trailType,
   formationType: DEFAULT_PARTICLES.formationType,
+  attractorText: DEFAULT_PARTICLES.attractorText,
   oscillationType: DEFAULT_PARTICLES.oscillationType,
   oscillationAmount: DEFAULT_PARTICLES.oscillationAmount,
   oscillationSpeed: DEFAULT_PARTICLES.oscillationSpeed,
@@ -180,10 +193,13 @@ function isObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-/** Stage 3.2 persisted state: `{ storageSchema, preset }` under this key. Older keys are migrated on load. */
-export const STORAGE_KEY = "zur_state_v3_2";
-export const STORAGE_SCHEMA = 3.2;
-export const LEGACY_STORAGE_KEYS = Object.freeze(["zur_state_v3", "zur_state_v2", "zur_state_v1", "zur.preset.v2", "zur.preset.v1"]);
+/** Stage 4 persisted state: `{ storageSchema, preset }` under this key. Older keys are migrated on load. */
+export const STORAGE_KEY = "zur_state_v4_0";
+export const STORAGE_SCHEMA = 4.0;
+export const V4_NEON_FLAG = "zur_v4_neon_forced";
+export const LEGACY_STORAGE_KEYS = Object.freeze([
+  "zur_state_v3_2", "zur_state_v3", "zur_state_v2", "zur_state_v1", "zur.preset.v2", "zur.preset.v1",
+]);
 /** Forced on any cached state older than v3.2 or still on copper-teal (grey-prone, small, dim). */
 export const V3_2_UPGRADE_DEFAULTS = Object.freeze({
   paletteId: "neon-tunnel",
@@ -206,11 +222,27 @@ export function upgradeToV32(preset) {
   return next;
 }
 
+export function upgradeToV40(preset) {
+  const next = JSON.parse(JSON.stringify(preset));
+  const wasCopper = next.visual?.paletteId === "copper-teal";
+  next.visual = {
+    ...next.visual,
+    paletteId: wasCopper ? "neon-tunnel" : (next.visual?.paletteId || "neon-tunnel"),
+    hueShift: wasCopper ? 0 : (next.visual?.hueShift ?? 0),
+    cameraMode: next.visual?.cameraMode || "orbit-3d",
+    chromaticAberration: next.visual?.chromaticAberration ?? 0.30,
+    godRays: next.visual?.godRays ?? 0.35,
+    vjAutopilot: next.visual?.vjAutopilot ?? false,
+  };
+  next.particles = normalizeParticles(next.particles);
+  return { preset: next, forcedNeon: wasCopper };
+}
+
 export function serializeStoredState(preset) {
   return JSON.stringify({ storageSchema: STORAGE_SCHEMA, preset });
 }
 
-/** Parses one stored payload (v3.2 envelope or a legacy bare preset). Returns null when unusable. */
+/** Parses one stored payload (versioned envelope or a legacy bare preset). Returns null when unusable. */
 export function migrateStoredPayload(raw) {
   let parsed;
   try {
@@ -221,15 +253,41 @@ export function migrateStoredPayload(raw) {
   if (!isObject(parsed)) return null;
   const enveloped = isObject(parsed.preset);
   const schema = enveloped && Number.isFinite(parsed.storageSchema) ? parsed.storageSchema : 0;
-  const preset = enveloped ? parsed.preset : parsed;
-  if (isObject(preset.particles)) preset.particles = normalizeParticles(preset.particles);
-  const checked = validatePreset(preset);
+  const sourcePreset = enveloped ? parsed.preset : parsed;
+  if (isObject(sourcePreset.particles)) sourcePreset.particles = normalizeParticles(sourcePreset.particles);
+  const checked = validatePreset(sourcePreset);
   if (!checked.ok) return null;
-  const upgrade = schema < STORAGE_SCHEMA || checked.preset.visual.paletteId === "copper-teal";
-  return { preset: upgrade ? upgradeToV32(checked.preset) : checked.preset, migrated: upgrade };
+  let preset = checked.preset;
+  let migrated = false;
+  let forcedNeon = false;
+  const isCopper = checked.preset.visual.paletteId === "copper-teal";
+  if (schema < 3.2 || (schema < STORAGE_SCHEMA && isCopper)) {
+    preset = upgradeToV32(preset);
+    if (isCopper) preset.visual.hueShift = 0;
+    migrated = true;
+  }
+  if (schema < STORAGE_SCHEMA) {
+    const upgraded = upgradeToV40(preset);
+    preset = upgraded.preset;
+    forcedNeon = upgraded.forcedNeon;
+    migrated = true;
+  } else {
+    preset = {
+      ...preset,
+      visual: {
+        cameraMode: "orbit-3d",
+        chromaticAberration: 0.30,
+        godRays: 0.35,
+        vjAutopilot: false,
+        ...preset.visual,
+      },
+      particles: normalizeParticles(preset.particles),
+    };
+  }
+  return { preset, migrated, forcedNeon };
 }
 
-/** Reads zur_state_v3_2, falling back to the newest legacy key. Returns null when nothing usable is stored. */
+/** Reads the current storage key, falling back to the newest legacy key. Returns null when none is usable. */
 export function loadStoredState(storage) {
   for (const key of [STORAGE_KEY, ...LEGACY_STORAGE_KEYS]) {
     let raw = null;
@@ -240,7 +298,25 @@ export function loadStoredState(storage) {
     }
     if (!raw) continue;
     const result = migrateStoredPayload(raw);
-    if (result) return { ...result, key };
+    if (result) {
+      let preset = result.preset;
+      let migrated = result.migrated;
+      try {
+        if (storage.getItem(V4_NEON_FLAG) !== "1") {
+          if (preset.visual.paletteId === "copper-teal") {
+            preset = {
+              ...preset,
+              visual: { ...preset.visual, paletteId: "neon-tunnel", hueShift: 0 },
+            };
+            migrated = true;
+          }
+          storage.setItem(V4_NEON_FLAG, "1");
+        }
+      } catch {
+        // Storage can be read-only; the current session can still use the migrated preset.
+      }
+      return { ...result, preset, migrated, key };
+    }
   }
   return null;
 }
@@ -324,6 +400,14 @@ export function validatePreset(input) {
     if (visual.qualityTier != null && typeof visual.qualityTier !== "string") {
       errors.push("visual.qualityTier must be a string");
     }
+    if (visual.cameraMode != null && !["static", "orbit-3d", "tunnel-fly", "beat-bank"].includes(visual.cameraMode)) {
+      errors.push('visual.cameraMode must be "static", "orbit-3d", "tunnel-fly", or "beat-bank"');
+    }
+    if (visual.chromaticAberration != null) numberIn(visual.chromaticAberration, 0, 1, "visual.chromaticAberration", errors);
+    if (visual.godRays != null) numberIn(visual.godRays, 0, 1, "visual.godRays", errors);
+    if (visual.vjAutopilot != null && typeof visual.vjAutopilot !== "boolean") {
+      errors.push("visual.vjAutopilot must be boolean");
+    }
   }
 
   if (input.particles != null) {
@@ -353,6 +437,9 @@ export function validatePreset(input) {
       numberIn(particles.oscillationAmount, OSCILLATION_AMOUNT_RANGE[0], OSCILLATION_AMOUNT_RANGE[1], "particles.oscillationAmount", errors);
       numberIn(particles.oscillationSpeed, OSCILLATION_SPEED_RANGE[0], OSCILLATION_SPEED_RANGE[1], "particles.oscillationSpeed", errors);
       if (!PULSE_LAYOUTS.includes(particles.pulseLayout)) errors.push(`particles.pulseLayout must be one of ${PULSE_LAYOUTS.join(", ")}`);
+      if (particles.attractorText != null && (typeof particles.attractorText !== "string" || particles.attractorText.length > 64)) {
+        errors.push("particles.attractorText must be a string of at most 64 characters");
+      }
     }
   }
 

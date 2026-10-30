@@ -1,4 +1,4 @@
-const CACHE = "zur-shell-v4";
+const CACHE = "zur-shell-v5";
 const ASSETS = [
   "./",
   "./index.html",
@@ -6,6 +6,7 @@ const ASSETS = [
   "./sw.js",
   "./src/app/main.js",
   "./src/app/AppState.js",
+  "./src/app/VJAutopilot.js",
   "./src/audio/AudioEngine.js",
   "./src/audio/FeatureExtractor.js",
   "./src/render/RenderHost.js",
@@ -15,6 +16,9 @@ const ASSETS = [
   "./src/controls/palettes.js",
   "./src/scenes/aurora-ribbons.glsl",
   "./src/render/ParticleSystem3D.js",
+  "./src/render/LogoAttractor.js",
+  "./src/render/SpectralCanyon3D.js",
+  "./src/render/spectralMath.js",
   "./src/render/particleMath.js",
   "./src/shaders/sim.vert.glsl",
   "./src/shaders/sim.frag.glsl",
@@ -23,13 +27,17 @@ const ASSETS = [
   "./src/shaders/post.vert.glsl",
   "./src/shaders/trail.frag.glsl",
   "./src/shaders/kaleido.frag.glsl",
+  "./src/shaders/core.frag.glsl",
+  "./src/shaders/spectral-canyon.frag.glsl",
   "./icons/icon-192.png",
   "./icons/icon-512.png",
 ];
 
 self.addEventListener("install", (event) => {
-  self.skipWaiting();
-  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(ASSETS)));
+  event.waitUntil(Promise.all([
+    caches.open(CACHE).then((cache) => cache.addAll(ASSETS)),
+    self.skipWaiting(),
+  ]));
 });
 
 self.addEventListener("activate", (event) => {
@@ -45,6 +53,11 @@ self.addEventListener("fetch", (event) => {
   if (request.method !== "GET") return;
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
+  const networkFirst = request.mode === "navigate" || url.pathname.endsWith("/") || /\.(html|js|glsl)$/i.test(url.pathname);
+  if (!networkFirst) {
+    event.respondWith(caches.match(request).then((hit) => hit || fetch(request)));
+    return;
+  }
   event.respondWith(
     fetch(request)
       .then((response) => {

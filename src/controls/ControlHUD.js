@@ -11,8 +11,8 @@ import {
   OSCILLATION_AMOUNT_RANGE,
   OSCILLATION_SPEED_RANGE,
   OSCILLATION_TYPES,
-  PARTICLE_SCENE_ID,
   PARTICLE_SCENE_IDS,
+  SCENE_IDS,
   PARTICLE_SIZE_RANGE,
   PULSE_LAYOUTS,
   PULSE_SCENE_ID,
@@ -33,7 +33,21 @@ const METERS = [
 const PULSE_SCENE_LABEL = "3D Audio Pulse Field — Stage 3";
 const LABELS = {
   trail: { comet: "Comet", electric: "Electric", strobe: "Strobe", ribbon: "Ribbon", none: "None" },
-  formation: { "free-3d": "Free 3D", "neon-tunnel": "Neon Tunnel", "polygon-rings": "Polygon Rings", "supernova-shell": "Supernova Shell" },
+  formation: {
+    "free-3d": "Free 3D",
+    "neon-tunnel": "Neon Tunnel",
+    "polygon-rings": "Polygon Rings",
+    "supernova-shell": "Supernova Shell",
+    "fractal-core": "Fractal Core",
+    "logo-attractor": "Logo Attractor",
+  },
+  scene: {
+    "particle-swarm-3d": "3D Particle Swarm",
+    "pulse-field-3d": PULSE_SCENE_LABEL,
+    "megastructure-3d": "3D Fractal & Swarm Megastructure — Stage 4",
+    "spectral-canyon-3d": "Spectral Canyon 3D — Stage 4",
+    "aurora-ribbons": "Aurora Ribbons (Stage 1)",
+  },
   oscillation: { off: "Off", wave: "Wave", helix: "Helix", bounce: "Bounce", pulse: "Pulse" },
   layout: { "band-clouds": "Band Clouds", "geodesic-sphere": "Geodesic Sphere", "wave-grid": "Wave Grid" },
 };
@@ -58,6 +72,9 @@ export class ControlHUD {
     this.frameTick = 0;
     this._build();
     this.state.subscribe(() => this.sync());
+    this.root.addEventListener("pointerdown", (event) => {
+      if (!event.target.closest("#btn-vj-autopilot")) this.handlers.manualTouch?.();
+    }, { passive: true });
     this.sync();
   }
 
@@ -92,6 +109,14 @@ export class ControlHUD {
       particles: this._pill("status-particles", "Swarm"),
     };
     const pills = el("div", "pills");
+    this.autopilot = el("button", "pill", "⚡ VJ Autopilot (Drop Detector)");
+    this.autopilot.type = "button";
+    this.autopilot.id = "btn-vj-autopilot";
+    this.autopilot.setAttribute("aria-pressed", "false");
+    this.autopilot.addEventListener("click", () => {
+      this.handlers.autopilot?.(!this.state.preset.visual.vjAutopilot);
+    });
+    pills.append(this.autopilot);
     pills.append(this.pills.wakeLock, this.pills.capture, this.pills.webgl, this.pills.fps, this.pills.particles);
     header.append(pills);
     panel.append(header);
@@ -100,11 +125,12 @@ export class ControlHUD {
     this.body.id = "hud-body";
 
     // Scene, Palette and Hue shift stay together at the very top of the HUD.
-    this.scene = this._select("sel-scene", "Scene", [
-      [PARTICLE_SCENE_ID, "3D Particle Swarm"],
-      [PULSE_SCENE_ID, PULSE_SCENE_LABEL],
-      ["aurora-ribbons", "Aurora Ribbons (Stage 1)"],
-    ], (value) => this.handlers.scene?.(value));
+    this.scene = this._select(
+      "sel-scene",
+      "Scene",
+      SCENE_IDS.map((id) => [id, LABELS.scene[id]]),
+      (value) => this.handlers.scene?.(value),
+    );
     this.palette = this._select(
       "sel-palette",
       "Palette",
@@ -208,10 +234,26 @@ export class ControlHUD {
     this.pulseLayout = this._select("sel-pulse-layout", "Pulse field layout", labelPairs(PULSE_LAYOUTS, LABELS.layout), (value) => {
       this.handlers.particles?.({ pulseLayout: value });
     });
+    this.attractorText = this._text("txt-attractor", "Attractor text", [
+      "AI: UNDERGROUND", "MON DAAIN", "TENTH GATE", "ZUR",
+    ], (value) => this.handlers.particles?.({ attractorText: value }));
+    this.cameraMode = this._select("sel-camera-mode", "Camera mode", [
+      ["static", "Static"],
+      ["orbit-3d", "Orbit 3D"],
+      ["tunnel-fly", "Tunnel Fly"],
+      ["beat-bank", "Beat Bank"],
+    ], (value) => this._commit((draft) => { draft.visual.cameraMode = value; }));
+    this.chromaticAberration = this._range("rng-chromatic-aberration", "Chromatic aberration", 0, 1, 0.01, (value) => {
+      this._commit((draft) => { draft.visual.chromaticAberration = value; });
+    });
+    this.godRays = this._range("rng-god-rays", "God rays", 0, 1, 0.01, (value) => {
+      this._commit((draft) => { draft.visual.godRays = value; });
+    });
     stage2.append(
       this.flow.wrap, this.shape.wrap, this.size.wrap, this.kaleido.wrap, this.spin.label, this.count.wrap,
       this.density.label, this.trailType.wrap, this.trailLength.wrap, this.formation.wrap, this.oscillation.wrap,
-      this.oscAmount.wrap, this.oscSpeed.wrap, this.pulseLayout.wrap,
+      this.oscAmount.wrap, this.oscSpeed.wrap, this.pulseLayout.wrap, this.attractorText.wrap,
+      this.cameraMode.wrap, this.chromaticAberration.wrap, this.godRays.wrap,
     );
     this.body.append(stage2);
 
@@ -391,6 +433,26 @@ export class ControlHUD {
     return { wrap, input, value };
   }
 
+  _text(id, label, options, onChange) {
+    const wrap = el("label", "field");
+    const span = el("span", "field-label", label);
+    const input = document.createElement("input");
+    input.type = "text";
+    input.id = id;
+    input.maxLength = 64;
+    const list = document.createElement("datalist");
+    list.id = `${id}-choices`;
+    for (const value of options) {
+      const option = document.createElement("option");
+      option.value = value;
+      list.append(option);
+    }
+    input.setAttribute("list", list.id);
+    input.addEventListener("change", () => onChange(input.value.slice(0, 64)));
+    wrap.append(span, input, list);
+    return { wrap, input };
+  }
+
   _commit(mutate) {
     const result = this.state.updatePreset(mutate);
     if (!result.ok) this.setError(result.errors[0]);
@@ -502,7 +564,7 @@ export class ControlHUD {
     this.hue.input.value = String(visual.hueShift || 0);
     this.hue.value.textContent = Number(visual.hueShift || 0).toFixed(2);
     const particles = { ...DEFAULT_PARTICLES, ...(preset.particles || {}) };
-    this.scene.select.value = PARTICLE_SCENE_IDS.includes(preset.sceneId) ? preset.sceneId : "aurora-ribbons";
+    this.scene.select.value = SCENE_IDS.includes(preset.sceneId) ? preset.sceneId : "aurora-ribbons";
     this.flow.select.value = particles.flowMode;
     this.shape.select.value = particles.shape;
     this.size.input.value = String(particles.particleSize);
@@ -522,6 +584,15 @@ export class ControlHUD {
     this.oscSpeed.value.textContent = `${Number(particles.oscillationSpeed).toFixed(2)}×`;
     this.pulseLayout.select.value = particles.pulseLayout;
     this.pulseLayout.wrap.hidden = preset.sceneId !== PULSE_SCENE_ID;
+    this.attractorText.input.value = particles.attractorText;
+    this.attractorText.wrap.hidden = particles.formationType !== "logo-attractor";
+    this.cameraMode.select.value = visual.cameraMode || "orbit-3d";
+    this.chromaticAberration.input.value = String(visual.chromaticAberration ?? 0.30);
+    this.chromaticAberration.value.textContent = Number(visual.chromaticAberration ?? 0.30).toFixed(2);
+    this.godRays.input.value = String(visual.godRays ?? 0.35);
+    this.godRays.value.textContent = Number(visual.godRays ?? 0.35).toFixed(2);
+    this.autopilot.setAttribute("aria-pressed", String(Boolean(visual.vjAutopilot)));
+    this.autopilot.dataset.state = visual.vjAutopilot ? "active" : "off";
     this._setPill(this.pills.wakeLock, this.state.status.wakeLock, `Wake ${this.state.status.wakeLock}`);
     this._setPill(this.pills.capture, this.state.status.capture, `Capture ${this.state.status.capture}`);
     this._setPill(this.pills.webgl, this.state.status.webgl, this.state.status.webgl === "webgl2" ? "WebGL2" : `WebGL ${this.state.status.webgl}`);

@@ -150,6 +150,12 @@ try {
       node.dispatchEvent(new Event("input", { bubbles: true }));
       return node.value;
     };
+    window.__zurSetText = (id, value) => {
+      const node = document.getElementById(id);
+      node.value = value;
+      node.dispatchEvent(new Event("change", { bubbles: true }));
+      return node.value;
+    };
     window.__zurGlErrors = () => {
       const errors = [];
       for (let i = 0; i < 8; i += 1) {
@@ -320,6 +326,51 @@ try {
   const pulse = await measure("pulse-field-3d");
   results.pulse = pulse;
   if (pulse.litFraction <= 0) problems.push("pulse-field-3d rendered black");
+
+  await evaluate(`window.__zurSetSelect("sel-pulse-layout", "wave-grid")`);
+  const waveGrid = await measure("wave-grid 32 degree pitch");
+  results.waveGrid = waveGrid;
+  await shot("stage4-wave-grid");
+  if (!(waveGrid.verticalSpanRatio > 0.50)) problems.push(`wave-grid verticalSpanRatio ${waveGrid.verticalSpanRatio.toFixed(3)} <= 0.50`);
+
+  await evaluate(`window.__zurSetSelect("sel-scene", "megastructure-3d")`);
+  await evaluate(`window.__zurSetSelect("sel-formation", "fractal-core")`);
+  const megaScene = await evaluate("window.__ZUR_DEBUG__.renderHost.resolveScene(window.__ZUR_DEBUG__.state.preset)");
+  if (megaScene !== "megastructure-3d") problems.push(`megastructure scene resolved to ${megaScene}`);
+  const mega = await measure("megastructure fractal core");
+  results.megastructure = mega;
+  await shot("stage4-megastructure");
+  if (mega.litFraction <= 0) problems.push("megastructure rendered black");
+
+  await evaluate(`window.__zurSetSelect("sel-scene", "particle-swarm-3d")`);
+  await evaluate(`window.__zurSetSelect("sel-formation", "logo-attractor")`);
+  await evaluate(`window.__zurSetText("txt-attractor", "MON DAAIN")`);
+  const logo = await measure("logo-attractor");
+  results.logoAttractor = logo;
+  await shot("stage4-logo-attractor");
+  if (logo.litFraction <= 0) problems.push("logo-attractor rendered black");
+
+  await evaluate(`window.__zurSetSelect("sel-formation", "free-3d")`);
+  await evaluate(`window.__zurSetSelect("sel-flow", "physarum")`);
+  const physarum = await measure("physarum chemotaxis");
+  results.physarum = physarum;
+  await shot("stage4-physarum");
+  if (physarum.litFraction <= 0) problems.push("physarum rendered black");
+
+  await evaluate(`window.__zurSetSelect("sel-scene", "spectral-canyon-3d")`);
+  const canyonScene = await evaluate("window.__ZUR_DEBUG__.renderHost.resolveScene(window.__ZUR_DEBUG__.state.preset)");
+  if (canyonScene !== "spectral-canyon-3d") problems.push(`spectral canyon scene resolved to ${canyonScene}`);
+  const canyon = await measure("spectral canyon");
+  results.spectralCanyon = canyon;
+  await shot("stage4-spectral-canyon");
+  if (canyon.litFraction <= 0) problems.push("spectral canyon rendered black");
+
+  for (const mode of ["static", "orbit-3d", "tunnel-fly", "beat-bank"]) {
+    await evaluate(`window.__zurSetSelect("sel-camera-mode", "${mode}")`);
+    if (await evaluate("window.__ZUR_DEBUG__.state.preset.visual.cameraMode") !== mode) {
+      problems.push(`camera mode ${mode} did not persist`);
+    }
+  }
   await evaluate(`window.__zurSetSelect("sel-scene", "particle-swarm-3d")`);
 
   const diag = await evaluate("window.__ZUR_DEBUG__.getDiagnostics()");

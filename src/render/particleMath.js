@@ -7,17 +7,22 @@
 export const PARTICLE_SCENE_ID = "particle-swarm-3d";
 export const AURORA_SCENE_ID = "aurora-ribbons";
 export const PULSE_SCENE_ID = "pulse-field-3d";
-export const SCENE_IDS = Object.freeze([PARTICLE_SCENE_ID, PULSE_SCENE_ID, AURORA_SCENE_ID]);
+export const MEGASTRUCTURE_SCENE_ID = "megastructure-3d";
+export const SPECTRAL_CANYON_SCENE_ID = "spectral-canyon-3d";
+export const SCENE_IDS = Object.freeze([
+  PARTICLE_SCENE_ID, PULSE_SCENE_ID, MEGASTRUCTURE_SCENE_ID, SPECTRAL_CANYON_SCENE_ID, AURORA_SCENE_ID,
+]);
 /** Scenes drawn by the transform-feedback ParticleSystem3D. */
-export const PARTICLE_SCENE_IDS = Object.freeze([PARTICLE_SCENE_ID, PULSE_SCENE_ID]);
+export const PARTICLE_SCENE_IDS = Object.freeze([PARTICLE_SCENE_ID, PULSE_SCENE_ID, MEGASTRUCTURE_SCENE_ID]);
 
 /** Flow modes, in the order of the `u_mode` integer in sim.vert.glsl. */
-export const FLOW_MODES = Object.freeze(["fluid", "gas", "murmuration", "fish"]);
+export const FLOW_MODES = Object.freeze(["fluid", "gas", "murmuration", "fish", "physarum"]);
 export const FLOW_LABELS = Object.freeze({
   fluid: "Fluid",
   gas: "Gas",
   murmuration: "Murmuration (Birds)",
   fish: "School of Fish",
+  physarum: "Physarum Neural Web",
 });
 export const PARTICLE_SHAPES = Object.freeze(["dart", "capsule"]);
 export const KALEIDO_SEGMENTS = Object.freeze([0, 4, 6, 8, 12, 16]);
@@ -36,7 +41,9 @@ export const COUNT_TIER_VALUES = Object.freeze({
 });
 export const COUNT_TIER_LABELS = Object.freeze({ auto: "Auto (64k desktop / 16k mobile)" });
 export const TRAIL_TYPES = Object.freeze(["comet", "electric", "strobe", "ribbon", "none"]);
-export const FORMATION_TYPES = Object.freeze(["free-3d", "neon-tunnel", "polygon-rings", "supernova-shell"]);
+export const FORMATION_TYPES = Object.freeze([
+  "free-3d", "neon-tunnel", "polygon-rings", "supernova-shell", "fractal-core", "logo-attractor",
+]);
 export const OSCILLATION_TYPES = Object.freeze(["off", "wave", "helix", "bounce", "pulse"]);
 export const PULSE_LAYOUTS = Object.freeze(["band-clouds", "geodesic-sphere", "wave-grid"]);
 export const TRAIL_LENGTH_RANGE = Object.freeze([0, 1]);
@@ -61,6 +68,7 @@ export const FLOW_DAMPING_PER_STEP = Object.freeze({
   gas: 0.94,
   murmuration: 0.97,
   fish: 0.955,
+  physarum: 0.97,
 });
 
 export const DEFAULT_PARTICLES = Object.freeze({
@@ -74,6 +82,7 @@ export const DEFAULT_PARTICLES = Object.freeze({
   trailLength: 0.28,
   trailType: "comet",
   formationType: "neon-tunnel",
+  attractorText: "AI: UNDERGROUND",
   oscillationType: "helix",
   oscillationAmount: 1.0,
   oscillationSpeed: 1.2,
@@ -422,6 +431,7 @@ export function normalizeParticles(input) {
   if (Number.isFinite(src.trailLength)) out.trailLength = clampRange(src.trailLength, TRAIL_LENGTH_RANGE);
   if (TRAIL_TYPES.includes(src.trailType)) out.trailType = src.trailType;
   if (FORMATION_TYPES.includes(src.formationType)) out.formationType = src.formationType;
+  if (typeof src.attractorText === "string") out.attractorText = src.attractorText.slice(0, 64);
   if (OSCILLATION_TYPES.includes(src.oscillationType)) out.oscillationType = src.oscillationType;
   if (Number.isFinite(src.oscillationAmount)) out.oscillationAmount = clampRange(src.oscillationAmount, OSCILLATION_AMOUNT_RANGE);
   if (Number.isFinite(src.oscillationSpeed)) out.oscillationSpeed = clampRange(src.oscillationSpeed, OSCILLATION_SPEED_RANGE);
@@ -429,7 +439,13 @@ export function normalizeParticles(input) {
   return out;
 }
 
-const SCENE_SHORT = { [PARTICLE_SCENE_ID]: "particles", [PULSE_SCENE_ID]: "pulse", [AURORA_SCENE_ID]: "aurora" };
+const SCENE_SHORT = {
+  [PARTICLE_SCENE_ID]: "particles",
+  [PULSE_SCENE_ID]: "pulse",
+  [MEGASTRUCTURE_SCENE_ID]: "mega",
+  [SPECTRAL_CANYON_SCENE_ID]: "canyon",
+  [AURORA_SCENE_ID]: "aurora",
+};
 
 /** `?preset=scene:particles_flow:fish_shape:dart_size:1.5_k:6_spin:1_count:auto` */
 export function encodePresetParam(sceneId, particles) {
@@ -449,6 +465,7 @@ export function encodePresetParam(sceneId, particles) {
     `tl:${Number(p.trailLength.toFixed(2))}`,
     `tt:${p.trailType}`,
     `form:${p.formationType}`,
+    `logo:${encodeURIComponent(p.attractorText).replaceAll("_", "%5F")}`,
     `osc:${p.oscillationType}`,
     `oa:${Number(p.oscillationAmount.toFixed(2))}`,
     `os:${Number(p.oscillationSpeed.toFixed(2))}`,
@@ -472,6 +489,8 @@ export function decodePresetParam(value) {
       if (raw === "aurora") result.sceneId = AURORA_SCENE_ID;
       else if (raw === "particles") result.sceneId = PARTICLE_SCENE_ID;
       else if (raw === "pulse") result.sceneId = PULSE_SCENE_ID;
+      else if (raw === "mega") result.sceneId = MEGASTRUCTURE_SCENE_ID;
+      else if (raw === "canyon") result.sceneId = SPECTRAL_CANYON_SCENE_ID;
     } else if (key === "flow") result.particles.flowMode = raw;
     else if (key === "shape") result.particles.shape = raw;
     else if (key === "size") result.particles.particleSize = Number(raw);
@@ -482,6 +501,13 @@ export function decodePresetParam(value) {
     else if (key === "tl") result.particles.trailLength = Number(raw);
     else if (key === "tt") result.particles.trailType = raw;
     else if (key === "form") result.particles.formationType = raw;
+    else if (key === "logo") {
+      try {
+        result.particles.attractorText = decodeURIComponent(raw);
+      } catch {
+        result.particles.attractorText = "AI: UNDERGROUND";
+      }
+    }
     else if (key === "osc") result.particles.oscillationType = raw;
     else if (key === "oa") result.particles.oscillationAmount = Number(raw);
     else if (key === "os") result.particles.oscillationSpeed = Number(raw);

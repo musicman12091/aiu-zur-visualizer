@@ -25,6 +25,8 @@ import {
   KALEIDO_SEGMENTS,
   MAX_STEPS_PER_FRAME,
   PARTICLE_SCENE_ID,
+  MEGASTRUCTURE_SCENE_ID,
+  SPECTRAL_CANYON_SCENE_ID,
   SCENE_IDS,
   SHOCK_EMPTY_BIRTH,
   SHOCK_SLOTS,
@@ -76,10 +78,15 @@ import {
 } from "../src/render/particleMath.js";
 import { PALETTES, PALETTE_IDS } from "../src/controls/palettes.js";
 import { STAGE3_DEFAULTS, stage3View } from "../src/app/AppState.js";
-import { STORAGE_KEY, STORAGE_SCHEMA, V3_2_UPGRADE_DEFAULTS, loadStoredState, serializeStoredState } from "../src/app/AppState.js";
+import {
+  STORAGE_KEY, STORAGE_SCHEMA, V3_2_UPGRADE_DEFAULTS, V4_NEON_FLAG, loadStoredState, serializeStoredState,
+} from "../src/app/AppState.js";
 import { NEON_PALETTE_IDS, NEON_MIN_SATURATION } from "../src/controls/palettes.js";
 import { CAPSULE_ALPHA, capsuleAlpha, crowdNorm, foldRadius, kaleidoVignette, mirrorRepeat } from "../src/render/particleMath.js";
 import { HUD_DRAWER_Y_OFFSET, stepViewportYOffset, viewportYOffsetTarget } from "../src/render/RenderHost.js";
+import { sampleLogoTargets } from "../src/render/LogoAttractor.js";
+import { getSpectrumRow128 } from "../src/render/spectralMath.js";
+import { VJ_DWELL_SECONDS, VJ_MANUAL_PAUSE_SECONDS, VJAutopilot, VJ_PHASES } from "../src/app/VJAutopilot.js";
 
 const tests = [];
 const test = (name, fn) => tests.push({ name, fn });
@@ -639,8 +646,8 @@ test("murmuration uses 5 Lissajous attractors, retarded time and a 6-neighbor ri
   assert.match(read("src/render/ParticleSystem3D.js"), /PIXEL_UNPACK_BUFFER/);
 });
 
-test("four flow modes are implemented in sim.vert.glsl with curl, buoyancy and shimmer", () => {
-  assert.deepEqual([...FLOW_MODES], ["fluid", "gas", "murmuration", "fish"]);
+test("five flow modes are implemented in sim.vert.glsl with curl, buoyancy, shimmer and chemotaxis", () => {
+  assert.deepEqual([...FLOW_MODES], ["fluid", "gas", "murmuration", "fish", "physarum"]);
   const sim = stripComments(read("src/shaders/sim.vert.glsl"));
   for (const n of [0, 1, 2]) assert.match(sim, new RegExp(`u_mode == ${n}`));
   assert.match(sim, /vec3 curlAnalytic\(vec3 q\)/);
@@ -650,6 +657,13 @@ test("four flow modes are implemented in sim.vert.glsl with curl, buoyancy and s
   assert.match(sim, /2\.6 \* heat/, "gas buoyancy");
   assert.match(sim, /u_high \* u_high \* 18\.0/, "gas treble burst");
   assert.match(sim, /sin\(phase \* 50\.0 \+ u_time \* 31\.0\) \* u_high/, "fish shimmer");
+  assert.match(sim, /senseLeft = physarumField/);
+  assert.match(sim, /senseForward = physarumField/);
+  assert.match(sim, /senseRight = physarumField/);
+  assert.match(sim, /float sensorAngle = 0\.45/);
+  assert.match(sim, /senseForwardDir \* 0\.14/);
+  assert.match(sim, /cellularRidge\(p \* 2\.6/);
+  assert.doesNotMatch(sim, /sceneFBO|u_sceneFBO/);
   assert.match(sim, /integrateFrozenDrag\(pos, vel, F, k, dt\)/);
   assert.doesNotMatch(sim, /vel \*= 0\.9/);
 });
@@ -811,17 +825,24 @@ test("Stage 3 frozen AppState keys, enums and defaults", () => {
     trailLength: 0.28,
     trailType: "comet",
     formationType: "neon-tunnel",
+    attractorText: "AI: UNDERGROUND",
     oscillationType: "helix",
     oscillationAmount: 1.0,
     oscillationSpeed: 1.2,
     pulseLayout: "band-clouds",
   });
-  assert.deepEqual([...SCENE_IDS], ["particle-swarm-3d", "pulse-field-3d", "aurora-ribbons"]);
+  assert.deepEqual([...SCENE_IDS], [
+    "particle-swarm-3d", "pulse-field-3d", "megastructure-3d", "spectral-canyon-3d", "aurora-ribbons",
+  ]);
+  assert.equal(MEGASTRUCTURE_SCENE_ID, "megastructure-3d");
+  assert.equal(SPECTRAL_CANYON_SCENE_ID, "spectral-canyon-3d");
   assert.ok(SCENE_IDS.includes("pulse-field-3d") && PULSE_SCENE_ID === "pulse-field-3d");
   assert.deepEqual([...PALETTE_IDS].sort(), ["biolum-ocean", "copper-teal", "cyber-laser", "emerald-matrix", "neon-tunnel", "solar-plasma"]);
   assert.equal(PALETTE_IDS[0], "neon-tunnel");
   assert.deepEqual([...TRAIL_TYPES], ["comet", "electric", "strobe", "ribbon", "none"]);
-  assert.deepEqual([...FORMATION_TYPES], ["free-3d", "neon-tunnel", "polygon-rings", "supernova-shell"]);
+  assert.deepEqual([...FORMATION_TYPES], [
+    "free-3d", "neon-tunnel", "polygon-rings", "supernova-shell", "fractal-core", "logo-attractor",
+  ]);
   assert.deepEqual([...OSCILLATION_TYPES], ["off", "wave", "helix", "bounce", "pulse"]);
   assert.deepEqual([...PULSE_LAYOUTS], ["band-clouds", "geodesic-sphere", "wave-grid"]);
   const state = new AppState(STAGE2_DEFAULT_PRESET);
@@ -1021,7 +1042,11 @@ test("Stage 3 pulse-field-3d scene: five-band bound, no destination connection",
 
 function mockStorage(entries) {
   const map = new Map(Object.entries(entries));
-  return { getItem: (key) => (map.has(key) ? map.get(key) : null) };
+  return {
+    getItem: (key) => (map.has(key) ? map.get(key) : null),
+    setItem: (key, value) => map.set(key, String(value)),
+    _map: map,
+  };
 }
 
 function hexSaturation(hex) {
@@ -1033,9 +1058,9 @@ function hexSaturation(hex) {
 const frag32 = () => stripComments(read("src/shaders/render.frag.glsl"));
 const sim32 = () => stripComments(read("src/shaders/sim.vert.glsl"));
 
-test("Stage 3.2 storage key and schema are zur_state_v3_2 / 3.2", () => {
-  assert.equal(STORAGE_KEY, "zur_state_v3_2");
-  assert.equal(STORAGE_SCHEMA, 3.2);
+test("Stage 4 storage key and schema are zur_state_v4_0 / 4.0", () => {
+  assert.equal(STORAGE_KEY, "zur_state_v4_0");
+  assert.equal(STORAGE_SCHEMA, 4.0);
   assert.deepEqual({ ...V3_2_UPGRADE_DEFAULTS }, { paletteId: "neon-tunnel", particleCountTier: "2k", particleSize: 1.35, trailLength: 0.28, trailType: "comet" });
   assert.match(read("src/app/main.js"), /serializeStoredState\(/);
 });
@@ -1043,7 +1068,7 @@ test("Stage 3.2 storage key and schema are zur_state_v3_2 / 3.2", () => {
 test("Stage 3.2 migration: cached copper-teal upgrades to neon-tunnel 2k / 1.35 / 0.28 / comet", () => {
   const preset = structuredClone(MODE_A_PRESET);
   preset.visual.paletteId = "copper-teal";
-  const loaded = loadStoredState(mockStorage({ zur_state_v3_2: serializeStoredState(preset) }));
+  const loaded = loadStoredState(mockStorage({ zur_state_v3_2: JSON.stringify({ storageSchema: 3.2, preset }) }));
   assert.equal(loaded.key, "zur_state_v3_2");
   assert.equal(loaded.migrated, true);
   assert.equal(loaded.preset.visual.paletteId, "neon-tunnel");
@@ -1071,7 +1096,7 @@ test("Stage 3.2 migration: legacy keys and schema < 3.2 are force-upgraded", () 
   assert.equal(loadStoredState(mockStorage({ zur_state_v3_2: "{not json" })), null);
 });
 
-test("Stage 3.2 migration keeps a current non-copper v3.2 state untouched", () => {
+test("Stage 4 migration preserves current non-copper state values", () => {
   const preset = structuredClone(MODE_A_PRESET);
   preset.visual.paletteId = "solar-plasma";
   preset.particles = { ...preset.particles, particleCountTier: "16k", particleSize: 2.2 };
@@ -1204,16 +1229,281 @@ test("Stage 3.2 HUD: Scene, Palette, Hue shift on top; Hide HUD button; pulse la
   assert.match(read("index.html"), /\.hud-hide\s*\{[^}]*position:\s*sticky/);
 });
 
-test("Stage 3.2 sw.js cache bumped and shaders still precached", () => {
+test("Stage 4 sw.js cache is v5, claims clients and precaches new shaders", () => {
   const sw = read("sw.js");
-  assert.match(sw, /const CACHE = "zur-shell-v4"/);
-  for (const file of ["render.frag.glsl", "render.vert.glsl", "sim.vert.glsl", "kaleido.frag.glsl"]) assert.ok(sw.includes(file), file);
+  assert.match(sw, /const CACHE = "zur-shell-v5"/);
+  assert.match(sw, /self\.skipWaiting\(\)/);
+  assert.match(sw, /self\.clients\.claim\(\)/);
+  assert.match(sw, /\.(html|js|glsl)/);
+  for (const file of ["render.frag.glsl", "render.vert.glsl", "sim.vert.glsl", "kaleido.frag.glsl", "core.frag.glsl", "spectral-canyon.frag.glsl"]) {
+    assert.ok(sw.includes(file), file);
+  }
 });
 
 test("Stage 3.2 AudioEngine stays silent (no destination connection)", () => {
   const audio = stripComments(read("src/audio/AudioEngine.js"));
   assert.doesNotMatch(audio, /\.connect\([^)]*\.destination/);
   assert.match(audio, /destinationConnections/);
+});
+
+test("Stage 4 visual controls have validated defaults and bounded values", () => {
+  const visual = STAGE2_DEFAULT_PRESET.visual;
+  assert.equal(visual.cameraMode, "orbit-3d");
+  assert.equal(visual.chromaticAberration, 0.30);
+  assert.equal(visual.godRays, 0.35);
+  assert.equal(visual.vjAutopilot, false);
+  for (const [key, value] of [
+    ["cameraMode", "nope"], ["chromaticAberration", -0.1], ["chromaticAberration", 1.1],
+    ["godRays", -1], ["godRays", 2], ["vjAutopilot", "yes"],
+  ]) {
+    const preset = structuredClone(STAGE2_DEFAULT_PRESET);
+    preset.visual[key] = value;
+    assert.equal(validatePreset(preset).ok, false, `${key}=${value}`);
+  }
+});
+
+test("Stage 4 copper reset is one-time, neon, and clears hue shift", () => {
+  const preset = structuredClone(STAGE2_DEFAULT_PRESET);
+  preset.visual.paletteId = "copper-teal";
+  preset.visual.hueShift = 0.42;
+  const storage = mockStorage({ [STORAGE_KEY]: JSON.stringify({ storageSchema: STORAGE_SCHEMA, preset }) });
+  const loaded = loadStoredState(storage);
+  assert.equal(loaded.preset.visual.paletteId, "neon-tunnel");
+  assert.equal(loaded.preset.visual.hueShift, 0);
+  assert.equal(storage.getItem(V4_NEON_FLAG), "1");
+});
+
+test("Stage 4 formation text validates and URL state round-trips custom underscores", () => {
+  const p = normalizeParticles({ formationType: "logo-attractor", attractorText: "CUSTOM_ZUR" });
+
+test("ZUR-GH-005 greenlight: fresh Mode presets default to neon-tunnel hueShift 0", () => {
+  for (const preset of [BLUEPRINT_EXAMPLE_PRESET, MODE_A_PRESET, MODE_B_PRESET, STAGE2_DEFAULT_PRESET]) {
+    assert.equal(preset.visual.paletteId, "neon-tunnel", preset.name || "blueprint");
+    assert.equal(preset.visual.hueShift, 0);
+  }
+});
+
+test("ZUR-GH-005 greenlight: logo-attractor floors at 16k and tightens glyph spring", () => {
+  const ps = read("src/render/ParticleSystem3D.js");
+  assert.match(ps, /formationType === "logo-attractor"/);
+  assert.match(ps, /Math\.max\(this\.count, 16384\)/);
+  const sim = read("src/shaders/sim.vert.glsl");
+  assert.match(sim, /u_formationType == 5 \? 16\.0/);
+  assert.match(sim, /u_formationType == 5 \? 5\.5/);
+  assert.match(sim, /u_formationType == 5\) F \*= 0\.05/);
+});
+
+  assert.equal(p.attractorText, "CUSTOM_ZUR");
+  const decoded = decodePresetParam(encodePresetParam(MEGASTRUCTURE_SCENE_ID, p));
+  assert.equal(decoded.sceneId, MEGASTRUCTURE_SCENE_ID);
+  assert.equal(decoded.particles.attractorText, "CUSTOM_ZUR");
+  const invalid = structuredClone(STAGE2_DEFAULT_PRESET);
+  invalid.particles.attractorText = "x".repeat(65);
+  assert.equal(validatePreset(invalid).ok, false);
+});
+
+test("Logo target generation is deterministic in Node and emits bounded vec4 points", () => {
+  const first = sampleLogoTargets("ZUR", 4096);
+  const second = sampleLogoTargets("ZUR", 4096);
+  const custom = sampleLogoTargets("AI: UNDERGROUND", 4096);
+  assert.equal(first.length, 4096 * 4);
+  assert.deepEqual(first, second);
+  assert.notDeepEqual(first, custom);
+  for (let i = 0; i < first.length; i += 4) {
+    assert.ok(first[i] >= -3.6 && first[i] <= 3.6);
+    assert.ok(first[i + 1] >= -1.201 && first[i + 1] <= 1.201);
+    assert.equal(first[i + 3], 1);
+  }
+});
+
+test("Logo targets bind location 2 at divisor zero on both update VAOs and are disposed", () => {
+  const src = read("src/render/ParticleSystem3D.js");
+  assert.match(src, /this\.updateVaos\[i\].*0, true/);
+  assert.match(src, /vertexAttribPointer\(2, 4, gl\.FLOAT, false, 16, 0\)/);
+  assert.match(src, /vertexAttribDivisor\(2, 0\)/);
+  assert.match(src, /gl\.deleteBuffer\(this\.logoTargetVBO\)/);
+  assert.match(src, /gl\.disableVertexAttribArray\(2\)/);
+});
+
+test("Physarum sensors use three analytic multi-octave ridges with onset branching", () => {
+  const sim = stripComments(read("src/shaders/sim.vert.glsl"));
+  assert.match(sim, /senseLeft = physarumField/);
+  assert.match(sim, /senseForward = physarumField/);
+  assert.match(sim, /senseRight = physarumField/);
+  assert.match(sim, /sensorAngle = 0\.45/);
+  assert.match(sim, /vec3\(senseLeftDir \* 0\.14, 0\.0\)/);
+  assert.match(sim, /vec3\(senseForwardDir \* 0\.14, 0\.0\)/);
+  assert.match(sim, /vec3\(senseRightDir \* 0\.14, 0\.0\)/);
+  assert.match(sim, /u_onset\);\s*vec2 steer/);
+  assert.doesNotMatch(sim, /sceneFBO|u_scene/);
+});
+
+test("Fractal core is raymarched before swarm with bounded tier steps and palette shading", () => {
+  const particle = read("src/render/ParticleSystem3D.js");
+  const fragment = read("src/shaders/core.frag.glsl");
+  const pass = particle.slice(particle.indexOf("if (extras.megastructure)"), particle.indexOf("const dart"));
+  assert.ok(pass.includes("gl.drawArrays(gl.TRIANGLES, 0, 3)"));
+  assert.ok(pass.indexOf("gl.drawArrays") < particle.indexOf("const dart"));
+  assert.match(particle, /u_steps, visual\?\.qualityTier === "safe" \? 16 : 24/);
+  assert.match(fragment, /for \(int stepIndex = 0; stepIndex < 24/);
+  assert.match(fragment, /length\(point\) > 1\.35/);
+  assert.match(fragment, /u_palette\[index \+ 1\]/);
+  assert.match(read("src/render/RenderHost.js"), /megastructure: scene === "megastructure-3d"/);
+});
+
+test("Fractal core collision reflects particles out of the signed-distance core", () => {
+  const sim = read("src/shaders/sim.vert.glsl");
+  assert.match(sim, /float sdCore\(vec3 p\)/);
+  assert.match(sim, /coreDistance < 0\.0/);
+  assert.match(sim, /pos \+= n \*\s*\(-coreDistance/);
+  assert.match(sim, /vel = reflect\(vel, n\) \* \(0\.85 \+ 0\.35 \* u_onset\)/);
+  assert.match(sim, /uniform int u_megastructure/);
+  assert.match(read("src/render/ParticleSystem3D.js"), /u_megastructure, extras\.megastructure \? 1 : 0/);
+});
+
+test("Wave-grid is pitched 32 degrees to expose terrain height", () => {
+  const sim = read("src/shaders/sim.vert.glsl");
+  assert.match(sim, /float pitch = 0\.5585053606/);
+  assert.match(sim, /h \* 1\.1 \* cos\(pitch\) - z \* sin\(pitch\)/);
+  assert.match(read("src/shaders/spectral-canyon.frag.glsl"), /pitch = 0\.5585053606/);
+});
+
+test("Spectral spectrum row uses live bins and five-band smooth fallback", () => {
+  const silence = getSpectrumRow128({});
+  const fallback = getSpectrumRow128({ sub: 1, bass: 0.6, lowMid: 0.3, highMid: 0.1, treble: 0 });
+  const liveBins = new Float32Array(256).fill(-100);
+  liveBins[201] = -10;
+  const live = getSpectrumRow128({ frequencyDb: liveBins });
+  assert.equal(silence.length, 512);
+  assert.equal(fallback.length, 512);
+  assert.equal(live.length, 512);
+  assert.equal(silence[3], 255);
+  assert.ok(fallback[3] > fallback[127 * 4]);
+  assert.ok(live[100 * 4] > live[0]);
+});
+
+test("Spectral canyon implements ScenePlugin lifecycle and one-row texture updates", () => {
+  const plugin = read("src/render/SpectralCanyon3D.js");
+  const host = read("src/render/RenderHost.js");
+  for (const method of ["init()", "resize(width, height)", "render(frame, palette", "dispose()"]) {
+    assert.ok(plugin.includes(method), method);
+  }
+  assert.match(plugin, /texImage2D\(gl\.TEXTURE_2D, 0, gl\.RGBA8, 128, 64/);
+  assert.match(plugin, /texSubImage2D\(gl\.TEXTURE_2D, 0, 0, this\.rowIndex, 128, 1/);
+  assert.match(plugin, /getSpectrumRow128\(frame\)/);
+  assert.match(host, /this\.spectralCanyon\.render/);
+  assert.match(host, /scene === "spectral-canyon-3d"/);
+  assert.match(read("src/shaders/spectral-canyon.frag.glsl"), /u_viewportYOffset/);
+});
+
+test("Kaleidoscope post effects use at most nine non-nested scene samples", () => {
+  const shader = stripComments(read("src/shaders/kaleido.frag.glsl"));
+  assert.equal((shader.match(/texture\(u_scene/g) || []).length, 4);
+  assert.match(shader, /uniform float u_chromaticAberration/);
+  assert.match(shader, /uniform float u_godRays/);
+  assert.match(shader, /for \(int i = 0; i < 6; i\+\+\)/);
+  assert.doesNotMatch(shader, /for\s*\([^)]*\)\s*\{[^{}]*for\s*\(/);
+  assert.match(read("src/render/ParticleSystem3D.js"), /u_chromaticAberration/);
+  assert.match(read("src/render/ParticleSystem3D.js"), /u_godRays/);
+});
+
+test("Camera director exposes four modes and applies static, tunnel-fly, and beat-bank paths", () => {
+  const app = read("src/app/AppState.js");
+  const particle = read("src/render/ParticleSystem3D.js");
+  assert.match(app, /cameraMode: "orbit-3d"/);
+  for (const mode of ["static", "orbit-3d", "tunnel-fly", "beat-bank"]) assert.ok(app.includes(`"${mode}"`), mode);
+  assert.match(particle, /cameraMode === "static"/);
+  assert.match(particle, /cameraMode === "tunnel-fly"/);
+  assert.match(particle, /cameraMode === "beat-bank"/);
+});
+
+test("VJ autopilot advances Breakdown, Build-Up, Drop on a 12-second dwell", () => {
+  const autopilot = new VJAutopilot();
+  assert.equal(VJ_DWELL_SECONDS, 12);
+  assert.deepEqual([...VJ_PHASES], ["breakdown", "build-up", "drop"]);
+  let event = null;
+  for (let i = 0; i < 48; i += 1) event = autopilot.update(0.25, true);
+  assert.equal(event.phase, "build-up");
+  assert.equal(event.changed, true);
+  for (let i = 0; i < 48; i += 1) event = autopilot.update(0.25, true);
+  assert.equal(event.phase, "drop");
+  assert.equal(event.shockwave, true);
+});
+
+test("VJ autopilot manual HUD touch pauses changes for 45 seconds", () => {
+  const autopilot = new VJAutopilot();
+  assert.equal(VJ_MANUAL_PAUSE_SECONDS, 45);
+  autopilot.manualTouch();
+  let event = autopilot.update(0.25, true);
+  assert.equal(event.paused, true);
+  assert.equal(event.changed, false);
+  for (let i = 0; i < 180; i += 1) event = autopilot.update(0.25, true);
+  assert.equal(event.paused, false);
+  assert.match(read("src/app/main.js"), /triggerShockwave\(frame\.rms/);
+});
+
+test("HUD exposes the VJ Autopilot pill and custom logo text", () => {
+  const hud = read("src/controls/ControlHUD.js");
+  assert.match(hud, /⚡ VJ Autopilot \(Drop Detector\)/);
+  assert.match(hud, /btn-vj-autopilot/);
+  assert.match(hud, /txt-attractor/);
+  for (const name of ["AI: UNDERGROUND", "MON DAAIN", "TENTH GATE", "ZUR"]) assert.ok(hud.includes(name));
+  assert.match(hud, /cameraMode/);
+  assert.match(hud, /chromaticAberration/);
+  assert.match(hud, /godRays/);
+});
+
+test("Scene IDs and app wiring include both Stage 4 render paths", () => {
+  const host = read("src/render/RenderHost.js");
+  const main = read("src/app/main.js");
+  assert.match(host, /preset\?\.sceneId === "spectral-canyon-3d"/);
+  assert.match(host, /viewportYOffsetTarget\(hudOpen/);
+  assert.match(main, /new SpectralCanyon3D/);
+  assert.match(main, /new ParticleSystem3D/);
+});
+
+test("Service worker caches the Stage 4 JavaScript and shaders", () => {
+  const sw = read("sw.js");
+  for (const path of [
+    "src/app/VJAutopilot.js", "src/render/SpectralCanyon3D.js", "src/render/LogoAttractor.js",
+    "src/shaders/core.frag.glsl", "src/shaders/spectral-canyon.frag.glsl",
+  ]) assert.ok(sw.includes(path), path);
+  assert.match(sw, /networkFirst/);
+});
+
+test("Service worker treats navigations and directory URLs as network-first", () => {
+  const sw = read("sw.js");
+  assert.match(sw, /request\.mode === "navigate"/);
+  assert.match(sw, /pathname\.endsWith\("\/"\)/);
+});
+
+test("Spectral canyon lifts terrain upward with the portrait HUD offset", () => {
+  const frag = read("src/shaders/spectral-canyon.frag.glsl");
+  assert.match(frag, /uv\.y -= 0\.5 \* u_viewportYOffset;/);
+  assert.doesNotMatch(frag, /uv\.y \+= 0\.5 \* u_viewportYOffset;/);
+});
+
+test("Spectral canyon camera pitches down onto the terrain", () => {
+  const frag = read("src/shaders/spectral-canyon.frag.glsl");
+  assert.match(frag, /mat2\(cos\(pitch\), sin\(pitch\), -sin\(pitch\), cos\(pitch\)\)/);
+});
+
+test("Logo attractor spreads a small active prefix across the full glyph height", async () => {
+  const { sampleLogoTargets } = await import("../src/render/LogoAttractor.js");
+  const t = sampleLogoTargets("ZUR", 2048);
+  let minY = Infinity, maxY = -Infinity;
+  for (let i = 0; i < 256; i += 1) { minY = Math.min(minY, t[i * 4 + 1]); maxY = Math.max(maxY, t[i * 4 + 1]); }
+  assert.ok(maxY - minY > 2.0, `first 256 agents span ${maxY - minY}`);
+});
+
+test("Stage 4 docs record the new scene, post effects, autopilot, and migration", () => {
+  const contracts = read("CONTRACTS.md");
+  const state = read("STATE.md");
+  assert.match(contracts, /Stage 4/);
+  assert.match(contracts, /spectral-canyon-3d/);
+  assert.match(contracts, /chromaticAberration/);
+  assert.match(state, /ZUR-GH-005/);
+  assert.match(state, /zur_state_v4_0/);
 });
 
 
