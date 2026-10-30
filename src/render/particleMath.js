@@ -182,17 +182,37 @@ export function steadyStateRadiance(dt, trailTauSeconds) {
   return trailRadianceScale(dt, trailTauSeconds) / Math.max(1 - E, 1e-9);
 }
 
-/** JS mirror of kaleidoFold() in kaleido.frag.glsl. Segments <= 1 is a 1:1 bypass. */
-export function kaleidoFold(u, v, segments, angle, aspect, zoom = 1) {
+/** Triangle-wave mirror repeat (kaleido.frag.glsl mirrorRepeat): 1 - |fract(x / 2) * 2 - 1|. */
+export function mirrorRepeat(x) {
+  const f = x * 0.5 - Math.floor(x * 0.5);
+  return 1 - Math.abs(f * 2 - 1);
+}
+
+/** Mirrored polar radius fold: identity up to 1, then reflects (kaleido.frag.glsl). */
+export function foldRadius(rawRadius) {
+  return mirrorRepeat(rawRadius);
+}
+
+/** Outer vignette smoothstep(1.12, 0.82, rawRadius) applied when segments > 1. */
+export function kaleidoVignette(rawRadius) {
+  return smoothstep(1.12, 0.82, rawRadius);
+}
+
+/**
+ * JS mirror of kaleidoFold() in kaleido.frag.glsl. Segments <= 1 is a 1:1 bypass.
+ * centerY follows u_viewportYOffset: 0.5 + 0.5 * offset.
+ */
+export function kaleidoFold(u, v, segments, angle, aspect, zoom = 1, centerY = 0.5) {
   if (!(segments > 1)) return [u, v];
   const px = (u - 0.5) * aspect;
-  const py = v - 0.5;
-  const r = Math.hypot(px, py) / Math.max(zoom, 0.25);
+  const py = v - centerY;
+  const rawRadius = Math.hypot(px, py) / Math.max(zoom, 0.25);
+  const r = foldRadius(rawRadius);
   const wedge = (Math.PI * 2) / segments;
   let a = Math.atan2(py, px) + angle;
   a -= wedge * Math.floor(a / wedge);
   a = Math.abs(a - wedge * 0.5);
-  return [(Math.cos(a) * r) / aspect + 0.5, Math.sin(a) * r + 0.5];
+  return [mirrorRepeat((Math.cos(a) * r) / aspect + 0.5), mirrorRepeat(Math.sin(a) * r + centerY)];
 }
 
 /** Reinhard x / (1 + x) per channel (Stage 2; kept for reference, no longer used by kaleido.frag.glsl). */
@@ -216,10 +236,26 @@ export function chromaToneMap([r, g, b]) {
   return [r, g, b].map((c) => c * inv * mappedPeak * (1 - white) + white);
 }
 
-/** Neon comet sprite falloff (render.frag.glsl): white-hot core + wide halo. */
-export const GLOW = Object.freeze({ coreK: 22.0, haloK: 4.5 });
+/** Neon comet sprite falloff (render.frag.glsl): saturated halo + tiny white pinprick core (peak 0.30). */
+export const GLOW = Object.freeze({ coreK: 42.0, haloK: 4.5, coreGain: 0.30 });
 export function glowProfile(r2) {
-  return { core: Math.exp(-r2 * GLOW.coreK), halo: Math.exp(-r2 * GLOW.haloK) };
+  return { core: Math.exp(-r2 * GLOW.coreK) * GLOW.coreGain, halo: Math.exp(-r2 * GLOW.haloK) };
+}
+
+/** Capsule alpha multiplier in render.frag.glsl (premultiplied Pass 1 blend). */
+export const CAPSULE_ALPHA = 0.40;
+
+/**
+ * Bounded radiance for big sprites in dense swarms (render.frag.glsl crowdNorm).
+ * particleSize 2.2..4.0 at 16k-64k stays below ~0.15 instead of stacking into white fireballs.
+ */
+export function crowdNorm(particleSize, activeCount) {
+  return 1 / (1 + 0.32 * particleSize * particleSize * Math.sqrt(Math.max(activeCount, 64) / 1024));
+}
+
+/** Final Velocity Capsule alpha at the sprite centre (halo = 1). */
+export function capsuleAlpha(particleSize, activeCount, halo = 1) {
+  return Math.min(halo, 1) * CAPSULE_ALPHA * crowdNorm(particleSize, activeCount);
 }
 
 /**

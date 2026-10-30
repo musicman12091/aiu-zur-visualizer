@@ -70,6 +70,12 @@ export class ControlHUD {
     const panel = el("aside", "hud");
     panel.id = "hud";
 
+    this.hideButton = el("button", "hud-hide", "▼ Hide HUD / Fullscreen");
+    this.hideButton.type = "button";
+    this.hideButton.id = "btn-hide-hud";
+    this.hideButton.addEventListener("click", () => this.setHidden(true));
+    panel.append(this.hideButton);
+
     const header = el("div", "hud-header");
     this.toggleButton = el("button", "hud-toggle", "ZUR");
     this.toggleButton.type = "button";
@@ -92,6 +98,32 @@ export class ControlHUD {
 
     this.body = el("div", "hud-body");
     this.body.id = "hud-body";
+
+    // Scene, Palette and Hue shift stay together at the very top of the HUD.
+    this.scene = this._select("sel-scene", "Scene", [
+      [PARTICLE_SCENE_ID, "3D Particle Swarm"],
+      [PULSE_SCENE_ID, PULSE_SCENE_LABEL],
+      ["aurora-ribbons", "Aurora Ribbons (Stage 1)"],
+    ], (value) => this.handlers.scene?.(value));
+    this.palette = this._select(
+      "sel-palette",
+      "Palette",
+      PALETTE_IDS.map((id) => [id, id]),
+      (value) => {
+        this._commit((draft) => {
+          draft.visual.paletteId = value;
+        });
+      },
+    );
+    this.hue = this._range("rng-hue", "Hue shift", -1, 1, 0.01, (value) => {
+      this._commit((draft) => {
+        draft.visual.hueShift = value;
+      });
+    });
+    const topControls = el("div", "top-controls");
+    topControls.id = "top-controls";
+    topControls.append(this.scene.wrap, this.palette.wrap, this.hue.wrap);
+    this.body.append(topControls);
     this.title = el("p", "preset-name", "");
     this.body.append(this.title);
 
@@ -127,11 +159,6 @@ export class ControlHUD {
     const stage2 = el("fieldset", "stage2");
     stage2.id = "stage2-controls";
     stage2.append(el("legend", "field-label", "Stage 3 · 3D swarm"));
-    this.scene = this._select("sel-scene", "Scene", [
-      [PARTICLE_SCENE_ID, "3D Particle Swarm"],
-      [PULSE_SCENE_ID, PULSE_SCENE_LABEL],
-      ["aurora-ribbons", "Aurora Ribbons (Stage 1)"],
-    ], (value) => this.handlers.scene?.(value));
     this.flow = this._select("sel-flow", "Flow mode", FLOW_MODES.map((id) => [id, FLOW_LABELS[id]]), (value) => {
       this.handlers.particles?.({ flowMode: value });
     });
@@ -182,7 +209,7 @@ export class ControlHUD {
       this.handlers.particles?.({ pulseLayout: value });
     });
     stage2.append(
-      this.scene.wrap, this.flow.wrap, this.shape.wrap, this.size.wrap, this.kaleido.wrap, this.spin.label, this.count.wrap,
+      this.flow.wrap, this.shape.wrap, this.size.wrap, this.kaleido.wrap, this.spin.label, this.count.wrap,
       this.density.label, this.trailType.wrap, this.trailLength.wrap, this.formation.wrap, this.oscillation.wrap,
       this.oscAmount.wrap, this.oscSpeed.wrap, this.pulseLayout.wrap,
     );
@@ -266,25 +293,6 @@ export class ControlHUD {
       },
     );
     this.body.append(this.tier.wrap);
-
-    this.palette = this._select(
-      "sel-palette",
-      "Palette",
-      PALETTE_IDS.map((id) => [id, id]),
-      (value) => {
-        this._commit((draft) => {
-          draft.visual.paletteId = value;
-        });
-      },
-    );
-    this.body.append(this.palette.wrap);
-
-    this.hue = this._range("rng-hue", "Hue shift", -1, 1, 0.01, (value) => {
-      this._commit((draft) => {
-        draft.visual.hueShift = value;
-      });
-    });
-    this.body.append(this.hue.wrap);
 
     this.diagnostics = el("pre", "diagnostics");
     this.diagnostics.id = "diagnostics";
@@ -396,6 +404,20 @@ export class ControlHUD {
     this.toggleButton.setAttribute("aria-expanded", String(!collapsed));
   }
 
+  /** True while the full drawer is showing (neither collapsed to the ZUR chip nor hidden). */
+  isOpen() {
+    return !this.panel.classList.contains("is-collapsed") && !this.panel.classList.contains("is-hidden");
+  }
+
+  setHidden(hidden) {
+    this.panel.classList.toggle("is-hidden", hidden);
+    this.root.classList.toggle("is-hidden", hidden);
+  }
+
+  toggleHidden() {
+    this.setHidden(!this.panel.classList.contains("is-hidden"));
+  }
+
   setDevices(devices) {
     const select = this.device.select;
     const current = select.value;
@@ -499,6 +521,7 @@ export class ControlHUD {
     this.oscSpeed.input.value = String(particles.oscillationSpeed);
     this.oscSpeed.value.textContent = `${Number(particles.oscillationSpeed).toFixed(2)}×`;
     this.pulseLayout.select.value = particles.pulseLayout;
+    this.pulseLayout.wrap.hidden = preset.sceneId !== PULSE_SCENE_ID;
     this._setPill(this.pills.wakeLock, this.state.status.wakeLock, `Wake ${this.state.status.wakeLock}`);
     this._setPill(this.pills.capture, this.state.status.capture, `Capture ${this.state.status.capture}`);
     this._setPill(this.pills.webgl, this.state.status.webgl, this.state.status.webgl === "webgl2" ? "WebGL2" : `WebGL ${this.state.status.webgl}`);

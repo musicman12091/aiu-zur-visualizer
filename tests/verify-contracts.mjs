@@ -76,6 +76,10 @@ import {
 } from "../src/render/particleMath.js";
 import { PALETTES, PALETTE_IDS } from "../src/controls/palettes.js";
 import { STAGE3_DEFAULTS, stage3View } from "../src/app/AppState.js";
+import { STORAGE_KEY, STORAGE_SCHEMA, V3_2_UPGRADE_DEFAULTS, loadStoredState, serializeStoredState } from "../src/app/AppState.js";
+import { NEON_PALETTE_IDS, NEON_MIN_SATURATION } from "../src/controls/palettes.js";
+import { CAPSULE_ALPHA, capsuleAlpha, crowdNorm, foldRadius, kaleidoVignette, mirrorRepeat } from "../src/render/particleMath.js";
+import { HUD_DRAWER_Y_OFFSET, stepViewportYOffset, viewportYOffsetTarget } from "../src/render/RenderHost.js";
 
 const tests = [];
 const test = (name, fn) => tests.push({ name, fn });
@@ -682,7 +686,7 @@ test("render shader builds velocity-aligned darts and capsules from gl_VertexID"
   assert.match(vert, /gl_InstanceID/);
   const frag = read("src/shaders/render.frag.glsl");
   assert.match(frag, /float rim = pow\(1\.0 - facing, 2\.5\)/);
-  assert.match(frag, /float core = exp\(-r2 \* 22\.0\)/);
+  assert.match(frag, /float core = exp\(-r2 \* 42\.0\) \* 0\.30/);
 });
 
 test("particle tiers: 65,536 desktop / 16,384 mobile with FPS step-down", () => {
@@ -919,11 +923,11 @@ test("Stage 3 portrait FBO axis swap and Hor+ projection", () => {
 });
 
 test("Stage 3 neon glow + chroma-preserving tone map constants", () => {
-  assert.deepEqual({ ...GLOW }, { coreK: 22.0, haloK: 4.5 });
+  assert.deepEqual({ ...GLOW }, { coreK: 42.0, haloK: 4.5, coreGain: 0.30 });
   const g = glowProfile(0.1);
-  assert.ok(near(g.core, Math.exp(-2.2)) && near(g.halo, Math.exp(-0.45)) && g.core < g.halo);
+  assert.ok(near(g.core, Math.exp(-4.2) * 0.3) && near(g.halo, Math.exp(-0.45)) && g.core < g.halo);
   const frag = read("src/shaders/render.frag.glsl");
-  assert.match(frag, /float core = exp\(-r2 \* 22\.0\);/);
+  assert.match(frag, /float core = exp\(-r2 \* 42\.0\) \* 0\.30;/);
   assert.match(frag, /float halo = exp\(-r2 \* 4\.5\);/);
   const kaleido = read("src/shaders/kaleido.frag.glsl");
   assert.match(kaleido, /float peak = max\(c\.r, max\(c\.g, c\.b\)\);/);
@@ -938,7 +942,7 @@ test("Stage 3 neon glow + chroma-preserving tone map constants", () => {
   assert.deepEqual(chromaToneMap([0, 0, 0]), [0, 0, 0]);
   const neon = PALETTES["neon-tunnel"];
   assert.equal(neon.length, 5);
-  const hexes = ["#00F5FF", "#FF00A0", "#7B2CBF", "#0066FF", "#FFFFFF"];
+  const hexes = ["#00F5FF", "#FF00A0", "#8A00FF", "#0066FF", "#FF00FF"];
   hexes.forEach((hex, i) => {
     const n = Number.parseInt(hex.slice(1), 16);
     const lin = [16, 8, 0].map((sh) => {
@@ -1014,6 +1018,204 @@ test("Stage 3 pulse-field-3d scene: five-band bound, no destination connection",
     assert.doesNotMatch(read(file), /\.destination/, file);
   }
 });
+
+function mockStorage(entries) {
+  const map = new Map(Object.entries(entries));
+  return { getItem: (key) => (map.has(key) ? map.get(key) : null) };
+}
+
+function hexSaturation(hex) {
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
+  const max = Math.max(r, g, b);
+  return max === 0 ? 0 : (max - Math.min(r, g, b)) / max;
+}
+
+const frag32 = () => stripComments(read("src/shaders/render.frag.glsl"));
+const sim32 = () => stripComments(read("src/shaders/sim.vert.glsl"));
+
+test("Stage 3.2 storage key and schema are zur_state_v3_2 / 3.2", () => {
+  assert.equal(STORAGE_KEY, "zur_state_v3_2");
+  assert.equal(STORAGE_SCHEMA, 3.2);
+  assert.deepEqual({ ...V3_2_UPGRADE_DEFAULTS }, { paletteId: "neon-tunnel", particleCountTier: "2k", particleSize: 1.35, trailLength: 0.28, trailType: "comet" });
+  assert.match(read("src/app/main.js"), /serializeStoredState\(/);
+});
+
+test("Stage 3.2 migration: cached copper-teal upgrades to neon-tunnel 2k / 1.35 / 0.28 / comet", () => {
+  const preset = structuredClone(MODE_A_PRESET);
+  preset.visual.paletteId = "copper-teal";
+  const loaded = loadStoredState(mockStorage({ zur_state_v3_2: serializeStoredState(preset) }));
+  assert.equal(loaded.key, "zur_state_v3_2");
+  assert.equal(loaded.migrated, true);
+  assert.equal(loaded.preset.visual.paletteId, "neon-tunnel");
+  const p = loaded.preset.particles;
+  assert.equal(p.particleCountTier, "2k");
+  assert.equal(p.particleSize, 1.35);
+  assert.equal(p.trailLength, 0.28);
+  assert.equal(p.trailType, "comet");
+});
+
+test("Stage 3.2 migration: legacy keys and schema < 3.2 are force-upgraded", () => {
+  for (const key of ["zur_state_v3", "zur_state_v2", "zur.preset.v2"]) {
+    const preset = structuredClone(MODE_B_PRESET);
+    preset.visual.paletteId = "cyber-laser";
+    const loaded = loadStoredState(mockStorage({ [key]: JSON.stringify(preset) }));
+    assert.equal(loaded.key, key, `${key} read`);
+    assert.equal(loaded.migrated, true);
+    assert.equal(loaded.preset.visual.paletteId, "neon-tunnel");
+    assert.equal(loaded.preset.particles.particleCountTier, "2k");
+  }
+  const old = structuredClone(MODE_A_PRESET);
+  const enveloped = JSON.stringify({ storageSchema: 3, preset: old });
+  assert.equal(loadStoredState(mockStorage({ zur_state_v3_2: enveloped })).migrated, true);
+  assert.equal(loadStoredState(mockStorage({})), null);
+  assert.equal(loadStoredState(mockStorage({ zur_state_v3_2: "{not json" })), null);
+});
+
+test("Stage 3.2 migration keeps a current non-copper v3.2 state untouched", () => {
+  const preset = structuredClone(MODE_A_PRESET);
+  preset.visual.paletteId = "solar-plasma";
+  preset.particles = { ...preset.particles, particleCountTier: "16k", particleSize: 2.2 };
+  const loaded = loadStoredState(mockStorage({ zur_state_v3_2: serializeStoredState(preset) }));
+  assert.equal(loaded.migrated, false);
+  assert.equal(loaded.preset.visual.paletteId, "solar-plasma");
+  assert.equal(loaded.preset.particles.particleCountTier, "16k");
+  assert.equal(loaded.preset.particles.particleSize, 2.2);
+});
+
+test("Stage 3.2 neon palettes: every stop HSV saturation >= 0.85 and never white", () => {
+  assert.deepEqual([...NEON_PALETTE_IDS], ["neon-tunnel", "cyber-laser", "solar-plasma", "biolum-ocean", "emerald-matrix"]);
+  assert.equal(NEON_MIN_SATURATION, 0.85);
+  const source = read("src/controls/palettes.js");
+  for (const id of NEON_PALETTE_IDS) {
+    const line = source.split("\n").find((l) => l.includes(`"${id}": palette(`));
+    const hexes = line.match(/#[0-9A-Fa-f]{6}/g);
+    assert.equal(hexes.length, 5, `${id} stops`);
+    for (const hex of hexes) {
+      assert.notEqual(hex.toUpperCase(), "#FFFFFF", `${id} has a white stop`);
+      assert.ok(hexSaturation(hex) >= 0.85, `${id} ${hex} saturation ${hexSaturation(hex).toFixed(2)}`);
+    }
+    assert.equal(PALETTES[id].length, 5);
+    for (const [r, g, b] of PALETTES[id]) {
+      const max = Math.max(r, g, b);
+      assert.ok((max - Math.min(r, g, b)) / max >= 0.85, `${id} linear stop saturation`);
+    }
+  }
+  assert.ok(PALETTE_IDS.includes("copper-teal"), "copper-teal stays for Mode presets");
+});
+
+test("Stage 3.2 crowdNorm formula: JS mirror and render.frag", () => {
+  assert.match(frag32(), /float crowdNorm = 1\.0 \/ \(1\.0 \+ 0\.32 \* u_particleSize \* u_particleSize \* sqrt\(max\(u_activeCount, 64\.0\) \/ 1024\.0\)\);/);
+  assert.match(frag32(), /uniform float u_particleSize;/);
+  assert.match(frag32(), /uniform float u_activeCount;/);
+  assert.equal(crowdNorm(1, 1024), 1 / 1.32);
+  assert.ok(crowdNorm(4, 65536) < 0.03);
+  assert.ok(crowdNorm(1, 0) > crowdNorm(1, 1024), "active count floors at 64");
+  for (const size of [2.2, 3, 3.5, 4]) for (const count of [16384, 65536]) assert.ok(crowdNorm(size, count) < 0.15, `${size}@${count}`);
+});
+
+test("Stage 3.2 Velocity Capsule alpha scales by 0.40 * crowdNorm (premultiplied blend)", () => {
+  assert.equal(CAPSULE_ALPHA, 0.40);
+  assert.equal(capsuleAlpha(3.5, 16384), 0.4 * crowdNorm(3.5, 16384));
+  assert.ok(capsuleAlpha(3.5, 16384) < 0.03, "no solid-white fireball");
+  assert.match(frag32(), /capsuleAlpha = 0\.40 \* crowdNorm/);
+  assert.match(frag32(), /fragColor = vec4\(color \* u_radianceScale \* [\d.]+ \* capsuleAlpha, min\(halo, 1\.0\) \* capsuleAlpha\)/);
+  const system = stripComments(read("src/render/ParticleSystem3D.js"));
+  assert.match(system, /gl\.blendFunc\(gl\.ONE, gl\.ONE_MINUS_SRC_ALPHA\)/);
+  for (const name of ["u_particleSize", "u_activeCount"]) assert.match(system, new RegExp(`gl\\.uniform1f\\(R\\.${name}`), `${name} wired`);
+});
+
+test("Stage 3.2 sprite profile: saturated halo, pinprick core, no white specular on darts", () => {
+  const frag = frag32();
+  assert.match(frag, /float halo = exp\(-r2 \* 4\.5\);/);
+  assert.match(frag, /float core = exp\(-r2 \* 42\.0\) \* 0\.30;/);
+  assert.match(frag, /vec3 dartColor = paletteColor \* \(0\.45 \+ 0\.85 \* normalShade\) \+ paletteColorSecondary \* \(0\.65 \* rim\);/);
+  assert.doesNotMatch(frag, /mix\(color, vec3\(1\.0\), rim\)/);
+  assert.doesNotMatch(frag, /mix\(dartColor, vec3\(1\.0\)/);
+});
+
+test("Stage 3.2 sim.vert: tunnel and rings use camera-facing XY coordinates", () => {
+  const sim = sim32();
+  const xy = sim.match(/target\.xy = ringRadius \* vec2\(cos\(theta\), sin\(theta\)\);/g) || [];
+  assert.equal(xy.length, 2, "tunnel and rings both write target.xy from cos/sin");
+  assert.doesNotMatch(sim, /vec3\(cos\(a\) \* rt, sin\(a\) \* rt, z\)/);
+  assert.doesNotMatch(sim, /target\.xz = ringRadius/);
+  assert.match(sim, /const float FORMATION_TILT = 0\.2094395102;/);
+  assert.match(sim, /F \+= tiltToWorld\(vec3\(0\.0, 0\.0, 1\.8 \+ 3\.0 \* u_rms \+ 2\.0 \* u_bass\)\)/);
+  assert.match(sim, /if \(u_formationType == 1 \|\| u_formationType == 2\) F \*= 0\.15;/);
+  assert.match(sim, /float theta = fract\(seed \* 8\.0\) \* TAU/);
+});
+
+test("Stage 3.2 kaleidoscope: mirrored radius fold, vignette and bypass", () => {
+  const kal = stripComments(read("src/shaders/kaleido.frag.glsl"));
+  assert.match(kal, /float r = 1\.0 - abs\(fract\(rawRadius \* 0\.5\) \* 2\.0 - 1\.0\);/);
+  assert.match(kal, /vignette = smoothstep\(1\.12, 0\.82, rawRadius\);/);
+  assert.match(kal, /if \(u_kaleidoSegments <= 1\.0\) return uv;/);
+  assert.equal(foldRadius(0.4), 0.4);
+  assert.ok(Math.abs(foldRadius(1.3) - 0.7) < 1e-9, "radius beyond 1 reflects back");
+  assert.ok(Math.abs(mirrorRepeat(2.25) - 0.25) < 1e-9);
+  assert.equal(kaleidoVignette(0.5), 1);
+  assert.equal(kaleidoVignette(1.4), 0);
+  for (const raw of [1.3, 2.0, 5.0]) assert.ok(foldRadius(raw) >= 0 && foldRadius(raw) <= 1, `fold bounded at ${raw}`);
+});
+
+test("Stage 3.2 u_viewportYOffset documented in CONTRACTS.md", () => {
+  const contracts = read("CONTRACTS.md");
+  assert.match(contracts, /`u_viewportYOffset`/);
+  assert.match(contracts, /gl_Position\.y \+= u_viewportYOffset \* gl_Position\.w/);
+  assert.match(contracts, /\+0\.38/);
+  assert.match(contracts, /zur_state_v3_2/);
+  assert.match(contracts, /crowdNorm/);
+});
+
+test("Stage 3.2 u_viewportYOffset uniform wired through vertex, post and ParticleSystem3D", () => {
+  const vert = stripComments(read("src/shaders/render.vert.glsl"));
+  assert.match(vert, /uniform float u_viewportYOffset;/);
+  assert.equal((vert.match(/gl_Position\.y \+= u_viewportYOffset \* gl_Position\.w;/g) || []).length, 2, "both gl_Position paths");
+  const system = read("src/render/ParticleSystem3D.js");
+  assert.match(system, /"u_viewportYOffset"/);
+  assert.match(system, /gl\.uniform1f\(R\.u_viewportYOffset/);
+  assert.match(system, /gl\.uniform1f\(P\.u_viewportYOffset/);
+  assert.match(read("src/render/RenderHost.js"), /viewportYOffset/);
+});
+
+test("Stage 3.2 viewport offset: +0.38 only for open portrait HUD, smooth glide to 0", () => {
+  assert.equal(HUD_DRAWER_Y_OFFSET, 0.38);
+  assert.equal(viewportYOffsetTarget(true, 412, 915), 0.38);
+  assert.equal(viewportYOffsetTarget(true, 1280, 720), 0);
+  assert.equal(viewportYOffsetTarget(false, 412, 915), 0);
+  let offset = 0.38;
+  let previous = offset;
+  for (let i = 0; i < 120 && offset !== 0; i += 1) {
+    offset = stepViewportYOffset(offset, 0, 1 / 60);
+    assert.ok(offset < previous && offset >= 0, "monotonic glide");
+    previous = offset;
+  }
+  assert.equal(offset, 0, "settles at exactly 0");
+  assert.ok(stepViewportYOffset(0, 0.38, 1 / 60) < 0.38, "does not jump");
+});
+
+test("Stage 3.2 HUD: Scene, Palette, Hue shift on top; Hide HUD button; pulse layout gated", () => {
+  const hud = read("src/controls/ControlHUD.js");
+  assert.ok(hud.indexOf('"sel-scene"') < hud.indexOf('"sel-palette"') && hud.indexOf('"sel-palette"') < hud.indexOf('"rng-hue"'), "Scene > Palette > Hue order");
+  assert.match(hud, /btn-hide-hud/);
+  assert.match(hud, /Hide HUD \/ Fullscreen/);
+  assert.match(hud, /pulseLayout\.wrap\.hidden = [^;]*PULSE_SCENE_ID/);
+  assert.match(read("src/app/main.js"), /canvas\.addEventListener\("click"[\s\S]*?toggleHidden/);
+  assert.match(read("index.html"), /\.hud-hide\s*\{[^}]*position:\s*sticky/);
+});
+
+test("Stage 3.2 sw.js cache bumped and shaders still precached", () => {
+  const sw = read("sw.js");
+  assert.match(sw, /const CACHE = "zur-shell-v4"/);
+  for (const file of ["render.frag.glsl", "render.vert.glsl", "sim.vert.glsl", "kaleido.frag.glsl"]) assert.ok(sw.includes(file), file);
+});
+
+test("Stage 3.2 AudioEngine stays silent (no destination connection)", () => {
+  const audio = stripComments(read("src/audio/AudioEngine.js"));
+  assert.doesNotMatch(audio, /\.connect\([^)]*\.destination/);
+  assert.match(audio, /destinationConnections/);
+});
+
 
 let failed = 0;
 for (const entry of tests) {

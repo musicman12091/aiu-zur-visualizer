@@ -212,22 +212,42 @@ float polygonRadius(float a, float sides, float R) {
   return R * cos(sector * 0.5) / cos(offset);
 }
 
+// Tunnel / rings live in a camera-facing XY plane (revolving around Z, streaming along Z toward
+// the camera), pitched ~12 degrees about X for 3D perspective. These map world <-> formation frame.
+const float FORMATION_TILT = 0.2094395102; // 12 degrees
+vec3 tiltToWorld(vec3 p) {
+  float c = cos(FORMATION_TILT);
+  float s = sin(FORMATION_TILT);
+  return vec3(p.x, p.y * c - p.z * s, p.y * s + p.z * c);
+}
+vec3 tiltToFormation(vec3 p) {
+  float c = cos(FORMATION_TILT);
+  float s = sin(FORMATION_TILT);
+  return vec3(p.x, p.y * c + p.z * s, -p.y * s + p.z * c);
+}
+
 // Stage 3 formation target for one agent. free-3d returns pos (no pull).
 vec3 formationTarget(vec3 pos, float seed, float phase, uint uid) {
   if (u_formationType == 1) {
-    // neon-tunnel: hex tube along Z, particles stream toward the camera and wrap
-    float a = atan(pos.y, pos.x);
+    // neon-tunnel: hex vortex in the camera-facing XY plane; agents revolve around Z and stream along +Z
+    vec3 local = tiltToFormation(pos);
+    float theta = atan(local.y, local.x) + 0.2 + 0.25 * u_rms;
     float lane = 0.55 + 0.45 * seed;
-    float rt = polygonRadius(a, 6.0, 2.9) * lane;
-    return vec3(cos(a) * rt, sin(a) * rt, pos.z);
+    float ringRadius = polygonRadius(theta, 6.0, 4.6) * lane;
+    vec3 target = local;
+    target.xy = ringRadius * vec2(cos(theta), sin(theta));
+    return tiltToWorld(target);
   }
   if (u_formationType == 2) {
-    // polygon-rings: 8 hexagonal rings scrolling along Z
+    // polygon-rings: 8 concentric hexagonal rings facing the camera, scrolling toward it along Z
     float ring = floor(seed * 8.0);
     float z = mod((ring / 8.0 + u_time * 0.05) , 1.0) * 2.0 * VOLUME_WORLD - VOLUME_WORLD;
-    float a = phase * TAU + u_time * 0.15;
-    float rt = polygonRadius(a, 6.0, 3.0);
-    return vec3(cos(a) * rt, sin(a) * rt, z);
+    // Angle comes from the agent's seed (stable): flow modes advance `phase` far faster than a capped agent can chase.
+    float theta = fract(seed * 8.0) * TAU + u_time * 0.15;
+    float ringRadius = polygonRadius(theta, 6.0, 5.0);
+    vec3 target = vec3(0.0, 0.0, z);
+    target.xy = ringRadius * vec2(cos(theta), sin(theta));
+    return tiltToWorld(target);
   }
   if (u_formationType == 3) {
     // supernova-shell: fibonacci shell that swells on bass / onset
@@ -410,8 +430,10 @@ void main() {
     // Stage 3 formations + oscillation layer on top of the active flow mode.
     vec3 target = formationTarget(pos, seed, phase, uid) + oscillationOffset(pos, seed, phase);
     float pull = u_formationType == 0 ? 1.5 : 7.0;
+    // Camera-facing tunnel / rings: the formation dominates the flow mode's centre-seeking forces so the full ring reads.
+    if (u_formationType == 1 || u_formationType == 2) F *= 0.15;
     F += (target - pos) * pull - (u_formationType == 0 ? vec3(0.0) : vel * 2.6);
-    if (u_formationType == 1) F.z -= 1.8 + 3.0 * u_rms + 2.0 * u_bass;
+    if (u_formationType == 1) F += tiltToWorld(vec3(0.0, 0.0, 1.8 + 3.0 * u_rms + 2.0 * u_bass));
   }
 
   // Soft spherical boundary keeps every agent in the camera volume.
@@ -427,8 +449,14 @@ void main() {
     if (s > hi) vel *= hi / s;
   }
 
-  // neon-tunnel streams along -Z and re-enters at the far end of the volume.
-  if (u_pulseLayout < 0 && u_formationType == 1 && pos.z < -VOLUME_WORLD) pos.z += 2.0 * VOLUME_WORLD;
+  // neon-tunnel streams toward the camera (+Z in the tilted formation frame) and re-enters at the far end.
+  if (u_pulseLayout < 0 && u_formationType == 1) {
+    vec3 local = tiltToFormation(pos);
+    if (local.z > VOLUME_WORLD) {
+      local.z -= 2.0 * VOLUME_WORLD;
+      pos = tiltToWorld(local);
+    }
+  }
 
   // NaN / runaway guard.
   if (any(isnan(pos)) || any(isinf(pos)) || length(pos) > 40.0) {

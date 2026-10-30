@@ -69,6 +69,10 @@ Headless Chrome 156 (SwiftShader) loaded `index.html`, compiled `aurora-ribbons.
 
 Pages is enabled and serving Stage 3 from the `main` branch root (`/`). https://musicman12091.github.io/aiu-zur-visualizer/ returned HTTP 200 on 2026-10-28 (America/Regina) with Stage 3 markers (`pulse-field-3d`, `neon-tunnel`). Live headless Chrome smoke against github.io passed with 0 console/page/WebGL errors and `destinationConnections` 0.
 
+## Stage 3.2 (ZUR-GH-004, branch `zur-stage3.2`)
+
+Neon saturation patch: `zur_state_v3_2` migration (copper-teal / older schema → neon-tunnel, 2k, 1.35, 0.28, comet), saturated neon palettes, Scene/Palette/Hue on top of the HUD with a Hide HUD button, bounded `crowdNorm` radiance and premultiplied capsules, chromatic dart shading, camera-facing XY tunnel/rings, kaleidoscope corner clamp fix and a dynamic `u_viewportYOffset`. Verified with `node tests/verify-contracts.mjs` (61 passed), `node tests/smoke-stage3.mjs` and `node tests/smoke-stage3.2.mjs` (Galaxy A57 412×915) on headless Chrome + SwiftShader. Details are in `CONTRACTS.md`.
+
 ## Not in this stage
 
 `musicman12091/aiu-dj-player` was not modified. Further scenes and the Butterchurn adapter are later stages.

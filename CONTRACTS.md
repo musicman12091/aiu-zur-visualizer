@@ -230,7 +230,7 @@ Source: ZUR Blueprint v2.1 Part 4 and the ZUR-GH-002 ticket. Stage 2 adds a seco
 | `kaleidoSpin` | boolean — beat-synced rotation |
 | `particleCountTier` | `auto`, 64, 128, 256, 512, 1k, 2k, 4k, 16k, 32k, 64k (default `1k`); Stage 3 also adds densityAutoScale, trailLength, trailType, formationType, oscillationType, oscillationAmount, oscillationSpeed, pulseLayout |
 
-Settings persist in `localStorage["zur.preset.v2"]` and in the URL as `?preset=scene:particles_flow:fish_shape:dart_size:1.5_k:6_spin:1_count:auto` (a bare flow name such as `?preset=gas` also works). URL state wins over storage on load.
+Settings persist in `localStorage["zur_state_v3_2"]` (older keys migrate, see Stage 3.2) and in the URL as `?preset=scene:particles_flow:fish_shape:dart_size:1.5_k:6_spin:1_count:auto` (a bare flow name such as `?preset=gas` also works). URL state wins over storage on load.
 
 ## Transform-feedback state
 
@@ -261,3 +261,41 @@ Settings persist in `localStorage["zur.preset.v2"]` and in the URL as `?preset=s
 - `node tests/verify-contracts.mjs`: Stage 1 and Stage 2 math and source contracts.
 - `node tests/smoke-headless.mjs`: Stage 1 headless oscillator smoke.
 - `node tests/smoke-stage2.mjs`: serves `http://localhost:8080` and checks that the TF and render programs link with empty info logs, that TF advances state, that all 4 modes, 4 sizes and 6 kaleidoscope settings render non-black with 0 GL errors, 0 `console.error` and 0 page errors, and that persistence and `?preset=` work. The FPS gate (≥ 55 fps) is enforced on hardware GPUs. On software rasterizers (SwiftShader) it is report-only unless `ZUR_STRICT_FPS=1`.
+
+## Stage 3.2 — neon saturation, XY formations, HUD viewport (ZUR-GH-004)
+
+### Storage migration
+
+- Key `zur_state_v3_2`, payload `{ "storageSchema": 3.2, "preset": <preset> }`. On load the key is read first, then the legacy keys `zur_state_v3`, `zur_state_v2`, `zur_state_v1`, `zur.preset.v2`, `zur.preset.v1` (bare presets, schema 0).
+- Any payload with `storageSchema < 3.2`, or a cached `paletteId === "copper-teal"`, is force-upgraded to `paletteId: "neon-tunnel"`, `particleCountTier: "2k"`, `particleSize: 1.35`, `trailLength: 0.28`, `trailType: "comet"`. `copper-teal` stays available for Mode A/B presets but is never the migrated default.
+- With no stored state the Stage 3 defaults still apply.
+
+### Neon palettes
+
+`neon-tunnel`, `cyber-laser`, `solar-plasma`, `biolum-ocean` and `emerald-matrix` have HSV saturation ≥ 0.85 on every stop and no `#FFFFFF` stop (the 5th stop is hyper-saturated neon such as `#FF00FF`, `#00FFFF` or `#39FF14`).
+
+### Bounded radiance (RGBA8 FBO safe)
+
+- `crowdNorm = 1 / (1 + 0.32 · u_particleSize² · sqrt(max(u_activeCount, 64) / 1024))` (`render.frag.glsl`, mirrored by `crowdNorm()` in `particleMath.js`). `u_particleSize` and `u_activeCount` are render uniforms.
+- Sprite profile: `halo = exp(-r² · 4.5)` keeps 100% saturated palette colour; the white-hot core is a pinprick `core = exp(-r² · 42) · 0.30`.
+- Velocity Capsule: premultiplied blend `gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA)`, alpha `halo · 0.40 · crowdNorm`, colour scaled by the same alpha. Darts stay additive (`ONE, ONE`).
+- Dart shading is chromatic: `dartColor = paletteColor · (0.45 + 0.85 · normalShade) + paletteColorSecondary · (0.65 · rim)`; there is no white/grey specular.
+- Post pass: the grey component `min(r,g,b)` is attenuated before the tone map so overlapping hues stay electric.
+
+### Camera-facing formations (`sim.vert.glsl`)
+
+`formationType == 1` (neon-tunnel) and `== 2` (polygon-rings) live in the XY plane: `pos.xy = ringRadius * vec2(cos(theta), sin(theta))`, streaming along Z toward the camera with a ~12° perspective tilt. The formation spring dominates the flow mode (flow forces ×0.15) and ring angles derive from the agent seed, not the flow `phase`.
+
+### Kaleidoscope clamp fix (`kaleido.frag.glsl`)
+
+When `u_kaleidoSegments > 1`: mirrored polar radius `r = 1.0 - abs(fract(r · 0.5) · 2.0 - 1.0)` and outer vignette `smoothstep(1.12, 0.82, rawRadius)`, so FBO border pixels never stretch into corner rays.
+
+### `u_viewportYOffset`
+
+- `float`, NDC units, declared in `render.vert.glsl` (`gl_Position.y += u_viewportYOffset * gl_Position.w`) and `kaleido.frag.glsl` (fold centre), set from `ParticleSystem3D.js`.
+- `RenderHost` computes the target: `+0.38` while the HUD drawer is open AND the viewport is portrait (`height > width`), otherwise `0.0`, and glides toward it exponentially (`stepViewportYOffset`, rate 7 s⁻¹). The swarm therefore centres in the visible upper viewport above the drawer and recentres smoothly when the HUD is hidden.
+- HUD: Scene, Palette and Hue shift sit at the top; the sticky `[▼ Hide HUD / Fullscreen]` button and a tap on the canvas toggle the drawer; `Pulse field layout` is hidden unless `sceneId === "pulse-field-3d"`.
+
+### Tests
+
+- `node tests/smoke-stage3.2.mjs`: Galaxy A57 portrait `412×915` (port 8082) — chromatic saturation `mean(max(R,G,B) − min(R,G,B)) > 0.35` on non-black pixels, Velocity Capsule `particleSize 3.5` at 16k `meanLuminance < 0.75`, tunnel/rings `verticalSpanRatio > 0.45`, kaleidoscope 4/6/8/12/16, viewport offset glide, and 0 console/page/WebGL errors with `destinationConnections === 0`. Screenshots go to `ZUR_SHOTS` (default `/workspace/artifacts/zur-stage3.2`).

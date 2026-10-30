@@ -180,6 +180,71 @@ function isObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+/** Stage 3.2 persisted state: `{ storageSchema, preset }` under this key. Older keys are migrated on load. */
+export const STORAGE_KEY = "zur_state_v3_2";
+export const STORAGE_SCHEMA = 3.2;
+export const LEGACY_STORAGE_KEYS = Object.freeze(["zur_state_v3", "zur_state_v2", "zur_state_v1", "zur.preset.v2", "zur.preset.v1"]);
+/** Forced on any cached state older than v3.2 or still on copper-teal (grey-prone, small, dim). */
+export const V3_2_UPGRADE_DEFAULTS = Object.freeze({
+  paletteId: "neon-tunnel",
+  particleCountTier: "2k",
+  particleSize: 1.35,
+  trailLength: 0.28,
+  trailType: "comet",
+});
+
+export function upgradeToV32(preset) {
+  const next = JSON.parse(JSON.stringify(preset));
+  next.visual = { ...next.visual, paletteId: V3_2_UPGRADE_DEFAULTS.paletteId };
+  next.particles = normalizeParticles({
+    ...(next.particles || {}),
+    particleCountTier: V3_2_UPGRADE_DEFAULTS.particleCountTier,
+    particleSize: V3_2_UPGRADE_DEFAULTS.particleSize,
+    trailLength: V3_2_UPGRADE_DEFAULTS.trailLength,
+    trailType: V3_2_UPGRADE_DEFAULTS.trailType,
+  });
+  return next;
+}
+
+export function serializeStoredState(preset) {
+  return JSON.stringify({ storageSchema: STORAGE_SCHEMA, preset });
+}
+
+/** Parses one stored payload (v3.2 envelope or a legacy bare preset). Returns null when unusable. */
+export function migrateStoredPayload(raw) {
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!isObject(parsed)) return null;
+  const enveloped = isObject(parsed.preset);
+  const schema = enveloped && Number.isFinite(parsed.storageSchema) ? parsed.storageSchema : 0;
+  const preset = enveloped ? parsed.preset : parsed;
+  if (isObject(preset.particles)) preset.particles = normalizeParticles(preset.particles);
+  const checked = validatePreset(preset);
+  if (!checked.ok) return null;
+  const upgrade = schema < STORAGE_SCHEMA || checked.preset.visual.paletteId === "copper-teal";
+  return { preset: upgrade ? upgradeToV32(checked.preset) : checked.preset, migrated: upgrade };
+}
+
+/** Reads zur_state_v3_2, falling back to the newest legacy key. Returns null when nothing usable is stored. */
+export function loadStoredState(storage) {
+  for (const key of [STORAGE_KEY, ...LEGACY_STORAGE_KEYS]) {
+    let raw = null;
+    try {
+      raw = storage.getItem(key);
+    } catch {
+      return null;
+    }
+    if (!raw) continue;
+    const result = migrateStoredPayload(raw);
+    if (result) return { ...result, key };
+  }
+  return null;
+}
+
 function rejectExecutable(value, path, errors) {
   if (typeof value === "function" || typeof value === "symbol") {
     errors.push(`${path} must be JSON data`);

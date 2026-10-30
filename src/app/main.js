@@ -3,7 +3,10 @@ import {
   MODE_A_PRESET,
   MODE_B_PRESET,
   STAGE2_DEFAULT_PRESET,
+  STORAGE_KEY,
   applyModeKeepingScene,
+  loadStoredState,
+  serializeStoredState,
   validatePreset,
 } from "./AppState.js";
 import { FeatureExtractor } from "../audio/FeatureExtractor.js";
@@ -35,17 +38,10 @@ import {
   normalizeParticles,
 } from "../render/particleMath.js";
 
-// v2: Stage 2 adds `particles` + the particle scene default. Stage 1 v1 data is left untouched.
-const STORAGE_KEY = "zur.preset.v2";
-
+// zur_state_v3_2: older keys (zur_state_v3 / v2, zur.preset.v2) migrate through loadStoredState.
 function loadStoredPreset() {
   try {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (!saved) return STAGE2_DEFAULT_PRESET;
-    const parsed = JSON.parse(saved);
-    if (parsed && typeof parsed.particles === "object") parsed.particles = normalizeParticles(parsed.particles);
-    const result = validatePreset(parsed);
-    return result.ok ? result.preset : STAGE2_DEFAULT_PRESET;
+    return loadStoredState(localStorage)?.preset || STAGE2_DEFAULT_PRESET;
   } catch {
     return STAGE2_DEFAULT_PRESET;
   }
@@ -130,7 +126,7 @@ document.addEventListener("visibilitychange", () => {
 
 function persist() {
   try {
-    localStorage.setItem(STORAGE_KEY, state.exportPreset());
+    localStorage.setItem(STORAGE_KEY, serializeStoredState(state.preset));
   } catch {
     // Private mode can reject storage; the session still runs.
   }
@@ -182,6 +178,7 @@ const host = new RenderHost({
   transition,
   getPreset: () => state.preset,
   readAudio: readSnapshot,
+  isHudOpen: () => hud.isOpen(),
   onFrame: ({ frame, fps }) => {
     hud.setFrame(frame, fps);
     if (fps && state.status.fps !== fps) state.setStatus({ fps });
@@ -338,6 +335,9 @@ async function boot() {
   }
   window.__ZUR_BOOT__ = "ok";
 }
+
+// Tap the canvas to hide / restore the whole HUD drawer (fullscreen swarm).
+canvas.addEventListener("click", () => hud.toggleHidden());
 
 document.addEventListener("pointerdown", () => {
   void acquireWakeLock();

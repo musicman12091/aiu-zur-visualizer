@@ -13,12 +13,16 @@ function palette(...hexes) {
   return hexes.map(hexToLinear);
 }
 
+/** Neon palettes keep every stop at HSV saturation >= 0.85 so additive glow never washes out to grey/white. */
+export const NEON_PALETTE_IDS = Object.freeze(["neon-tunnel", "cyber-laser", "solar-plasma", "biolum-ocean", "emerald-matrix"]);
+export const NEON_MIN_SATURATION = 0.85;
+
 export const PALETTES = {
-  "neon-tunnel": palette("#00F5FF", "#FF00A0", "#7B2CBF", "#0066FF", "#FFFFFF"),
-  "cyber-laser": palette("#FF2D55", "#00FFC6", "#FFE600", "#7A00FF", "#FFFFFF"),
-  "solar-plasma": palette("#FFB300", "#FF5A00", "#FF1F3D", "#FFE08A", "#FFFFFF"),
-  "biolum-ocean": palette("#00FFD0", "#00B3FF", "#3D5AFE", "#B8FF5A", "#E6FFFF"),
-  "emerald-matrix": palette("#00FF6A", "#00C853", "#B6FF9E", "#00A8A8", "#EFFFF4"),
+  "neon-tunnel": palette("#00F5FF", "#FF00A0", "#8A00FF", "#0066FF", "#FF00FF"),
+  "cyber-laser": palette("#FF1744", "#00FFC6", "#FFE600", "#7A00FF", "#00FFFF"),
+  "solar-plasma": palette("#FFB300", "#FF5A00", "#FF1F3D", "#FFD000", "#FF00FF"),
+  "biolum-ocean": palette("#00FFD0", "#00B3FF", "#2040FF", "#9DFF00", "#00FFFF"),
+  "emerald-matrix": palette("#00FF6A", "#00C853", "#7CFF00", "#00A8A8", "#39FF14"),
   "copper-teal": palette("#D4896A", "#E8B86D", "#F3E6D0", "#1FBEB0", "#14324A"),
 };
 
