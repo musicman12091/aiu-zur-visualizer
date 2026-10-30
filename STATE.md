@@ -82,11 +82,15 @@ Pages is enabled and serving Stage 3 from the `main` branch root (`/`). https://
 
 `musicman12091/aiu-dj-player` was not modified. Further scenes and the Butterchurn adapter are later stages.
 
-## Stage 4 — ZUR-GH-005
+## Stage 4 — ZUR-GH-005 (merged)
 
-- implementation: Stage 4 VJ Megastructure is wired on the current task branch (`copilot/zur-stage4`).
-- scope: Physarum Neural Web chemotaxis; bounded raymarched Mandelbulb and fractal-core particle collision; browser/Node logo attractor targets; spectral canyon waterfall terrain; camera director and nine-sample post-FX; opt-in VJ autopilot with manual-touch pause.
-- state: `zur_state_v4_0` / schema 4.0, one-time `zur_v4_neon_forced` copper-teal reset, `zur-shell-v5` service worker.
-- contracts: `node tests/verify-contracts.mjs` is expanded to 75+ checks. Run results are recorded with the implementation update.
-- PR request: `ZUR-GH-005 Stage 4 VJ Megastructure`, base `main`; leave open for Ori audit and do not request `@copilot` review.
-- Ori audit fixes (zur-stage4): spectral-canyon pitch now looks DOWN at the terrain (was all sky) and lifts with `u_viewportYOffset`; logo-attractor targets use a golden-ratio stride so any active prefix covers the whole glyph; `sw.js` treats navigations / directory URLs as network-first. `node tests/verify-contracts.mjs`: 84 passed. `tests/smoke-stage3.2.mjs` @ 412x915: PASS, consoleErrors 0, pageErrors 0, webglWarnings 0.
+- status: squash-merged to `main` — COMPLETE
+- commit_sha (main, squash): `aff89982c8864079397db39f690a6530abd2b22f` — PR https://github.com/musicman12091/aiu-zur-visualizer/pull/5 (branch `copilot/zur-stage4` heads through `a313045` greenlight fixes; branch deleted)
+- Ori 6-point pre-merge audit: PASS A–F (VAO dual logoTargetVBO, analytic physarum / no FBO feedback, ≤9 kaleido taps, `zur-shell-v5` + `zur_state_v4_0`, HUD/scenes/autopilot, contracts+smoke). No `@copilot` PR review.
+- Greenlight fixes on merge head: Mode/blueprint presets default `neon-tunnel` (`hueShift: 0`); `logo-attractor` floors active agents at 16,384 with pull 16 / damp 5.5 / curl×0.05.
+- scope: Physarum Neural Web; fractal-core + megastructure-3d Mandelbulb; logo-attractor dual-VAO; spectral-canyon-3d waterfall; cameraMode + CA/GodRays ≤9 taps; VJAutopilot.
+- state: `zur_state_v4_0` / schema 4.0, `zur_v4_neon_forced`, `zur-shell-v5` Network-First for navigations / `.html` / `.js` / `.glsl`.
+- contracts: `node tests/verify-contracts.mjs` → 86 passed (was 61 at Stage 3.2).
+- headless: `tests/smoke-stage3.2.mjs` @ 412×915 PASS — console.error 0, pageerror 0, WebGL warnings 0; Stage 4 scenes included.
+- pages_url: https://musicman12091.github.io/aiu-zur-visualizer/
+- pages_verified_http: 200 on 2026-10-30 (America/Regina); live markers `zur_state_v4_0`, `zur-shell-v5`, Mode presets `neon-tunnel` (Last-Modified Fri, 30 Oct 2026 22:00:44 GMT).
