@@ -1,6 +1,7 @@
 import {
   AGENTS_PER_ROW,
   BYTES_PER_AGENT,
+  DEFAULT_PARTICLES,
   FLOATS_PER_AGENT,
   FLOW_DAMPING_PER_STEP,
   FLOW_MODES,
@@ -27,6 +28,7 @@ import {
   trailRadianceScale,
   visibleThreshold,
 } from "./particleMath.js";
+import { sampleLogoTargets } from "./LogoAttractor.js";
 
 export const SHADER_FILES = Object.freeze({
   sim: "sim.vert.glsl",
@@ -36,6 +38,8 @@ export const SHADER_FILES = Object.freeze({
   postVert: "post.vert.glsl",
   trailFrag: "trail.frag.glsl",
   kaleidoFrag: "kaleido.frag.glsl",
+  coreFrag: "core.frag.glsl",
+  canyonFrag: "spectral-canyon.frag.glsl",
 });
 
 /** Fetches every Stage 2 shader next to src/shaders/. */
@@ -167,7 +171,7 @@ function multiply(out, a, b) {
 const SIM_UNIFORMS = [
   "u_dt", "u_time", "u_mode", "u_count", "u_damping", "u_rms", "u_sub", "u_bass", "u_mid", "u_high",
   "u_onset", "u_waveSpeed", "u_shock", "u_neighbors", "u_useNeighbors",
-  "u_formationType", "u_oscillationType", "u_oscillationAmount", "u_oscillationSpeed", "u_pulseLayout", "u_bands",
+  "u_formationType", "u_oscillationType", "u_oscillationAmount", "u_oscillationSpeed", "u_pulseLayout", "u_megastructure", "u_bands",
 ];
 const RENDER_UNIFORMS = [
   "u_viewProj", "u_camPos", "u_resolution", "u_projScale", "u_shape", "u_size", "u_minRadiusPx",
@@ -176,7 +180,10 @@ const RENDER_UNIFORMS = [
   "u_trailType", "u_trailLength", "u_densityScaleBoost", "u_pulseLayout", "u_bands",
   "u_particleSize", "u_activeCount", "u_viewportYOffset",
 ];
-const POST_UNIFORMS = ["u_scene", "u_resolution", "u_kaleidoSegments", "u_kaleidoAngle", "u_kaleidoZoom", "u_exposure", "u_blackFloor", "u_viewportYOffset"];
+const POST_UNIFORMS = [
+  "u_scene", "u_resolution", "u_kaleidoSegments", "u_kaleidoAngle", "u_kaleidoZoom",
+  "u_exposure", "u_blackFloor", "u_viewportYOffset", "u_chromaticAberration", "u_godRays",
+];
 
 /**
  * WebGL2 transform-feedback particle scene. Shares the Stage 1 ShaderHost
@@ -208,11 +215,16 @@ export class ParticleSystem3D {
     this.lastShockAt = -10;
     this.shockCursor = 0;
     this.shock = createShockBuffer(); // every slot starts empty (w < 0), see sim.vert.glsl
+    this.logoText = DEFAULT_PARTICLES.attractorText;
+    this.logoTargets = sampleLogoTargets(this.logoText, MAX_PARTICLES);
     this.viewProj = new Float32Array(16);
     this.view = new Float32Array(16);
     this.proj = new Float32Array(16);
     this.eye = new Float32Array(3);
     this.origin = new Float32Array(3);
+    this.coreForward = new Float32Array(3);
+    this.coreRight = new Float32Array(3);
+    this.coreUp = new Float32Array(3);
     this.lightDir = new Float32Array([0.35, 0.82, 0.45]);
     this.rimColor = new Float32Array(3);
     this.bands = new Float32Array(5);
@@ -229,10 +241,14 @@ export class ParticleSystem3D {
       this.renderProgram = link(gl, s.renderVert, s.renderFrag, "render");
       this.trailProgram = link(gl, s.postVert, s.trailFrag, "trail");
       this.postProgram = link(gl, s.postVert, s.kaleidoFrag, "kaleido");
+      this.coreProgram = link(gl, s.postVert, s.coreFrag, "fractal-core");
       this.simLoc = locations(gl, this.simProgram, SIM_UNIFORMS);
       this.renderLoc = locations(gl, this.renderProgram, RENDER_UNIFORMS);
       this.trailLoc = locations(gl, this.trailProgram, ["u_fade", "u_trailType", "u_trailLength", "u_time"]);
       this.postLoc = locations(gl, this.postProgram, POST_UNIFORMS);
+      this.coreLoc = locations(gl, this.coreProgram, [
+        "u_resolution", "u_eye", "u_forward", "u_right", "u_up", "u_palette", "u_time", "u_bass", "u_steps",
+      ]);
 
       // Ping-pong interleaved Float32 state: [a_pos vec4 | a_vel vec4] x MAX_PARTICLES.
       this.buffers = [gl.createBuffer(), gl.createBuffer()];
@@ -240,12 +256,15 @@ export class ParticleSystem3D {
         gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
         gl.bufferData(gl.ARRAY_BUFFER, this.initialState, gl.DYNAMIC_COPY);
       }
+      this.logoTargetVBO = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.logoTargetVBO);
+      gl.bufferData(gl.ARRAY_BUFFER, this.logoTargets, gl.DYNAMIC_DRAW);
       gl.bindBuffer(gl.ARRAY_BUFFER, null);
 
       this.updateVaos = [gl.createVertexArray(), gl.createVertexArray()];
       this.renderVaos = [gl.createVertexArray(), gl.createVertexArray()];
       for (let i = 0; i < 2; i += 1) {
-        this._bindStateVao(this.updateVaos[i], this.buffers[i], 0);
+        this._bindStateVao(this.updateVaos[i], this.buffers[i], 0, true);
         this._bindStateVao(this.renderVaos[i], this.buffers[i], 1);
       }
       this.emptyVao = gl.createVertexArray();
@@ -276,7 +295,7 @@ export class ParticleSystem3D {
     }
   }
 
-  _bindStateVao(vao, buffer, divisor) {
+  _bindStateVao(vao, buffer, divisor, withLogoTarget = false) {
     const gl = this.gl;
     gl.bindVertexArray(vao);
     gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
@@ -286,6 +305,15 @@ export class ParticleSystem3D {
     gl.enableVertexAttribArray(1);
     gl.vertexAttribPointer(1, 4, gl.FLOAT, false, BYTES_PER_AGENT, 16);
     gl.vertexAttribDivisor(1, divisor);
+    if (withLogoTarget) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.logoTargetVBO);
+      gl.enableVertexAttribArray(2);
+      gl.vertexAttribPointer(2, 4, gl.FLOAT, false, 16, 0);
+      gl.vertexAttribDivisor(2, 0);
+    } else {
+      gl.disableVertexAttribArray(2);
+      gl.vertexAttribDivisor(2, 0);
+    }
     gl.bindVertexArray(null);
     gl.bindBuffer(gl.ARRAY_BUFFER, null);
   }
@@ -361,6 +389,10 @@ export class ParticleSystem3D {
     this.slowWindows = 0;
   }
 
+  triggerShockwave(rms = 0) {
+    this._pushShock(this.simTime, rms);
+  }
+
   _pushShock(time, rms) {
     const group = (this.shockCursor * 3 + 1) % 5;
     const p = lissajous(group, time);
@@ -389,6 +421,14 @@ export class ParticleSystem3D {
     const tierCount = resolveParticleCount(particles.particleCountTier, this.mobile);
     this.count = particles.particleCountTier === "auto" ? this.autoCount : tierCount;
     const count = this.count;
+    const attractorText = particles.attractorText || DEFAULT_PARTICLES.attractorText;
+    if (attractorText !== this.logoText) {
+      this.logoText = attractorText;
+      this.logoTargets = sampleLogoTargets(attractorText, MAX_PARTICLES);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.logoTargetVBO);
+      gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.logoTargets);
+      gl.bindBuffer(gl.ARRAY_BUFFER, null);
+    }
     const pulse = Boolean(extras.pulse);
     const pulseLayout = pulse ? Math.max(0, PULSE_LAYOUTS.indexOf(particles.pulseLayout)) : -1;
     const trailType = Math.max(0, TRAIL_TYPES.indexOf(particles.trailType));
@@ -417,7 +457,7 @@ export class ParticleSystem3D {
     this.accumulator = Math.max(0, acc);
     this.stepsLastFrame = steps;
 
-    const useNeighbors = modeIndex >= 2 && !pulse ? 1 : 0;
+    const useNeighbors = modeIndex >= 2 && modeIndex <= 3 && !pulse ? 1 : 0;
     if (steps > 0) {
       gl.useProgram(this.simProgram);
       const L = this.simLoc;
@@ -439,6 +479,7 @@ export class ParticleSystem3D {
       gl.uniform1f(L.u_oscillationAmount, particles.oscillationAmount);
       gl.uniform1f(L.u_oscillationSpeed, particles.oscillationSpeed);
       gl.uniform1i(L.u_pulseLayout, pulseLayout);
+      gl.uniform1i(L.u_megastructure, extras.megastructure ? 1 : 0);
       gl.uniform1fv(L.u_bands, this.bands);
       gl.uniform1i(L.u_neighbors, 1);
       if (useNeighbors) {
@@ -474,14 +515,29 @@ export class ParticleSystem3D {
     const t = this.simTime;
     // Tunnel / ring formations face the camera down the Z axis (sim.vert.glsl adds the 12° tilt), with a gentle sway.
     const downZ = !pulse && (particles.formationType === "neon-tunnel" || particles.formationType === "polygon-rings");
-    const orbit = downZ ? Math.sin(t * 0.09) * 0.18 : t * 0.06;
+    const waveGrid = pulse && particles.pulseLayout === "wave-grid";
+    const cameraMode = visual?.cameraMode || "orbit-3d";
+    const orbit = cameraMode === "static" ? 0
+      : downZ ? Math.sin(t * 0.09) * 0.18 : t * 0.06;
     const dist = 11.5 - (frame.bass || 0) * 1.2;
     this.eye[0] = Math.sin(orbit) * dist;
-    this.eye[1] = downZ ? Math.sin(t * 0.07) * 0.4 : 2.2 + Math.sin(t * 0.07) * 1.6;
-    this.eye[2] = Math.cos(orbit) * dist;
+    this.eye[1] = waveGrid ? 8.0 : cameraMode === "static" ? (downZ ? 0 : 2.2)
+      : downZ ? Math.sin(t * 0.07) * 0.4 : 2.2 + Math.sin(t * 0.07) * 1.6;
+    this.eye[2] = cameraMode === "tunnel-fly" ? 9.5 + Math.sin(t * 0.4) * 0.3 : Math.cos(orbit) * dist;
     const aspect = this.width / this.height;
     perspective(this.proj, (50 * Math.PI) / 180, aspect, 0.1, 60);
     lookAt(this.view, this.eye, this.origin);
+    if (cameraMode === "beat-bank") {
+      const bank = Math.sin(t * 2.0) * 0.07 + (frame.onset || 0) * 0.18;
+      const c = Math.cos(bank);
+      const s = Math.sin(bank);
+      for (let column = 0; column < 4; column += 1) {
+        const x = this.view[column * 4];
+        const y = this.view[column * 4 + 1];
+        this.view[column * 4] = x * c - y * s;
+        this.view[column * 4 + 1] = x * s + y * c;
+      }
+    }
     multiply(this.viewProj, this.proj, this.view);
 
     // Pass 1: scene FBO — trail fade, then particles.
@@ -500,6 +556,36 @@ export class ParticleSystem3D {
     gl.uniform1f(this.trailLoc.u_time, t);
     gl.bindVertexArray(this.emptyVao);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+    if (extras.megastructure) {
+      const C = this.coreLoc;
+      const fl = Math.hypot(this.eye[0], this.eye[1], this.eye[2]) || 1;
+      const forward = this.coreForward;
+      const right = this.coreRight;
+      const up = this.coreUp;
+      forward[0] = -this.eye[0] / fl;
+      forward[1] = -this.eye[1] / fl;
+      forward[2] = -this.eye[2] / fl;
+      const rightLength = Math.hypot(forward[2], forward[0]) || 1;
+      right[0] = forward[2] / rightLength;
+      right[1] = 0;
+      right[2] = -forward[0] / rightLength;
+      up[0] = right[1] * forward[2] - right[2] * forward[1];
+      up[1] = right[2] * forward[0] - right[0] * forward[2];
+      up[2] = right[0] * forward[1] - right[1] * forward[0];
+      gl.useProgram(this.coreProgram);
+      gl.uniform2f(C.u_resolution, this.width, this.height);
+      gl.uniform3fv(C.u_eye, this.eye);
+      gl.uniform3fv(C.u_forward, forward);
+      gl.uniform3fv(C.u_right, right);
+      gl.uniform3fv(C.u_up, up);
+      gl.uniform3fv(C.u_palette, palette);
+      gl.uniform1f(C.u_time, t);
+      gl.uniform1f(C.u_bass, frame.bass || 0);
+      gl.uniform1i(C.u_steps, visual?.qualityTier === "safe" ? 16 : 24);
+      gl.bindVertexArray(this.emptyVao);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+    }
 
     const dart = particles.shape !== "capsule";
     gl.depthMask(true);
@@ -569,6 +655,8 @@ export class ParticleSystem3D {
     gl.uniform1f(P.u_exposure, frame.gain ?? 1);
     gl.uniform1f(P.u_blackFloor, this.sceneFormat === "RGBA8" ? 3 / 255 : 0);
     gl.uniform1f(P.u_viewportYOffset, viewportYOffset);
+    gl.uniform1f(P.u_chromaticAberration, visual?.chromaticAberration ?? 0.30);
+    gl.uniform1f(P.u_godRays, visual?.godRays ?? 0.35);
     gl.bindVertexArray(this.emptyVao);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);
@@ -590,5 +678,18 @@ export class ParticleSystem3D {
       kaleidoAngle: this.kaleidoAngle,
       readBuffer: this.read,
     };
+  }
+
+  dispose() {
+    const gl = this.gl;
+    if (!gl) return;
+    for (const vao of [...(this.updateVaos || []), ...(this.renderVaos || [])]) {
+      gl.bindVertexArray(vao);
+      gl.disableVertexAttribArray(2);
+      gl.vertexAttribDivisor(2, 0);
+    }
+    gl.bindVertexArray(null);
+    if (this.logoTargetVBO) gl.deleteBuffer(this.logoTargetVBO);
+    this.logoTargetVBO = null;
   }
 }

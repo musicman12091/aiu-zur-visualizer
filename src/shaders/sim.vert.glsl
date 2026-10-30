@@ -7,13 +7,14 @@ precision highp sampler2D;
 
 layout(location = 0) in vec4 a_pos;
 layout(location = 1) in vec4 a_vel;
+layout(location = 2) in vec4 aLogoTarget;
 
 out vec4 v_pos;
 out vec4 v_vel;
 
 uniform float u_dt;
 uniform float u_time;
-uniform int u_mode;          // 0 fluid, 1 gas, 2 murmuration, 3 fish
+uniform int u_mode;          // 0 fluid, 1 gas, 2 murmuration, 3 fish, 4 physarum
 uniform int u_count;
 uniform float u_damping;     // continuous rate (1/s) from per-step retention
 uniform float u_rms;
@@ -26,11 +27,12 @@ uniform float u_waveSpeed;
 uniform vec4 u_shock[4];     // xyz origin, w birth time (< 0 = empty)
 uniform sampler2D u_neighbors; // RGBA32F, 2 texels per agent, 256 agents per row
 uniform int u_useNeighbors;
-uniform int u_formationType;     // 0 free-3d, 1 neon-tunnel, 2 polygon-rings, 3 supernova-shell
+uniform int u_formationType;     // 0 free-3d, 1 neon-tunnel, 2 polygon-rings, 3 supernova-shell, 4 fractal-core, 5 logo-attractor
 uniform int u_oscillationType;   // 0 off, 1 wave, 2 helix, 3 bounce, 4 pulse
 uniform float u_oscillationAmount;
 uniform float u_oscillationSpeed;
 uniform int u_pulseLayout;       // -1 = swarm scene, 0 band-clouds, 1 geodesic-sphere, 2 wave-grid
+uniform int u_megastructure;
 uniform float u_bands[5];        // sub, bass, lowMid, highMid, treble
 
 const float BOUND_RADIUS = 7.2;
@@ -175,6 +177,44 @@ vec3 shockwaveAcceleration(vec3 pos) {
   return acc;
 }
 
+float cellularRidge(vec3 p) {
+  vec3 cell = floor(p);
+  vec3 local = fract(p);
+  float nearest = 10.0;
+  for (int z = -1; z <= 1; z++) {
+    for (int y = -1; y <= 1; y++) {
+      for (int x = -1; x <= 1; x++) {
+        vec3 neighbor = vec3(float(x), float(y), float(z));
+        vec3 point = neighbor + fract(sin(vec3(
+          dot(cell + neighbor, vec3(127.1, 311.7, 74.7)),
+          dot(cell + neighbor, vec3(269.5, 183.3, 246.1)),
+          dot(cell + neighbor, vec3(113.5, 271.9, 124.6))
+        )) * 43758.5453);
+        nearest = min(nearest, length(local - point));
+      }
+    }
+  }
+  float ridge = 1.0 - clamp(nearest, 0.0, 1.0);
+  return ridge * ridge;
+}
+
+float physarumField(vec3 p) {
+  return cellularRidge(p * 0.65) * 0.57
+    + cellularRidge(p * 1.3 + 7.1) * 0.29
+    + cellularRidge(p * 2.6 - 3.4) * 0.14;
+}
+
+float sdCore(vec3 p) {
+  float angle = atan(p.y, p.x);
+  float lobes = sin(angle * 7.0 + u_time * 0.7) * cos(atan(p.z, length(p.xy)) * 5.0 - u_time * 0.4);
+  float radius = 0.88 + 0.18 * lobes + 0.08 * sin(p.x * 5.0 + p.y * 4.0 + u_time) + 0.12 * u_bass;
+  return length(p) - radius;
+}
+
+vec3 logoAttractorTarget() {
+  return aLogoTarget.xyz;
+}
+
 vec4 fetchNeighbor(int id, int texel) {
   int row = id / 256;
   int col = (id - row * 256) * 2 + texel;
@@ -259,6 +299,11 @@ vec3 formationTarget(vec3 pos, float seed, float phase, uint uid) {
     float R = 3.0 + 1.4 * u_bass + 1.8 * u_onset;
     return vec3(cos(az) * rr, y, sin(az) * rr) * R;
   }
+  if (u_formationType == 4) {
+    vec3 dir = normalize(pos + vec3(1e-4));
+    return dir * (1.45 + 0.5 * seed);
+  }
+  if (u_formationType == 5) return logoAttractorTarget();
   return pos;
 }
 
@@ -311,7 +356,8 @@ vec3 pulseTarget(int id, vec3 pos, float seed, uint uid, out float stiffness) {
       h += clamp(u_bands[b], 0.0, 1.5) * sin(k * (x * cos(dir) + z * sin(dir)) + u_time * w);
     }
     stiffness = 7.0;
-    return vec3(x, h * 1.1, z);
+    float pitch = 0.5585053606; // 32 degrees
+    return vec3(x, h * 1.1 * cos(pitch) - z * sin(pitch), h * 1.1 * sin(pitch) + z * cos(pitch));
   }
   // band-clouds: five clouds around a pentagon; level sets swirl speed and shell scale
   float fb = float(band);
@@ -387,7 +433,7 @@ void main() {
     lo = 0.9;
     hi = 3.4 + 1.5 * u_rms;
     phase = fract(phase + dt * (0.8 + 2.0 * u_mid));
-  } else {
+  } else if (u_mode == 3) {
     // FISH: tight horizontal banking torus + rapid darting alignment + u_high shimmer.
     vec3 flat_ = vec3(pos.x, 0.0, pos.z);
     float rf = length(flat_) + 1e-4;
@@ -410,6 +456,27 @@ void main() {
     lo = 1.2;
     hi = 4.5 + 2.0 * u_high;
     phase = fract(phase + dt * (1.2 + 3.0 * u_high));
+  } else {
+    // Three-sensor chemotaxis: multi-octave cellular ridges steer this neural web.
+    vec2 heading = normalize(vel.xy + vec2(1e-4, 0.0));
+    float sensorAngle = 0.45;
+    vec2 senseForwardDir = heading;
+    vec2 senseLeftDir = vec2(cos(sensorAngle) * heading.x - sin(sensorAngle) * heading.y,
+                             sin(sensorAngle) * heading.x + cos(sensorAngle) * heading.y);
+    vec2 senseRightDir = vec2(cos(sensorAngle) * heading.x + sin(sensorAngle) * heading.y,
+                              -sin(sensorAngle) * heading.x + cos(sensorAngle) * heading.y);
+    float senseLeft = physarumField(pos + vec3(senseLeftDir * 0.14, 0.0));
+    float senseForward = physarumField(pos + vec3(senseForwardDir * 0.14, 0.0));
+    float senseRight = physarumField(pos + vec3(senseRightDir * 0.14, 0.0));
+    float branchJitter = (hashf(uid ^ uint(u_time * 30.0)) - 0.5) * (0.25 + 1.5 * u_onset);
+    vec2 steer = senseForward * senseForwardDir
+      + senseLeft * senseLeftDir * (1.0 + branchJitter)
+      + senseRight * senseRightDir * (1.0 - branchJitter);
+    F = vec3(normalize(steer + vec2(1e-4, 0.0)) * (2.0 + 5.0 * u_onset), 0.0);
+    F += vec3(-pos.x, 0.0, -pos.z) * 0.12;
+    lo = 0.25;
+    hi = 3.0 + 2.0 * u_onset;
+    phase = fract(phase + dt * (0.5 + 2.0 * u_onset));
   }
 
   if (u_pulseLayout >= 0) {
@@ -441,6 +508,19 @@ void main() {
   F += -normalize(pos + 1e-5) * over * over * 6.0;
 
   integrateFrozenDrag(pos, vel, F, k, dt);
+  if (u_formationType == 4 || u_megastructure == 1) {
+    float coreDistance = sdCore(pos);
+    if (coreDistance < 0.0) {
+      const float e = 0.002;
+      vec3 n = normalize(vec3(
+        sdCore(pos + vec3(e, 0.0, 0.0)) - sdCore(pos - vec3(e, 0.0, 0.0)),
+        sdCore(pos + vec3(0.0, e, 0.0)) - sdCore(pos - vec3(0.0, e, 0.0)),
+        sdCore(pos + vec3(0.0, 0.0, e)) - sdCore(pos - vec3(0.0, 0.0, e))
+      ));
+      pos += n * (-coreDistance + 0.015);
+      vel = reflect(vel, n) * (0.85 + 0.35 * u_onset);
+    }
+  }
   if (lo > 0.0) {
     vec3 fallbackDir = normalize(hash3(uid) - 0.5 + 1e-3);
     vel = clampSpeed(vel, lo, hi, fallbackDir);

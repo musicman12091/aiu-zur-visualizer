@@ -25,9 +25,12 @@ import {
 } from "../audio/AudioEngine.js";
 import { ShaderHost } from "../render/ShaderHost.js";
 import { RenderHost } from "../render/RenderHost.js";
+import { SpectralCanyon3D } from "../render/SpectralCanyon3D.js";
 import { TransitionController } from "../render/TransitionController.js";
 import { ControlHUD } from "../controls/ControlHUD.js";
 import { ParticleSystem3D, loadParticleShaders } from "../render/ParticleSystem3D.js";
+import { VJAutopilot, VJ_PHASES } from "./VJAutopilot.js";
+import { NEON_PALETTE_IDS } from "../controls/palettes.js";
 import {
   FLOW_MODES,
   KALEIDO_SEGMENTS,
@@ -78,6 +81,7 @@ const transition = new TransitionController({
   sceneId: state.preset.sceneId,
 });
 const hud = new ControlHUD(document.getElementById("hud-root"), state);
+const vjAutopilot = new VJAutopilot();
 setVideoSink(document.getElementById("capture-sink"));
 
 let wakeLockSentinel = null;
@@ -171,7 +175,8 @@ async function refreshDevices() {
   hud.setDevices(devices);
 }
 
-const host = new RenderHost({
+let host;
+host = new RenderHost({
   canvas,
   shaderHost,
   extractor,
@@ -179,9 +184,22 @@ const host = new RenderHost({
   getPreset: () => state.preset,
   readAudio: readSnapshot,
   isHudOpen: () => hud.isOpen(),
-  onFrame: ({ frame, fps }) => {
+  onFrame: ({ frame, fps, deltaSeconds }) => {
     hud.setFrame(frame, fps);
     if (fps && state.status.fps !== fps) state.setStatus({ fps });
+    const result = vjAutopilot.update(deltaSeconds, state.preset.visual.vjAutopilot);
+    if (result.changed) {
+      const phaseIndex = VJ_PHASES.indexOf(result.phase);
+      state.updatePreset((draft) => {
+        draft.visual.paletteId = NEON_PALETTE_IDS[phaseIndex % NEON_PALETTE_IDS.length];
+        draft.particles = normalizeParticles({
+          ...draft.particles,
+          formationType: ["neon-tunnel", "fractal-core", "logo-attractor"][phaseIndex],
+          kaleidoSegments: [0, 8, 12][phaseIndex],
+        });
+      });
+      if (result.shockwave) host.particleSystem?.triggerShockwave(frame.rms || 0);
+    }
   },
 });
 
@@ -202,6 +220,12 @@ hud.setHandlers({
     if (!result.ok) hud.setError(result.errors[0]);
   },
   particles: (partial) => updateParticles(partial),
+  autopilot: (enabled) => {
+    state.updatePreset((draft) => {
+      draft.visual.vjAutopilot = Boolean(enabled);
+    });
+  },
+  manualTouch: () => vjAutopilot.manualTouch(),
   tab: () => {
     const audio = state.preset.audio;
     const pending = startTabCapture({
@@ -298,8 +322,9 @@ async function boot() {
   shaderHost.setSceneSource(await response.text());
   let particleSystem = null;
   if (shaderHost.gl) {
+    let sources = null;
     try {
-      const sources = await loadParticleShaders(import.meta.url);
+      sources = await loadParticleShaders(import.meta.url);
       particleSystem = new ParticleSystem3D(shaderHost.gl, sources, {
         mobile: isMobileAgent(navigator.userAgent, navigator.maxTouchPoints || 0, window.innerWidth || 1920),
       });
@@ -308,6 +333,13 @@ async function boot() {
       // Aurora stays available; surface the shader log instead of a blank screen.
       hud.setError(`3D particles unavailable: ${error?.message || error}`);
       console.warn(error);
+    }
+    if (sources) {
+      try {
+        host.setSpectralCanyon(new SpectralCanyon3D(shaderHost.gl, sources));
+      } catch (error) {
+        hud.setError(`Spectral canyon unavailable: ${error?.message || error}`);
+      }
     }
   }
   hud.setParticleStatus?.(particleSystem);

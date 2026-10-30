@@ -98,6 +98,7 @@ export class RenderHost {
     this.displayedFps = 0;
     this._raf = 0;
     this.particleSystem = null;
+    this.spectralCanyon = null;
     this.particleError = "";
     this.activeScene = "";
     shaderHost.onContextLost = () => {
@@ -113,6 +114,15 @@ export class RenderHost {
           this.particleError = error?.message || String(error);
         }
       }
+      if (this.spectralCanyon) {
+        try {
+          this.spectralCanyon.gl = this.shaderHost.gl;
+          this.spectralCanyon.init();
+          this.spectralCanyon.resize(this.shaderHost.width, this.shaderHost.height);
+        } catch {
+          this.spectralCanyon.ready = false;
+        }
+      }
       this.applySize();
     };
   }
@@ -125,9 +135,17 @@ export class RenderHost {
     }
   }
 
+  setSpectralCanyon(scenePlugin) {
+    this.spectralCanyon = scenePlugin;
+    if (scenePlugin && this.shaderHost.width) {
+      scenePlugin.resize(this.shaderHost.width, this.shaderHost.height);
+    }
+  }
+
   /** Scene actually drawn this frame: particles when requested and ready, else aurora. */
   resolveScene(preset) {
     if (PARTICLE_SCENE_IDS.includes(preset?.sceneId) && this.particleSystem?.ready) return preset.sceneId;
+    if (preset?.sceneId === "spectral-canyon-3d" && this.spectralCanyon?.ready) return preset.sceneId;
     return "aurora-ribbons";
   }
 
@@ -135,6 +153,7 @@ export class RenderHost {
     const size = resolveRenderSize(this.getPreset(), this.canvas);
     this.shaderHost.resize(size.width, size.height);
     this.particleSystem?.resize(size.width, size.height);
+    this.spectralCanyon?.resize(size.width, size.height);
     return size;
   }
 
@@ -161,6 +180,7 @@ export class RenderHost {
     if (this.shaderHost.width !== size.width || this.shaderHost.height !== size.height) {
       this.shaderHost.resize(size.width, size.height);
       this.particleSystem?.resize(size.width, size.height);
+      this.spectralCanyon?.resize(size.width, size.height);
     }
     let deltaSeconds;
     if (this.lastStamp !== 0) {
@@ -195,6 +215,7 @@ export class RenderHost {
         frequencyDb: this.extractor.silentSpectrum(),
         waveform: this.extractor.silentWaveform(),
       });
+    frame.frequencyDb = snapshot?.frequencyDb || null;
     const transition = this.transition?.update(deltaSeconds, frame.onset) ?? null;
     const visual = preset.visual;
     const mid = clamp01((frame.lowMid + frame.highMid) * 0.5);
@@ -221,27 +242,34 @@ export class RenderHost {
       if (PARTICLE_SCENE_IDS.includes(scene) && this.particleSystem) this.particleSystem.resetAuto();
       this.activeScene = scene;
     }
-    if (PARTICLE_SCENE_IDS.includes(scene)) {
+    if (PARTICLE_SCENE_IDS.includes(scene) || scene === "spectral-canyon-3d") {
       const hudOpen = Boolean(this.isHudOpen?.());
       this.viewportYOffset = stepViewportYOffset(
         this.viewportYOffset,
         viewportYOffsetTarget(hudOpen, this.canvas.clientWidth, this.canvas.clientHeight),
         deltaSeconds,
       );
-      const particles = preset.particles || this._defaultParticles || (this._defaultParticles = normalizeParticles(null));
-      this.particleSystem.render(
-        this.shaderHost.frame,
-        this.shaderHost.palette,
-        particles,
-        visual,
-        this.canvas.width,
-        this.canvas.height,
-        {
-          pulse: scene === PULSE_SCENE_ID,
-          bands: [frame.sub, frame.bass, frame.lowMid, frame.highMid, frame.treble],
-          viewportYOffset: this.viewportYOffset,
-        },
-      );
+      if (scene === "spectral-canyon-3d") {
+        this.spectralCanyon.render(
+          frame, this.shaderHost.palette, this.canvas.width, this.canvas.height, this.viewportYOffset,
+        );
+      } else {
+        const particles = preset.particles || this._defaultParticles || (this._defaultParticles = normalizeParticles(null));
+        this.particleSystem.render(
+          this.shaderHost.frame,
+          this.shaderHost.palette,
+          particles,
+          visual,
+          this.canvas.width,
+          this.canvas.height,
+          {
+            pulse: scene === PULSE_SCENE_ID,
+            megastructure: scene === "megastructure-3d",
+            bands: [frame.sub, frame.bass, frame.lowMid, frame.highMid, frame.treble],
+            viewportYOffset: this.viewportYOffset,
+          },
+        );
+      }
     } else {
       this.shaderHost.render();
     }

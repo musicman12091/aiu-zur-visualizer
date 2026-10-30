@@ -299,3 +299,28 @@ When `u_kaleidoSegments > 1`: mirrored polar radius `r = 1.0 - abs(fract(r · 0.
 ### Tests
 
 - `node tests/smoke-stage3.2.mjs`: Galaxy A57 portrait `412×915` (port 8082) — chromatic saturation `mean(max(R,G,B) − min(R,G,B)) > 0.35` on non-black pixels, Velocity Capsule `particleSize 3.5` at 16k `meanLuminance < 0.75`, tunnel/rings `verticalSpanRatio > 0.45`, kaleidoscope 4/6/8/12/16, viewport offset glide, and 0 console/page/WebGL errors with `destinationConnections === 0`. Screenshots go to `ZUR_SHOTS` (default `/workspace/artifacts/zur-stage3.2`).
+
+## Stage 4 — ZUR-GH-005
+
+### Particle systems
+
+- `FLOW_MODES` appends `physarum` (`u_mode == 4`), a three-sensor chemotaxis mode. The left/forward/right sensors use ±0.45 radians and 0.14 world-unit lookahead against three analytic cellular-ridge octaves; `u_onset` changes the branch jitter. `sim.vert.glsl` never samples a scene framebuffer.
+- `FORMATION_TYPES` appends `fractal-core` and `logo-attractor`. Logo targets are vec4 points from a 512×128 browser canvas; Node uses the deterministic 5×7 bitmap fallback. `aLogoTarget` is location 2 on both update VAOs with divisor 0; render VAOs do not enable it.
+- The `megastructure-3d` Pass 1 draws a bounded Mandelbulb before the particle swarm. Its marcher uses 16 steps in Tier 1 and 24 in higher tiers, and uses the five palette stops. A matching analytic core SDF pushes particles outside and reflects their velocities. No scene-color texture is read by the update shader.
+- `spectral-canyon-3d` is a `SpectralCanyon3D` ScenePlugin with `init`, `resize`, `render`, and `dispose`. It writes one 128×1 row per frame into its 128×64 waterfall texture. Rows use live FFT bins, or a smoothed five-band curve; canyon terrain and Scene 3 wave-grid pitch are 32°.
+
+### Post-FX, camera and autopilot
+
+- Camera modes are `static`, `orbit-3d` (default), `tunnel-fly`, and `beat-bank`.
+- `chromaticAberration` and `godRays` are 0..1 controls, defaulting to 0.30 and 0.35. Kaleidoscope post uses three radial RGB samples and six additive shaft samples (nine `u_scene` reads maximum, without nested loops).
+- `vjAutopilot` defaults false. When enabled it cycles Breakdown → Build-Up → Drop at 12-second dwell intervals, applies a neon palette/formation/kaleidoscope combination, and adds a shockwave on Drop. Manual HUD pointer interaction pauses the cycle for 45 seconds.
+
+### Persistence and offline shell
+
+- Persisted state uses `zur_state_v4_0` / schema 4.0 and reads older keys. The `zur_v4_neon_forced` one-time flag resets a cached copper-teal palette to neon-tunnel with hue shift 0.
+- The `zur-shell-v5` worker skips waiting, claims clients, and uses network-first for `.html`, `.js`, and `.glsl` resources.
+
+### Stage 4 checks
+
+- `node tests/verify-contracts.mjs` contains 75+ passing contract checks for state, shaders, plugin lifecycle, logo fallback, post sample budget, and autopilot timing.
+- Existing browser smoke tests remain available as `npm run smoke`, `npm run smoke:stage2`, `npm run smoke:stage3`, and `npm run smoke:stage3.2`.

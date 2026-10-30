@@ -13,6 +13,8 @@ uniform float u_kaleidoZoom;
 uniform float u_exposure;
 uniform float u_blackFloor;     // RGBA8 fallback: removes 8-bit trail residue
 uniform float u_viewportYOffset; // NDC lift of the swarm (portrait HUD drawer); the mirror centre follows it
+uniform float u_chromaticAberration; // 0..1, three radial RGB samples
+uniform float u_godRays; // 0..1, six additive radial samples
 
 in vec2 v_uv;
 out vec4 fragColor;
@@ -56,7 +58,19 @@ vec3 linearToSRGB(vec3 c) {
 void main() {
   float vignette;
   vec2 uv = kaleidoFold(v_uv, vignette);
-  vec3 scene = texture(u_scene, clamp(uv, vec2(0.0), vec2(1.0))).rgb;
+  vec2 radial = uv - vec2(0.5, 0.5 + 0.5 * u_viewportYOffset);
+  vec2 split = normalize(radial + vec2(1e-5)) * (0.004 * u_chromaticAberration);
+  vec3 scene = vec3(
+    texture(u_scene, clamp(uv + split, vec2(0.0), vec2(1.0))).r,
+    texture(u_scene, clamp(uv, vec2(0.0), vec2(1.0))).g,
+    texture(u_scene, clamp(uv - split, vec2(0.0), vec2(1.0))).b
+  );
+  vec3 rays = vec3(0.0);
+  for (int i = 0; i < 6; i++) {
+    float stepAmount = (float(i) + 1.0) / 6.0;
+    rays += texture(u_scene, clamp(uv - radial * stepAmount * 0.12, vec2(0.0), vec2(1.0))).rgb;
+  }
+  scene += rays * (u_godRays / 6.0) * 0.35;
   scene = max(scene - vec3(u_blackFloor), vec3(0.0)) * vignette;
   // Strip the shared grey component so overlapping cyan + magenta stays electric instead of washing to silver.
   scene -= vec3(min(scene.r, min(scene.g, scene.b))) * 0.7;
