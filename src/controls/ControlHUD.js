@@ -150,6 +150,22 @@ export class ControlHUD {
     topControls.id = "top-controls";
     topControls.append(this.scene.wrap, this.palette.wrap, this.hue.wrap);
     this.body.append(topControls);
+
+    // Prominent Mic / Test oscillator when CAPTURE IDLE — sits under status pills, above the fold.
+    this.audioPrompt = el("div", "row audio-prompt is-idle");
+    this.audioPrompt.id = "audio-prompt";
+    this.audioPrompt.setAttribute("role", "group");
+    this.audioPrompt.setAttribute("aria-label", "Start audio capture");
+    const promptHint = el("p", "audio-prompt-hint", "CAPTURE IDLE — tap to start audio");
+    promptHint.id = "audio-prompt-hint";
+    this.audioPrompt.append(promptHint);
+    this.btnMicPrompt = this._button("btn-mic-prompt", "Mic / call speaker", () => this.handlers.mic?.());
+    this.btnOscPrompt = this._button("btn-oscillator-prompt", "Test oscillator", () => this.handlers.oscillator?.());
+    this.btnMicPrompt.classList.add("audio-prompt-btn");
+    this.btnOscPrompt.classList.add("audio-prompt-btn");
+    this.audioPrompt.append(this.btnMicPrompt, this.btnOscPrompt);
+    this.body.append(this.audioPrompt);
+
     this.title = el("p", "preset-name", "");
     this.body.append(this.title);
 
@@ -184,6 +200,7 @@ export class ControlHUD {
     // Stage 2 — scene + 3D particle swarm controls.
     const stage2 = el("fieldset", "stage2");
     stage2.id = "stage2-controls";
+    this.stage2 = stage2;
     stage2.append(el("legend", "field-label", "Stage 3 · 3D swarm"));
     this.flow = this._select("sel-flow", "Flow mode", FLOW_MODES.map((id) => [id, FLOW_LABELS[id]]), (value) => {
       this.handlers.particles?.({ flowMode: value });
@@ -586,6 +603,14 @@ export class ControlHUD {
     this.pulseLayout.wrap.hidden = preset.sceneId !== PULSE_SCENE_ID;
     this.attractorText.input.value = particles.attractorText;
     this.attractorText.wrap.hidden = particles.formationType !== "logo-attractor";
+    // 3D SWARM controls only for particle swarm / megastructure / pulse (hidden on spectral-canyon & aurora).
+    const swarmHudScenes = new Set(["particle-swarm-3d", "megastructure-3d", "pulse-field-3d"]);
+    if (this.stage2) this.stage2.hidden = !swarmHudScenes.has(preset.sceneId);
+    const captureIdle = (this.state.status.capture || "idle") === "idle";
+    if (this.audioPrompt) {
+      this.audioPrompt.classList.toggle("is-idle", captureIdle);
+      this.audioPrompt.hidden = !captureIdle;
+    }
     this.cameraMode.select.value = visual.cameraMode || "orbit-3d";
     this.chromaticAberration.input.value = String(visual.chromaticAberration ?? 0.30);
     this.chromaticAberration.value.textContent = Number(visual.chromaticAberration ?? 0.30).toFixed(2);

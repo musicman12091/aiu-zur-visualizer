@@ -1506,6 +1506,43 @@ test("Stage 4 docs record the new scene, post effects, autopilot, and migration"
   assert.match(state, /zur_state_v4_0/);
 });
 
+test("Spectral canyon draws neon wireframe ridges with an idle baseline wave", () => {
+  const frag = read("src/shaders/spectral-canyon.frag.glsl");
+  const plugin = read("src/render/SpectralCanyon3D.js");
+  assert.match(frag, /u_silent/);
+  assert.match(frag, /gridEdge/);
+  assert.match(frag, /SCALE = 1\.65/);
+  assert.match(frag, /uv\.y > 0\.65/);
+  assert.match(frag, /idleWave/);
+  assert.match(plugin, /idleSpectrumRow128/);
+  assert.match(plugin, /u_silent/);
+  assert.match(plugin, /frame\.isSilent/);
+});
+
+test("HUD hides 3D swarm on spectral-canyon and prompts Mic/oscillator while CAPTURE IDLE", () => {
+  const hud = read("src/controls/ControlHUD.js");
+  const html = read("index.html");
+  assert.match(hud, /swarmHudScenes/);
+  assert.match(hud, /spectral-canyon/);
+  assert.match(hud, /stage2\.hidden/);
+  assert.match(hud, /audio-prompt/);
+  assert.match(hud, /btn-mic-prompt/);
+  assert.match(hud, /btn-oscillator-prompt/);
+  assert.match(hud, /captureIdle/);
+  assert.match(html, /audio-prompt-pulse/);
+  assert.match(hud, /CAPTURE IDLE/);
+});
+
+test("Smoke asserts spatial contrast for spectral-canyon and megastructure", () => {
+  const smoke = read("tests/smoke-stage3.2.mjs");
+  assert.match(smoke, /lumaStdDev/);
+  assert.match(smoke, /minLuma < 0\.08/);
+  assert.match(smoke, /maxLuma > 0\.55/);
+  assert.match(smoke, /lumaStdDev > 0\.14/);
+  assert.match(smoke, /3D SWARM controls still visible on spectral-canyon-3d/);
+  assert.match(smoke, /CAPTURE IDLE audio prompt missing/);
+});
+
 
 let failed = 0;
 for (const entry of tests) {
