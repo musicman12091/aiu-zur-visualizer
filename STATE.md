@@ -94,3 +94,17 @@ Pages is enabled and serving Stage 3 from the `main` branch root (`/`). https://
 - headless: `tests/smoke-stage3.2.mjs` @ 412×915 PASS — console.error 0, pageerror 0, WebGL warnings 0; Stage 4 scenes included.
 - pages_url: https://musicman12091.github.io/aiu-zur-visualizer/
 - pages_verified_http: 200 on 2026-10-30 (America/Regina); live markers `zur_state_v4_0`, `zur-shell-v5`, Mode presets `neon-tunnel` (Last-Modified Fri, 30 Oct 2026 22:00:44 GMT).
+
+## Hotfix — ZUR-GH-006 (merged)
+
+- status: squash-merged to `main` — COMPLETE
+- commit_sha (main, squash): `0c8966acf97e5d369ba9434ad4e914f41664bf2e` — PR https://github.com/musicman12091/aiu-zur-visualizer/pull/6 (branch `fix/zur-gh-006` head `fdeca8f`; branch deleted)
+- Fixes (Galaxy A57 `aff8998` recording):
+  1. `spectral-canyon-3d` rewritten as dark obsidian sky (upper ~35% luma ≪ 0.05) + glowing 64×64 neon wireframe/ridge grid with idle baseline wave when `frame.isSilent` / CAPTURE IDLE, and audio frequency peaks when live.
+  2. Stage 3 · 3D swarm HUD hidden unless `particle-swarm-3d` / `megastructure-3d` / `pulse-field-3d` (hidden on spectral-canyon & aurora).
+  3. Prominent Mic / Test oscillator prompt under status pills while `capture === "idle"`.
+- Spatial-contrast smoke gate: `minLuma < 0.08`, `maxLuma > 0.55`, `lumaStdDev > 0.14` for spectral-canyon + megastructure (flat gradient walls cannot pass).
+- contracts: `node tests/verify-contracts.mjs` → 89 passed.
+- headless: `tests/smoke-stage3.2.mjs` @ 412×915 PASS — spectralCanyon minLuma≈0.008 maxLuma=1.0 lumaStdDev≈0.160 skyMaxLuma≈0.008; megastructure stdDev≈0.198; console/page/WebGL 0.
+- pages_url: https://musicman12091.github.io/aiu-zur-visualizer/
+- Ori audit: direct `/workspace` patch (no Cursor Cloud Agent, no Copilot CLI wait). No `@copilot` PR review.
