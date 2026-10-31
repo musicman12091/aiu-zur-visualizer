@@ -11,6 +11,8 @@ import {
   SIM_STEP,
   createShockBuffer,
   dampingRateFromRetention,
+  billboardBasis,
+  effectiveTrailLength,
   lissajous,
   OSCILLATION_TYPES,
   PULSE_LAYOUTS,
@@ -172,6 +174,7 @@ const SIM_UNIFORMS = [
   "u_dt", "u_time", "u_mode", "u_count", "u_damping", "u_rms", "u_sub", "u_bass", "u_mid", "u_high",
   "u_onset", "u_waveSpeed", "u_shock", "u_neighbors", "u_useNeighbors",
   "u_formationType", "u_oscillationType", "u_oscillationAmount", "u_oscillationSpeed", "u_pulseLayout", "u_megastructure", "u_bands",
+  "u_billboardRight", "u_billboardUp",
 ];
 const RENDER_UNIFORMS = [
   "u_viewProj", "u_camPos", "u_resolution", "u_projScale", "u_shape", "u_size", "u_minRadiusPx",
@@ -225,6 +228,8 @@ export class ParticleSystem3D {
     this.coreForward = new Float32Array(3);
     this.coreRight = new Float32Array(3);
     this.coreUp = new Float32Array(3);
+    this.billboardRight = new Float32Array([1, 0, 0]);
+    this.billboardUp = new Float32Array([0, 1, 0]);
     this.lightDir = new Float32Array([0.35, 0.82, 0.45]);
     this.rimColor = new Float32Array(3);
     this.bands = new Float32Array(5);
@@ -248,6 +253,7 @@ export class ParticleSystem3D {
       this.postLoc = locations(gl, this.postProgram, POST_UNIFORMS);
       this.coreLoc = locations(gl, this.coreProgram, [
         "u_resolution", "u_eye", "u_forward", "u_right", "u_up", "u_palette", "u_time", "u_bass", "u_steps",
+        "u_viewportYOffset",
       ]);
 
       // Ping-pong interleaved Float32 state: [a_pos vec4 | a_vel vec4] x MAX_PARTICLES.
@@ -436,6 +442,8 @@ export class ParticleSystem3D {
     const pulse = Boolean(extras.pulse);
     const pulseLayout = pulse ? Math.max(0, PULSE_LAYOUTS.indexOf(particles.pulseLayout)) : -1;
     const trailType = Math.max(0, TRAIL_TYPES.indexOf(particles.trailType));
+    // ZUR-GH-007: logo-attractor clamps the effective trail decay (fade + capsule stretch) so glyphs stay sharp.
+    const trailLength = effectiveTrailLength(particles.formationType, particles.trailLength);
     const viewportYOffset = extras.viewportYOffset || 0;
     const densityBoost = densityScaleBoost(count, particles.densityAutoScale);
     for (let i = 0; i < 5; i += 1) this.bands[i] = Math.max(0, extras.bands?.[i] || 0);
@@ -485,6 +493,10 @@ export class ParticleSystem3D {
       gl.uniform1i(L.u_pulseLayout, pulseLayout);
       gl.uniform1i(L.u_megastructure, extras.megastructure ? 1 : 0);
       gl.uniform1fv(L.u_bands, this.bands);
+      // ZUR-GH-007: logo glyph plane billboards onto the active camera (previous frame's eye; slow orbit).
+      billboardBasis(this.eye, this.origin, this.billboardRight, this.billboardUp);
+      gl.uniform3fv(L.u_billboardRight, this.billboardRight);
+      gl.uniform3fv(L.u_billboardUp, this.billboardUp);
       gl.uniform1i(L.u_neighbors, 1);
       if (useNeighbors) {
         // GPU-side copy of the current state for 6-neighbor ring flocking (no CPU readback).
@@ -545,7 +557,7 @@ export class ParticleSystem3D {
     multiply(this.viewProj, this.proj, this.view);
 
     // Pass 1: scene FBO — trail fade, then particles.
-    const keep60 = trailKeepFactor(particles.trailType, particles.trailLength) * densityTrailScale(count, particles.densityAutoScale);
+    const keep60 = trailKeepFactor(particles.trailType, trailLength) * densityTrailScale(count, particles.densityAutoScale);
     const tau = tauFromKeep60(keep60);
     const keep = keepForDt(keep60, dt);
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.scene.framebuffer);
@@ -556,7 +568,7 @@ export class ParticleSystem3D {
     gl.useProgram(this.trailProgram);
     gl.uniform1f(this.trailLoc.u_fade, 1 - keep);
     gl.uniform1i(this.trailLoc.u_trailType, trailType);
-    gl.uniform1f(this.trailLoc.u_trailLength, particles.trailLength);
+    gl.uniform1f(this.trailLoc.u_trailLength, trailLength);
     gl.uniform1f(this.trailLoc.u_time, t);
     gl.bindVertexArray(this.emptyVao);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
@@ -587,6 +599,8 @@ export class ParticleSystem3D {
       gl.uniform1f(C.u_time, t);
       gl.uniform1f(C.u_bass, frame.bass || 0);
       gl.uniform1i(C.u_steps, visual?.qualityTier === "safe" ? 16 : 24);
+      // ZUR-GH-007: core, swarm (u_viewportYOffset in render.vert) and kaleido fold share one optical centre.
+      gl.uniform1f(C.u_viewportYOffset, viewportYOffset);
       gl.bindVertexArray(this.emptyVao);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     }
@@ -622,7 +636,7 @@ export class ParticleSystem3D {
     gl.uniform1f(R.u_intensity, Math.min(1.2, Math.max(0.18, 0.22 * Math.sqrt(16384 / count))) * (dart ? 0.55 : 0.5));
     gl.uniform1f(R.u_radianceScale, trailRadianceScale(dt, tau));
     gl.uniform1i(R.u_trailType, trailType);
-    gl.uniform1f(R.u_trailLength, particles.trailLength);
+    gl.uniform1f(R.u_trailLength, trailLength);
     gl.uniform1f(R.u_densityScaleBoost, densityBoost);
     gl.uniform1i(R.u_pulseLayout, pulseLayout);
     gl.uniform1fv(R.u_bands, this.bands);

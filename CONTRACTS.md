@@ -324,3 +324,30 @@ When `u_kaleidoSegments > 1`: mirrored polar radius `r = 1.0 - abs(fract(r · 0.
 
 - `node tests/verify-contracts.mjs` contains 75+ passing contract checks for state, shaders, plugin lifecycle, logo fallback, post sample budget, and autopilot timing.
 - Existing browser smoke tests remain available as `npm run smoke`, `npm run smoke:stage2`, `npm run smoke:stage3`, and `npm run smoke:stage3.2`.
+
+## ZUR-GH-007 — Stage 4 visual & geometry fixes (Galaxy A57 7-minute capture on `0c8966a`)
+
+- **Shared optical centre.** `core.frag.glsl` (megastructure raymarcher), the swarm (`render.vert.glsl`
+  `gl_Position.y += u_viewportYOffset * w`) and `kaleido.frag.glsl` all use NDC `(0.0, u_viewportYOffset)` =
+  uv `(0.5, 0.5 + 0.5 * u_viewportYOffset)` (`opticalCenterUv()` in `particleMath.js`): `+0.38` with the portrait
+  HUD drawer open, `0.0` when hidden. `ParticleSystem3D` sets `u_viewportYOffset` on the core program, so 4/6/8/12/16
+  mirrors fold around the core instead of over empty space.
+- **Fractal Core formation** (`u_formationType == 4`): `fractalCoreTarget()` — per-agent golden-spiral sphere
+  (`theta = i * 2.39996323`, `phi = acos(1 - 2i/n)`), five counter-rotating tilted orbital planes (`uid % 5`),
+  depth layers, audio breathing that dives into the `sdCore()` valleys, and 30% lobe streams flowing out along the
+  7 lobes. Flow force is scaled by 0.25 so the volume holds; X/Y/Z spread is equal from every orbit angle.
+- **Logo Attractor** (`u_formationType == 5`): oscillation on glyph targets scaled by `LOGO_OSCILLATION_SCALE = 0.08`;
+  `effectiveTrailLength()` clamps the trail to `LOGO_TRAIL_LENGTH_MAX = 0.2` (fade + capsule stretch); glyph plane
+  billboarded onto the camera via `u_billboardRight` / `u_billboardUp` (`billboardBasis()`); the murmuration/fish
+  minimum-speed clamp is released (`lo = 0`) so agents settle on their glyph pixels.
+- **HUD:** `Logo / Attractor Text` select (`sel-attractor-preset`: AI: UNDERGROUND, MON DAAIN, TENTH GATE, ZUR,
+  Custom…) sits directly under `Formation`, visible only while Logo Attractor is active; `txt-attractor` is the
+  custom input (shown for Custom…).
+- **Spectral Canyon 3D** rewritten as a raycast synthwave canyon: flat floor + twin walls (`wallMask(abs(x))`),
+  `z` scroll `u_time * 2.5`, x-frequency ridges displaced by `u_waterfallTex` + `u_bands[5]` (sub→treble across
+  |x|), anti-aliased grid (`GRID_SPACING = 0.5`) on floor and walls, striped palette sun, fog to `u_palette[1]`.
+  Every colour is from `u_palette[0..4]`, sRGB-encoded, luma-capped by `guardNeon()` (`LUMA_CAP = 0.86`): no white.
+- **Tests:** `tests/smoke-zur-gh-007.mjs` (`npm run smoke:gh007`) at 412×915 — core disk lit inside 0/4/8/16 mirrors
+  (HUD open + hidden), fractal-core GPU axis-spread ratio > 0.55 and lit width > 0.35 at a 90° orbit, logo agents on
+  target + ≥ 6 glyph runs under Oscillation 3.00 + Comet 0.81, canyon ≥ 35% upper-viewport pixels with
+  0.15 < luma < 0.90, ≥ 12 grid crossings and max luma < 0.90.

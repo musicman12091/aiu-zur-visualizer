@@ -108,3 +108,13 @@ Pages is enabled and serving Stage 3 from the `main` branch root (`/`). https://
 - headless: `tests/smoke-stage3.2.mjs` @ 412×915 PASS — spectralCanyon minLuma≈0.008 maxLuma=1.0 lumaStdDev≈0.160 skyMaxLuma≈0.008; megastructure stdDev≈0.198; console/page/WebGL 0.
 - pages_url: https://musicman12091.github.io/aiu-zur-visualizer/
 - Ori audit: direct `/workspace` patch (no Cursor Cloud Agent, no Copilot CLI wait). No `@copilot` PR review.
+
+## Fix — ZUR-GH-007 (Stage 4 visual & geometry)
+
+- status: in review on `fix/zur-gh-007`
+- Fixes (Galaxy A57 7-minute capture on `0c8966a`, sheets `ZUR_v40_Sheet_01..06`):
+  1. Kaleidoscope no longer wipes the megastructure core: `core.frag.glsl` + `ParticleSystem3D` share the kaleido optical centre `(0.0, u_viewportYOffset)`.
+  2. `fractal-core` = 3D multi-orbital golden-spiral volumetric shell + 7 lobe streams with audio breathing into SDF valleys (no planar ring).
+  3. `logo-attractor`: oscillation × 0.08, trail clamped to 0.2, camera billboard, agents settle (lo = 0); HUD `Logo / Attractor Text` selector under Formation.
+  4. `spectral-canyon-3d`: synthwave raycast floor + twin walls, `u_time * 2.5` scroll, waterfall + 5-band ridges, palette-only + luma cap.
+- Ori audit: direct `/workspace` patch (no Cursor Cloud Agent, no `cursor/*`, no Copilot CLI wait, no `@copilot` PR review).

@@ -8,6 +8,7 @@ import {
   FLOW_MODES,
   FORMATION_TYPES,
   KALEIDO_SEGMENTS,
+  LOGO_TEXT_PRESETS,
   OSCILLATION_AMOUNT_RANGE,
   OSCILLATION_SPEED_RANGE,
   OSCILLATION_TYPES,
@@ -251,7 +252,23 @@ export class ControlHUD {
     this.pulseLayout = this._select("sel-pulse-layout", "Pulse field layout", labelPairs(PULSE_LAYOUTS, LABELS.layout), (value) => {
       this.handlers.particles?.({ pulseLayout: value });
     });
-    this.attractorText = this._text("txt-attractor", "Attractor text", [
+    // ZUR-GH-007: Logo / Attractor Text preset selector + custom input, shown directly under Formation
+    // whenever Logo Attractor is active ("AI: UNDERGROUND", "MON DAAIN", "TENTH GATE", "ZUR", custom).
+    this.attractorPreset = this._select(
+      "sel-attractor-preset",
+      "Logo / Attractor Text",
+      [...LOGO_TEXT_PRESETS.map((name) => [name, name]), ["custom", "Custom…"]],
+      (value) => {
+        if (value === "custom") {
+          this.attractorText.wrap.hidden = false;
+          this.attractorText.input.focus?.();
+          return;
+        }
+        this.attractorText.input.value = value;
+        this.handlers.particles?.({ attractorText: value });
+      },
+    );
+    this.attractorText = this._text("txt-attractor", "Custom attractor text", [
       "AI: UNDERGROUND", "MON DAAIN", "TENTH GATE", "ZUR",
     ], (value) => this.handlers.particles?.({ attractorText: value }));
     this.cameraMode = this._select("sel-camera-mode", "Camera mode", [
@@ -268,8 +285,9 @@ export class ControlHUD {
     });
     stage2.append(
       this.flow.wrap, this.shape.wrap, this.size.wrap, this.kaleido.wrap, this.spin.label, this.count.wrap,
-      this.density.label, this.trailType.wrap, this.trailLength.wrap, this.formation.wrap, this.oscillation.wrap,
-      this.oscAmount.wrap, this.oscSpeed.wrap, this.pulseLayout.wrap, this.attractorText.wrap,
+      this.density.label, this.trailType.wrap, this.trailLength.wrap,
+      this.formation.wrap, this.attractorPreset.wrap, this.attractorText.wrap, // logo text sits right under Formation
+      this.oscillation.wrap, this.oscAmount.wrap, this.oscSpeed.wrap, this.pulseLayout.wrap,
       this.cameraMode.wrap, this.chromaticAberration.wrap, this.godRays.wrap,
     );
     this.body.append(stage2);
@@ -601,8 +619,14 @@ export class ControlHUD {
     this.oscSpeed.value.textContent = `${Number(particles.oscillationSpeed).toFixed(2)}×`;
     this.pulseLayout.select.value = particles.pulseLayout;
     this.pulseLayout.wrap.hidden = preset.sceneId !== PULSE_SCENE_ID;
-    this.attractorText.input.value = particles.attractorText;
-    this.attractorText.wrap.hidden = particles.formationType !== "logo-attractor";
+    const logoActive = particles.formationType === "logo-attractor";
+    const presetText = LOGO_TEXT_PRESETS.includes(particles.attractorText);
+    if (this.attractorPreset.select.value !== "custom" || presetText) {
+      this.attractorPreset.select.value = presetText ? particles.attractorText : "custom";
+    }
+    this.attractorPreset.wrap.hidden = !logoActive;
+    if (document.activeElement !== this.attractorText.input) this.attractorText.input.value = particles.attractorText;
+    this.attractorText.wrap.hidden = !logoActive || this.attractorPreset.select.value !== "custom";
     // 3D SWARM controls only for particle swarm / megastructure / pulse (hidden on spectral-canyon & aurora).
     const swarmHudScenes = new Set(["particle-swarm-3d", "megastructure-3d", "pulse-field-3d"]);
     if (this.stage2) this.stage2.hidden = !swarmHudScenes.has(preset.sceneId);

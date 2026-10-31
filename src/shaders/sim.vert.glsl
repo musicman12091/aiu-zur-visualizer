@@ -34,6 +34,8 @@ uniform float u_oscillationSpeed;
 uniform int u_pulseLayout;       // -1 = swarm scene, 0 band-clouds, 1 geodesic-sphere, 2 wave-grid
 uniform int u_megastructure;
 uniform float u_bands[5];        // sub, bass, lowMid, highMid, treble
+uniform vec3 u_billboardRight;   // ZUR-GH-007: active camera right (logo-attractor billboard XY)
+uniform vec3 u_billboardUp;      // ZUR-GH-007: active camera up
 
 const float BOUND_RADIUS = 7.2;
 // Spawn / formation volume: the normalized [-1.25, +1.25] cube scaled to world units.
@@ -211,8 +213,60 @@ float sdCore(vec3 p) {
   return length(p) - radius;
 }
 
+// ZUR-GH-007: glyph oscillation is scaled to 8% so Oscillation 3.00 cannot smear the letters.
+const float LOGO_OSCILLATION_SCALE = 0.08;
+
+// ZUR-GH-007: billboard the XY glyph plane onto the active camera (right/up) so text faces the viewer
+// from every orbit angle instead of going edge-on.
 vec3 logoAttractorTarget() {
-  return aLogoTarget.xyz;
+  vec3 right = length(u_billboardRight) > 0.5 ? normalize(u_billboardRight) : vec3(1.0, 0.0, 0.0);
+  vec3 up = length(u_billboardUp) > 0.5 ? normalize(u_billboardUp) : vec3(0.0, 1.0, 0.0);
+  vec3 toward = cross(right, up); // points back at the camera
+  return right * aLogoTarget.x + up * aLogoTarget.y + toward * aLogoTarget.z;
+}
+
+// Rodrigues rotation of v about a unit axis.
+vec3 rotateAxis(vec3 v, vec3 axis, float angle) {
+  float c = cos(angle);
+  float s = sin(angle);
+  return v * c + cross(axis, v) * s + axis * dot(axis, v) * (1.0 - c);
+}
+
+// ZUR-GH-007: fractal-core is a full 3D multi-orbital volumetric shell + lobe streams (never a planar ring).
+// Golden-spiral spherical distribution (theta azimuth = golden angle, phi polar = acos) per agent, split
+// across five tilted orbital planes that counter-rotate, layered in depth, with radial audio-reactive
+// breathing that dives into the sdCore() valleys. 30% of agents ride outward streams along the 7 lobes.
+vec3 fractalCoreTarget(float seed, uint uid) {
+  float n = float(max(u_count, 1));
+  float i = float(uid) + 0.5;
+  float phi = acos(clamp(1.0 - 2.0 * i / n, -1.0, 1.0)); // polar angle, uniform on the sphere
+  float theta = i * 2.39996323;                          // golden-angle azimuth
+  vec3 dir = vec3(sin(phi) * cos(theta), cos(phi), sin(phi) * sin(theta));
+  int orbit = int(uid % 5u);
+  float fo = float(orbit);
+  vec3 axis = normalize(vec3(sin(fo * 1.2566370614 + 0.4), 0.35 + 1.1 * cos(fo * 0.9), cos(fo * 1.2566370614 + 0.4)));
+  float spinDir = mod(fo, 2.0) < 0.5 ? 1.0 : -1.0;
+  float band = clamp(u_bands[orbit], 0.0, 1.5);
+  float stream = hashf(uid ^ 0x51ed270bu);
+  if (stream < 0.30) {
+    // Lobe streams: flow outward from the core along the 7 azimuthal lobe peaks of sdCore().
+    float k = floor(hashf(uid ^ 0x2545f491u) * 7.0);
+    float lobeAz = (1.5707963 - u_time * 0.7 + TAU * k) / 7.0;
+    float el = (hashf(uid ^ 0x68e31da4u) - 0.5) * 1.9 + 0.25 * sin(u_time * 0.3 + k);
+    vec3 lobeDir = vec3(cos(el) * cos(lobeAz), cos(el) * sin(lobeAz), sin(el));
+    lobeDir = rotateAxis(lobeDir, axis, u_time * 0.05 * spinDir);
+    float travel = fract(seed * 3.7 + u_time * (0.18 + 0.25 * band));
+    float R = 1.15 + travel * (2.6 + 1.2 * band) + 0.12 * u_bass;
+    return lobeDir * R;
+  }
+  dir = rotateAxis(dir, axis, u_time * (0.16 + 0.06 * fo) * spinDir);
+  float lobes = sin(atan(dir.y, dir.x) * 7.0 + u_time * 0.7) * cos(atan(dir.z, length(dir.xy)) * 5.0 - u_time * 0.4);
+  float coreRadius = 0.88 + 0.18 * lobes + 0.12 * u_bass;
+  float valley = max(-lobes, 0.0);
+  float layer = fract(seed * 5.0 + i * 0.6180339887);
+  float breathe = 0.18 * sin(u_time * 1.6 + fo * 1.3 + layer * 3.0) + 0.45 * band;
+  float R = coreRadius + 0.42 + 1.25 * layer + breathe * (1.0 - 0.5 * valley) - valley * (0.25 + 0.35 * band);
+  return dir * max(R, coreRadius + 0.12);
 }
 
 vec4 fetchNeighbor(int id, int texel) {
@@ -299,10 +353,7 @@ vec3 formationTarget(vec3 pos, float seed, float phase, uint uid) {
     float R = 3.0 + 1.4 * u_bass + 1.8 * u_onset;
     return vec3(cos(az) * rr, y, sin(az) * rr) * R;
   }
-  if (u_formationType == 4) {
-    vec3 dir = normalize(pos + vec3(1e-4));
-    return dir * (1.45 + 0.5 * seed);
-  }
+  if (u_formationType == 4) return fractalCoreTarget(seed, uid);
   if (u_formationType == 5) return logoAttractorTarget();
   return pos;
 }
@@ -312,6 +363,7 @@ vec3 oscillationOffset(vec3 pos, float seed, float phase) {
   if (u_oscillationType == 0 || u_oscillationAmount <= 0.0) return vec3(0.0);
   float t = u_time * u_oscillationSpeed;
   float amt = u_oscillationAmount * (1.0 + 0.6 * u_bass);
+  if (u_formationType == 5) amt *= LOGO_OSCILLATION_SCALE; // keep glyph targets sharp
   float ang = pos.z * 1.1 + t * 2.0 + seed * TAU;
   vec3 radialDir = normalize(vec3(pos.xy, 0.0) + vec3(1e-4, 0.0, 0.0));
   if (u_oscillationType == 1) {
@@ -500,9 +552,13 @@ void main() {
     // Camera-facing tunnel / rings / logo: formation dominates curl so glyphs stay crisp.
     if (u_formationType == 1 || u_formationType == 2) F *= 0.15;
     if (u_formationType == 5) F *= 0.05; // damp random curl jitter for readable text
+    if (u_formationType == 4) F *= 0.25; // volumetric shell targets dominate the flow field
     float damp = u_formationType == 0 ? 0.0 : (u_formationType == 5 ? 5.5 : 2.6);
     F += (target - pos) * pull - vel * damp;
     if (u_formationType == 1) F += tiltToWorld(vec3(0.0, 0.0, 1.8 + 3.0 * u_rms + 2.0 * u_bass));
+    // ZUR-GH-007: glyph agents must be able to come to rest on their targets. The murmuration / fish
+    // minimum-speed clamp (lo > 0) kept them orbiting ~0.2 world units around each glyph pixel -> pink cloud.
+    if (u_formationType == 5) { lo = 0.0; hi = 6.0; }
   }
 
   // Soft spherical boundary keeps every agent in the camera volume.

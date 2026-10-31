@@ -10,6 +10,9 @@ uniform vec3 u_palette[5];
 uniform float u_time;
 uniform float u_bass;
 uniform int u_steps;
+// ZUR-GH-007: same viewport-shifted optical centre (0.0, u_viewportYOffset) as kaleido.frag.glsl and
+// render.vert.glsl (gl_Position.y += u_viewportYOffset * w), so N-fold mirrors fold AROUND the core.
+uniform float u_viewportYOffset;
 
 out vec4 fragColor;
 
@@ -41,7 +44,9 @@ vec3 coreNormal(vec3 p) {
 }
 
 void main() {
-  vec2 screen = (gl_FragCoord.xy / u_resolution - 0.5) * vec2(u_resolution.x / u_resolution.y, 1.0);
+  // NDC centre of the swarm is (0.0, u_viewportYOffset) -> uv centre (0.5, 0.5 + 0.5 * u_viewportYOffset).
+  vec2 opticalCenter = vec2(0.5, 0.5 + 0.5 * u_viewportYOffset);
+  vec2 screen = (gl_FragCoord.xy / u_resolution - opticalCenter) * vec2(u_resolution.x / u_resolution.y, 1.0);
   vec3 ray = normalize(u_forward + u_right * screen.x * 0.72 + u_up * screen.y * 0.72);
   float nearBound = max(0.0, -dot(u_eye, ray) - 1.35);
   float travel = nearBound;
