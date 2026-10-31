@@ -109,12 +109,17 @@ Pages is enabled and serving Stage 3 from the `main` branch root (`/`). https://
 - pages_url: https://musicman12091.github.io/aiu-zur-visualizer/
 - Ori audit: direct `/workspace` patch (no Cursor Cloud Agent, no Copilot CLI wait). No `@copilot` PR review.
 
-## Fix — ZUR-GH-007 (Stage 4 visual & geometry)
+## Fix — ZUR-GH-007 (Stage 4 visual & geometry) (merged)
 
-- status: in review on `fix/zur-gh-007`
+- status: squash-merged to `main` — COMPLETE
+- commit_sha (main, squash): `c45065fd7481e008e3a8ae1abb7ceb5a9069f294` — PR https://github.com/musicman12091/aiu-zur-visualizer/pull/7 (branch `fix/zur-gh-007` head `c6c27e1`; branch deleted)
 - Fixes (Galaxy A57 7-minute capture on `0c8966a`, sheets `ZUR_v40_Sheet_01..06`):
   1. Kaleidoscope no longer wipes the megastructure core: `core.frag.glsl` + `ParticleSystem3D` share the kaleido optical centre `(0.0, u_viewportYOffset)`.
   2. `fractal-core` = 3D multi-orbital golden-spiral volumetric shell + 7 lobe streams with audio breathing into SDF valleys (no planar ring).
   3. `logo-attractor`: oscillation × 0.08, trail clamped to 0.2, camera billboard, agents settle (lo = 0); HUD `Logo / Attractor Text` selector under Formation.
   4. `spectral-canyon-3d`: synthwave raycast floor + twin walls, `u_time * 2.5` scroll, waterfall + 5-band ridges, palette-only + luma cap.
 - Ori audit: direct `/workspace` patch (no Cursor Cloud Agent, no `cursor/*`, no Copilot CLI wait, no `@copilot` PR review).
+- contracts: `node tests/verify-contracts.mjs` → 101 passed (was 89).
+- headless @ 412×915 (SwiftShader): `tests/smoke-zur-gh-007.mjs` PASS — megastructure core disk lit 1.00 at 0/4/8/16 mirrors (HUD open, offset 0.38) and 16 mirrors HUD hidden (offset 0); fractal-core GPU axis std ≈ 1.65/1.66/1.63 (ratio 0.98), lit width 0.76 at a ~92° orbit; logo `MON DAAIN` agents settle (median target error < 0.06), ≥ 6 glyph runs under Oscillation 3.00 + Comet 0.81, billboarded; canyon upper-viewport mid-luma 0.69 (HUD open) / 0.51 (hidden), grid crossings 35 / 37, max luma 0.62. `tests/smoke-stage3.2.mjs` + `tests/smoke-headless.mjs` PASS; console/page/WebGL 0.
+- known pre-existing: `tests/smoke-stage2.mjs` (localStorage particles) + `tests/smoke-stage3.mjs` (default-key drift) fail identically on `1760b29` main — stale vs Stage 4 defaults, not touched here.
+- pages_url: https://musicman12091.github.io/aiu-zur-visualizer/ — HTTP 200; live markers verified (core `0.5 + 0.5 * u_viewportYOffset`, `fractalCoreTarget`, `LOGO_OSCILLATION_SCALE`, `sel-attractor-preset`, canyon `SCROLL_SPEED = 2.5` + `guardNeon`).
