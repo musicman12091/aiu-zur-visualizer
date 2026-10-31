@@ -176,9 +176,14 @@ try {
         let chromaSum = 0;
         let lit = 0;
         let total = 0;
+        let minLuma = 1;
+        let maxLuma = 0;
+        let skyMaxLuma = 0;
+        const lumas = [];
         let minRow = h;
         let maxRow = -1;
         const rowLit = new Uint16Array(h);
+        const skyFloor = Math.floor(h * 0.65); // GL y grows up; upper ~35% of the screen
         for (let y = 0; y < h; y += 2) {
           for (let x = 0; x < w; x += 2) {
             const i = (y * w + x) * 4;
@@ -187,7 +192,12 @@ try {
             const b = buf[i + 2] / 255;
             const mx = Math.max(r, g, b);
             const mn = Math.min(r, g, b);
-            lumaSum += 0.2126 * r + 0.7152 * g + 0.0722 * b;
+            const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+            lumaSum += luma;
+            lumas.push(luma);
+            minLuma = Math.min(minLuma, luma);
+            maxLuma = Math.max(maxLuma, luma);
+            if (y >= skyFloor) skyMaxLuma = Math.max(skyMaxLuma, luma);
             total += 1;
             if (mx > 0.12) {
               lit += 1;
@@ -196,6 +206,13 @@ try {
             }
           }
         }
+        const meanLuma = total ? lumaSum / total : 0;
+        let varSum = 0;
+        for (const luma of lumas) {
+          const d = luma - meanLuma;
+          varSum += d * d;
+        }
+        const lumaStdDev = total ? Math.sqrt(varSum / total) : 0;
         for (let y = 0; y < h; y += 2) {
           if (rowLit[y] >= 2) {
             minRow = Math.min(minRow, y);
@@ -205,8 +222,12 @@ try {
         resolve({
           w, h,
           litFraction: lit / total,
-          meanLuminance: lumaSum / total,
+          meanLuminance: meanLuma,
           meanChroma: lit ? chromaSum / lit : 0,
+          minLuma,
+          maxLuma,
+          lumaStdDev,
+          skyMaxLuma,
           verticalSpanRatio: maxRow >= minRow ? (maxRow - minRow) / h : 0,
           topRow: minRow / h,
           bottomRow: maxRow / h,
@@ -239,6 +260,20 @@ try {
 
   const diag0 = await evaluate("window.__ZUR_DEBUG__.getDiagnostics()");
   if (diag0.silent !== true || diag0.destinationConnections !== 0) problems.push("AudioEngine not silent");
+  const idlePrompt = await evaluate(`(() => {
+    const prompt = document.getElementById("audio-prompt");
+    const mic = document.getElementById("btn-mic-prompt");
+    const osc = document.getElementById("btn-oscillator-prompt");
+    return {
+      shown: Boolean(prompt) && !prompt.hidden && prompt.classList.contains("is-idle"),
+      mic: Boolean(mic),
+      osc: Boolean(osc),
+      capture: window.__ZUR_DEBUG__.state.status.capture,
+    };
+  })()`);
+  if (!idlePrompt.shown || !idlePrompt.mic || !idlePrompt.osc) {
+    problems.push(`CAPTURE IDLE audio prompt missing ${JSON.stringify(idlePrompt)}`);
+  }
   await evaluate("document.getElementById('btn-oscillator').click()");
   await sleep(2500);
 
@@ -341,6 +376,9 @@ try {
   results.megastructure = mega;
   await shot("stage4-megastructure");
   if (mega.litFraction <= 0) problems.push("megastructure rendered black");
+  if (!(mega.minLuma < 0.08)) problems.push(`megastructure minLuma ${mega.minLuma?.toFixed?.(3)} >= 0.08`);
+  if (!(mega.maxLuma > 0.55)) problems.push(`megastructure maxLuma ${mega.maxLuma?.toFixed?.(3)} <= 0.55`);
+  if (!(mega.lumaStdDev > 0.14)) problems.push(`megastructure lumaStdDev ${mega.lumaStdDev?.toFixed?.(3)} <= 0.14`);
 
   await evaluate(`window.__zurSetSelect("sel-scene", "particle-swarm-3d")`);
   await evaluate(`window.__zurSetSelect("sel-formation", "logo-attractor")`);
@@ -360,10 +398,16 @@ try {
   await evaluate(`window.__zurSetSelect("sel-scene", "spectral-canyon-3d")`);
   const canyonScene = await evaluate("window.__ZUR_DEBUG__.renderHost.resolveScene(window.__ZUR_DEBUG__.state.preset)");
   if (canyonScene !== "spectral-canyon-3d") problems.push(`spectral canyon scene resolved to ${canyonScene}`);
+  const swarmHidden = await evaluate("document.getElementById('stage2-controls')?.hidden === true");
+  if (!swarmHidden) problems.push("3D SWARM controls still visible on spectral-canyon-3d");
   const canyon = await measure("spectral canyon");
   results.spectralCanyon = canyon;
   await shot("stage4-spectral-canyon");
   if (canyon.litFraction <= 0) problems.push("spectral canyon rendered black");
+  if (!(canyon.minLuma < 0.08)) problems.push(`spectral canyon minLuma ${canyon.minLuma?.toFixed?.(3)} >= 0.08 (flat wall?)`);
+  if (!(canyon.maxLuma > 0.55)) problems.push(`spectral canyon maxLuma ${canyon.maxLuma?.toFixed?.(3)} <= 0.55`);
+  if (!(canyon.lumaStdDev > 0.14)) problems.push(`spectral canyon lumaStdDev ${canyon.lumaStdDev?.toFixed?.(3)} <= 0.14`);
+  if (!(canyon.skyMaxLuma < 0.12)) problems.push(`spectral canyon skyMaxLuma ${canyon.skyMaxLuma?.toFixed?.(3)} >= 0.12`);
 
   for (const mode of ["static", "orbit-3d", "tunnel-fly", "beat-bank"]) {
     await evaluate(`window.__zurSetSelect("sel-camera-mode", "${mode}")`);

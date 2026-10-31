@@ -153,6 +153,38 @@
     }
     .stage2 { margin: 12px 0 0; padding: 4px 10px 10px; border: 1px solid var(--line); border-radius: 12px; }
     .stage2 legend { padding: 0 6px; font-size: 12px; letter-spacing: 0.05em; text-transform: uppercase; }
+    .audio-prompt {
+      margin: 8px 0 4px;
+      padding: 10px;
+      flex-wrap: wrap;
+      border: 1px solid #2de2c5;
+      border-radius: 14px;
+      background: linear-gradient(135deg, rgba(45, 226, 197, 0.18), rgba(138, 75, 50, 0.22));
+      box-shadow: 0 0 18px rgba(45, 226, 197, 0.35);
+    }
+    .audio-prompt[hidden] { display: none !important; }
+    .audio-prompt-hint {
+      flex: 1 1 100%;
+      margin: 0 0 4px;
+      color: #9ff5e6;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    .audio-prompt-btn {
+      flex: 1;
+      min-width: 140px;
+      border: 1px solid #2de2c5 !important;
+      background: linear-gradient(120deg, #1a3d38, #2de2c5) !important;
+      color: #041412 !important;
+      font-weight: 700;
+      animation: audio-prompt-pulse 1.6s ease-in-out infinite;
+    }
+    @keyframes audio-prompt-pulse {
+      0%, 100% { box-shadow: 0 0 8px rgba(45, 226, 197, 0.35); }
+      50% { box-shadow: 0 0 18px rgba(45, 226, 197, 0.85); }
+    }
     .hud-error { min-height: 1.2em; color: #ffb4a8; font-size: 13px; }
     .hint { color: var(--muted); font-size: 12px; }
     @media (max-width: 720px) {
