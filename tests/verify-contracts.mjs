@@ -55,6 +55,12 @@ import {
   toneMap,
   trailRadianceScale,
   visibleThreshold,
+  LOGO_OSCILLATION_SCALE,
+  LOGO_TEXT_PRESETS,
+  LOGO_TRAIL_LENGTH_MAX,
+  billboardBasis,
+  effectiveOscillationAmount,
+  effectiveTrailLength,
 } from "../src/render/particleMath.js";
 import { seedParticleState, SPAWN_HALF } from "../src/render/ParticleSystem3D.js";
 import {
@@ -908,7 +914,7 @@ test("Stage 3 trail keepFactor formula and frame-rate independence", () => {
   const trail = read("src/shaders/trail.frag.glsl");
   for (const name of ["u_trailType", "u_trailLength", "u_fade"]) assert.match(trail, new RegExp(name));
   const ps = read("src/render/ParticleSystem3D.js");
-  assert.match(ps, /trailKeepFactor\(particles\.trailType, particles\.trailLength\)/);
+  assert.match(ps, /trailKeepFactor\(particles\.trailType, trailLength\)/);
 });
 
 test("Stage 3 portrait FBO axis swap and Hor+ projection", () => {
@@ -1365,7 +1371,6 @@ test("Wave-grid is pitched 32 degrees to expose terrain height", () => {
   const sim = read("src/shaders/sim.vert.glsl");
   assert.match(sim, /float pitch = 0\.5585053606/);
   assert.match(sim, /h \* 1\.1 \* cos\(pitch\) - z \* sin\(pitch\)/);
-  assert.match(read("src/shaders/spectral-canyon.frag.glsl"), /pitch = 0\.5585053606/);
 });
 
 test("Spectral spectrum row uses live bins and five-band smooth fallback", () => {
@@ -1483,9 +1488,15 @@ test("Spectral canyon lifts terrain upward with the portrait HUD offset", () => 
   assert.doesNotMatch(frag, /uv\.y \+= 0\.5 \* u_viewportYOffset;/);
 });
 
-test("Spectral canyon camera pitches down onto the terrain", () => {
-  const frag = read("src/shaders/spectral-canyon.frag.glsl");
-  assert.match(frag, /mat2\(cos\(pitch\), sin\(pitch\), -sin\(pitch\), cos\(pitch\)\)/);
+test("ZUR-GH-007 spectral canyon raycasts a synthwave floor + twin walls (no broken pitch/UV math)", () => {
+  const frag = stripComments(read("src/shaders/spectral-canyon.frag.glsl"));
+  assert.doesNotMatch(frag, /mat2\(cos\(pitch\)/);
+  assert.doesNotMatch(frag, /uv\.y > 0\.65/);
+  assert.match(frag, /const float HORIZON_UV = 0\.62/);
+  assert.match(frag, /float wallMask\(float x\)/);
+  assert.match(frag, /smoothstep\(CANYON_HALF_WIDTH, CANYON_HALF_WIDTH \+ WALL_RAMP, abs\(x\)\)/);
+  assert.match(frag, /wall \* \(WALL_HEIGHT/);
+  assert.match(frag, /for \(int j = 0; j < 5; j\+\+\)/); // bisection refine of the height-field hit
 });
 
 test("Logo attractor spreads a small active prefix across the full glyph height", async () => {
@@ -1510,9 +1521,8 @@ test("Spectral canyon draws neon wireframe ridges with an idle baseline wave", (
   const frag = read("src/shaders/spectral-canyon.frag.glsl");
   const plugin = read("src/render/SpectralCanyon3D.js");
   assert.match(frag, /u_silent/);
-  assert.match(frag, /gridEdge/);
-  assert.match(frag, /SCALE = 1\.65/);
-  assert.match(frag, /uv\.y > 0\.65/);
+  assert.match(frag, /float gridLine\(float coord, float footprint\)/);
+  assert.match(frag, /GRID_SPACING = 0\.5/);
   assert.match(frag, /idleWave/);
   assert.match(plugin, /idleSpectrumRow128/);
   assert.match(plugin, /u_silent/);
@@ -1541,6 +1551,209 @@ test("Smoke asserts spatial contrast for spectral-canyon and megastructure", () 
   assert.match(smoke, /lumaStdDev > 0\.14/);
   assert.match(smoke, /3D SWARM controls still visible on spectral-canyon-3d/);
   assert.match(smoke, /CAPTURE IDLE audio prompt missing/);
+});
+
+
+// ---- ZUR-GH-007: Stage 4 visual + geometry fixes from M'lord's 7-minute Galaxy A57 capture ----
+
+test("ZUR-GH-007 core raymarcher shares the kaleido optical centre (0.0, u_viewportYOffset)", () => {
+  const core = stripComments(read("src/shaders/core.frag.glsl"));
+  const kaleido = stripComments(read("src/shaders/kaleido.frag.glsl"));
+  const vert = read("src/shaders/render.vert.glsl");
+  const ps = read("src/render/ParticleSystem3D.js");
+  assert.match(core, /uniform float u_viewportYOffset;/);
+  assert.match(core, /vec2 opticalCenter = vec2\(0\.5, 0\.5 \+ 0\.5 \* u_viewportYOffset\)/);
+  assert.match(core, /gl_FragCoord\.xy \/ u_resolution - opticalCenter/);
+  assert.match(kaleido, /vec2 center = vec2\(0\.5, 0\.5 \+ 0\.5 \* u_viewportYOffset\)/);
+  assert.equal((vert.match(/gl_Position\.y \+= u_viewportYOffset \* gl_Position\.w/g) || []).length, 2);
+  const corePass = ps.slice(ps.indexOf("if (extras.megastructure)"), ps.indexOf("const dart"));
+  assert.match(corePass, /gl\.uniform1f\(C\.u_viewportYOffset, viewportYOffset\)/);
+  assert.match(ps, /"u_viewportYOffset",\s*\]\);/);
+  assert.match(ps, /gl\.uniform1f\(R\.u_viewportYOffset, viewportYOffset\)/);
+  assert.match(ps, /gl\.uniform1f\(P\.u_viewportYOffset, viewportYOffset\)/);
+});
+
+test("ZUR-GH-007 core at the optical centre stays inside 4/6/8/12/16-mirror folds (HUD open + hidden)", async () => {
+  const { opticalCenterUv } = await import("../src/render/particleMath.js");
+  assert.deepEqual(opticalCenterUv(0), [0.5, 0.5]);
+  assert.deepEqual(opticalCenterUv(0.38), [0.5, 0.69]);
+  const aspect = 412 / 915;
+  for (const offset of [0, 0.38]) {
+    const [cu, cv] = opticalCenterUv(offset);
+    for (const segments of [4, 6, 8, 12, 16]) {
+      for (let k = 0; k < 64; k += 1) {
+        const r = 0.12 * ((k % 8) + 1) / 8;
+        const a = (k / 64) * Math.PI * 2;
+        const u = cu + (Math.cos(a) * r) / aspect;
+        const v = cv + Math.sin(a) * r;
+        const [fu, fv] = kaleidoFold(u, v, segments, 0.37, aspect, 1, cv);
+        // the fold preserves radius around the shared centre, so the core disk is always sampled
+        const fr = Math.hypot((fu - cu) * aspect, fv - cv);
+        assert.ok(Math.abs(fr - r) < 1e-6, `segments ${segments} offset ${offset} r ${r} -> ${fr}`);
+      }
+    }
+    // the pre-fix core centre (uv 0.5) sat 0.19 below the HUD-open fold origin -> folded empty space
+    if (offset > 0) assert.ok(Math.abs(0.5 - cv) > 0.15);
+  }
+});
+
+test("ZUR-GH-007 fractal-core is a 3D multi-orbital golden-spiral shell + lobe streams, never a planar ring", () => {
+  const sim = stripComments(read("src/shaders/sim.vert.glsl"));
+  assert.match(sim, /vec3 fractalCoreTarget\(float seed, uint uid\)/);
+  assert.match(sim, /if \(u_formationType == 4\) return fractalCoreTarget\(seed, uid\);/);
+  assert.doesNotMatch(sim, /return dir \* \(1\.45 \+ 0\.5 \* seed\)/);
+  assert.match(sim, /float phi = acos\(clamp\(1\.0 - 2\.0 \* i \/ n, -1\.0, 1\.0\)\)/);
+  assert.match(sim, /float theta = i \* 2\.39996323/);
+  assert.match(sim, /vec3 rotateAxis\(vec3 v, vec3 axis, float angle\)/);
+  assert.match(sim, /int orbit = int\(uid % 5u\)/); // five tilted orbital planes
+  assert.match(sim, /dir = rotateAxis\(dir, axis, u_time/);
+  assert.match(sim, /float lobeAz = \(1\.5707963 - u_time \* 0\.7 \+ TAU \* k\) \/ 7\.0/); // 7 sdCore lobes
+  assert.match(sim, /float valley = max\(-lobes, 0\.0\)/);
+  assert.match(sim, /valley \* \(0\.25 \+ 0\.35 \* band\)/); // audio-reactive breathing into the SDF valleys
+  assert.match(sim, /max\(R, coreRadius \+ 0\.12\)/);
+  assert.match(sim, /if \(u_formationType == 4\) F \*= 0\.25;/);
+});
+
+test("ZUR-GH-007 fractal-core shell fills X, Y and Z equally (edge-on view is round, not a 1-px line)", async () => {
+  const { fractalCoreShellDirections } = await import("../src/render/particleMath.js");
+  for (const count of [2048, 16384, 65536]) {
+    const d = fractalCoreShellDirections(count);
+    const mean = [0, 0, 0];
+    const sq = [0, 0, 0];
+    for (let i = 0; i < count; i += 1) for (let a = 0; a < 3; a += 1) { mean[a] += d[i * 3 + a]; sq[a] += d[i * 3 + a] ** 2; }
+    const std = sq.map((v, a) => Math.sqrt(v / count - (mean[a] / count) ** 2));
+    for (const s of std) assert.ok(Math.abs(s - 1 / Math.sqrt(3)) < 0.02, `count ${count} std ${std}`);
+    // camera at a 90-degree orbit looks down X: the projected (z, y) footprint must be as wide as tall
+    let zMin = 1, zMax = -1, yMin = 1, yMax = -1;
+    for (let i = 0; i < count; i += 1) {
+      zMin = Math.min(zMin, d[i * 3 + 2]); zMax = Math.max(zMax, d[i * 3 + 2]);
+      yMin = Math.min(yMin, d[i * 3 + 1]); yMax = Math.max(yMax, d[i * 3 + 1]);
+    }
+    assert.ok((zMax - zMin) / (yMax - yMin) > 0.95, `count ${count}`);
+  }
+});
+
+test("ZUR-GH-007 logo-attractor scales oscillation by 0.08, frees agents to settle and billboards to the camera", () => {
+  const sim = stripComments(read("src/shaders/sim.vert.glsl"));
+  assert.match(sim, /const float LOGO_OSCILLATION_SCALE = 0\.08;/);
+  assert.match(sim, /if \(u_formationType == 5\) amt \*= LOGO_OSCILLATION_SCALE;/);
+  assert.match(sim, /uniform vec3 u_billboardRight;/);
+  assert.match(sim, /uniform vec3 u_billboardUp;/);
+  assert.match(sim, /return right \* aLogoTarget\.x \+ up \* aLogoTarget\.y \+ toward \* aLogoTarget\.z;/);
+  assert.match(sim, /if \(u_formationType == 5\) \{ lo = 0\.0; hi = 6\.0; \}/);
+  assert.equal(LOGO_OSCILLATION_SCALE, 0.08);
+  assert.ok(Math.abs(effectiveOscillationAmount("logo-attractor", 3) - 0.24) < 1e-9);
+  assert.equal(effectiveOscillationAmount("fractal-core", 3), 3);
+});
+
+test("ZUR-GH-007 logo-attractor clamps effective trail decay (Comet 0.81 cannot smear glyphs)", () => {
+  assert.equal(LOGO_TRAIL_LENGTH_MAX, 0.2);
+  assert.equal(effectiveTrailLength("logo-attractor", 0.81), 0.2);
+  assert.equal(effectiveTrailLength("logo-attractor", 0.1), 0.1);
+  assert.equal(effectiveTrailLength("neon-tunnel", 0.81), 0.81);
+  assert.ok(trailKeepFactor("comet", effectiveTrailLength("logo-attractor", 0.81)) < 0.45);
+  const ps = read("src/render/ParticleSystem3D.js");
+  assert.match(ps, /const trailLength = effectiveTrailLength\(particles\.formationType, particles\.trailLength\)/);
+  assert.match(ps, /trailKeepFactor\(particles\.trailType, trailLength\)/);
+  assert.match(ps, /gl\.uniform1f\(R\.u_trailLength, trailLength\)/);
+  assert.doesNotMatch(ps, /u_trailLength, particles\.trailLength/);
+});
+
+test("ZUR-GH-007 billboard basis faces the active camera from every orbit angle", () => {
+  for (const deg of [0, 45, 90, 135, 180, 270]) {
+    const a = (deg * Math.PI) / 180;
+    const eye = [Math.sin(a) * 11.5, 2.2, Math.cos(a) * 11.5];
+    const { right, up } = billboardBasis(eye);
+    const fl = Math.hypot(...eye);
+    const f = eye.map((v) => -v / fl);
+    const dot = (p, q) => p[0] * q[0] + p[1] * q[1] + p[2] * q[2];
+    assert.ok(Math.abs(dot(right, f)) < 1e-6, `right.forward @${deg}`);
+    assert.ok(Math.abs(dot(up, f)) < 1e-6, `up.forward @${deg}`);
+    assert.ok(Math.abs(dot(right, up)) < 1e-6);
+    assert.ok(Math.abs(Math.hypot(...right) - 1) < 1e-6 && Math.abs(Math.hypot(...up) - 1) < 1e-6);
+    assert.ok(up[1] > 0.9, "text stays upright");
+  }
+  const side = billboardBasis([11.5, 0, 0]);
+  assert.ok(Math.abs(side.right[2] + 1) < 1e-6, "90-degree orbit: text runs along -Z, not edge-on");
+  const ps = read("src/render/ParticleSystem3D.js");
+  assert.match(ps, /billboardBasis\(this\.eye, this\.origin, this\.billboardRight, this\.billboardUp\)/);
+  assert.match(ps, /"u_billboardRight", "u_billboardUp"/);
+});
+
+test("ZUR-GH-007 HUD places the Logo / Attractor Text selector directly under Formation", () => {
+  const hud = read("src/controls/ControlHUD.js");
+  assert.deepEqual([...LOGO_TEXT_PRESETS], ["AI: UNDERGROUND", "MON DAAIN", "TENTH GATE", "ZUR"]);
+  assert.match(hud, /"sel-attractor-preset",\s*"Logo \/ Attractor Text"/);
+  assert.match(hud, /\["custom", "Custom…"\]/);
+  assert.match(hud, /this\.formation\.wrap, this\.attractorPreset\.wrap, this\.attractorText\.wrap/);
+  assert.match(hud, /this\.attractorPreset\.wrap\.hidden = !logoActive;/);
+  assert.match(hud, /const logoActive = particles\.formationType === "logo-attractor";/);
+  assert.match(hud, /txt-attractor/);
+});
+
+test("ZUR-GH-007 canyon scrolls z at u_time * 2.5 with waterfall + multi-band ridges", () => {
+  const frag = stripComments(read("src/shaders/spectral-canyon.frag.glsl"));
+  const plugin = read("src/render/SpectralCanyon3D.js");
+  assert.match(frag, /const float SCROLL_SPEED = 2\.5;/);
+  assert.match(frag, /float zScroll = u_time \* SCROLL_SPEED;/);
+  assert.match(frag, /uniform float u_bands\[5\];/);
+  assert.match(frag, /float bandHeight\(float x\)/);
+  assert.match(frag, /texture\(u_waterfallTex,/);
+  assert.match(frag, /sin\(x \* 2\.4/); // x-frequency ridges
+  assert.match(plugin, /bands: gl\.getUniformLocation\(this\.program, "u_bands"\)/);
+  assert.match(plugin, /gl\.uniform1fv\(this\.locations\.bands, this\.bands\)/);
+  assert.match(plugin, /frame\.sub, frame\.bass, frame\.lowMid, frame\.highMid, frame\.treble/);
+});
+
+test("ZUR-GH-007 canyon colours come only from u_palette with a luma cap (zero white blowouts)", () => {
+  const frag = stripComments(read("src/shaders/spectral-canyon.frag.glsl"));
+  assert.doesNotMatch(frag, /vec3\(1\.0\)/);
+  assert.doesNotMatch(frag, /max\(neon, vec3\(/);
+  assert.doesNotMatch(frag, /vec3 sky = vec3\(0\./);
+  assert.match(frag, /const float LUMA_CAP = 0\.86;/);
+  assert.match(frag, /vec3 guardNeon\(vec3 c\)/);
+  assert.equal((frag.match(/fragColor = vec4\(linearToSRGB\(guardNeon\(/g) || []).length, 2);
+  for (const i of [0, 1, 2, 3, 4]) assert.ok(frag.includes(`u_palette[${i}]`), `u_palette[${i}]`);
+  // JS mirror of guardNeon over every palette stop at 2x overdrive: luma never exceeds the cap
+  const srgb = (c) => (c <= 0.0031308 ? c * 12.92 : 1.055 * c ** (1 / 2.4) - 0.055);
+  for (const id of PALETTE_IDS) {
+    for (const stop of PALETTES[id]) {
+      let c = stop.map((v) => v * 2);
+      const m = Math.min(...c);
+      c = c.map((v) => v - m * 0.35);
+      const l = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+      c = c.map((v) => Math.min(1, v * Math.min(1, 0.86 / Math.max(l, 1e-4))));
+      const out = c.map(srgb);
+      assert.ok(Math.min(...out) < 0.97, `${id} stop blew out to white ${out}`);
+    }
+  }
+});
+
+test("ZUR-GH-007 headless smoke covers 16 mirrors, 90-degree fractal-core, logo readability and canyon grid", () => {
+  const smoke = read("tests/smoke-zur-gh-007.mjs");
+  assert.match(smoke, /width: 412, height: 915/);
+  assert.match(smoke, /for \(const segments of \[0, 4, 8, 16\]\)/);
+  assert.match(smoke, /diskLitFraction > 0\.6/);
+  assert.match(smoke, /\(Math\.PI \/ 2\) \/ 0\.06/);
+  assert.match(smoke, /spread\.minRatio > 0\.55/);
+  assert.match(smoke, /litWidthRatio > 0\.35/);
+  assert.match(smoke, /logo\.textRuns >= 6/);
+  assert.match(smoke, /rng-osc-amount", 3/);
+  assert.match(smoke, /rng-trail-length", 0\.81/);
+  assert.match(smoke, /sel-attractor-preset/);
+  assert.match(smoke, /upperMidLumaFraction >= 0\.35/);
+  assert.match(smoke, /l > 0\.15 && l < 0\.90/);
+  assert.match(smoke, /gridCrossings >= 12/);
+  assert.match(smoke, /upperMaxLuma < 0\.9/);
+  assert.match(read("package.json"), /smoke:gh007/);
+});
+
+test("ZUR-GH-007 is logged in STATE.md and CONTRACTS.md", () => {
+  const state = read("STATE.md");
+  const contracts = read("CONTRACTS.md");
+  assert.match(state, /ZUR-GH-007/);
+  assert.match(contracts, /ZUR-GH-007/);
+  assert.match(contracts, /Logo \/ Attractor Text/);
 });
 
 

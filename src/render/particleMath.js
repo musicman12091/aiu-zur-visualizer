@@ -45,6 +45,12 @@ export const FORMATION_TYPES = Object.freeze([
   "free-3d", "neon-tunnel", "polygon-rings", "supernova-shell", "fractal-core", "logo-attractor",
 ]);
 export const OSCILLATION_TYPES = Object.freeze(["off", "wave", "helix", "bounce", "pulse"]);
+/** ZUR-GH-007: Logo / Attractor Text presets shown directly under the Formation dropdown. */
+export const LOGO_TEXT_PRESETS = Object.freeze(["AI: UNDERGROUND", "MON DAAIN", "TENTH GATE", "ZUR"]);
+/** ZUR-GH-007: glyph targets keep only 8% of the oscillation amount (mirrors sim.vert.glsl). */
+export const LOGO_OSCILLATION_SCALE = 0.08;
+/** ZUR-GH-007: logo-attractor clamps the effective trail length so comet decay cannot smear glyphs. */
+export const LOGO_TRAIL_LENGTH_MAX = 0.2;
 export const PULSE_LAYOUTS = Object.freeze(["band-clouds", "geodesic-sphere", "wave-grid"]);
 export const TRAIL_LENGTH_RANGE = Object.freeze([0, 1]);
 export const OSCILLATION_AMOUNT_RANGE = Object.freeze([0, 3]);
@@ -514,4 +520,71 @@ export function decodePresetParam(value) {
     else if (key === "pl") result.particles.pulseLayout = raw;
   }
   return matched ? result : null;
+}
+
+/** ZUR-GH-007: effective trail length; logo-attractor is clamped to LOGO_TRAIL_LENGTH_MAX for sharp glyphs. */
+export function effectiveTrailLength(formationType, trailLength) {
+  const t = Number.isFinite(trailLength) ? Math.min(1, Math.max(0, trailLength)) : 0;
+  return formationType === "logo-attractor" ? Math.min(t, LOGO_TRAIL_LENGTH_MAX) : t;
+}
+
+/** ZUR-GH-007: oscillation amount applied to formation targets (logo glyphs scaled by 0.08). */
+export function effectiveOscillationAmount(formationType, amount) {
+  const a = Number.isFinite(amount) ? Math.max(0, amount) : 0;
+  return formationType === "logo-attractor" ? a * LOGO_OSCILLATION_SCALE : a;
+}
+
+/**
+ * ZUR-GH-007: camera billboard basis for the logo plane (right = forward x worldUp, up = right x forward).
+ * Falls back to +X / +Y before the first camera frame.
+ */
+export function billboardBasis(eye, target = [0, 0, 0], outRight = new Float32Array(3), outUp = new Float32Array(3)) {
+  let fx = target[0] - eye[0];
+  let fy = target[1] - eye[1];
+  let fz = target[2] - eye[2];
+  const fl = Math.hypot(fx, fy, fz);
+  if (!(fl > 1e-6)) {
+    outRight[0] = 1; outRight[1] = 0; outRight[2] = 0;
+    outUp[0] = 0; outUp[1] = 1; outUp[2] = 0;
+    return { right: outRight, up: outUp };
+  }
+  fx /= fl; fy /= fl; fz /= fl;
+  // right = forward x (0, 1, 0)
+  let rx = -fz;
+  let rz = fx;
+  const rl = Math.hypot(rx, rz) || 1;
+  rx /= rl; rz /= rl;
+  outRight[0] = rx; outRight[1] = 0; outRight[2] = rz;
+  // up = right x forward
+  outUp[0] = 0 * fz - rz * fy;
+  outUp[1] = rz * fx - rx * fz;
+  outUp[2] = rx * fy - 0 * fx;
+  return { right: outRight, up: outUp };
+}
+
+/**
+ * ZUR-GH-007: JS mirror of sim.vert.glsl golden-spiral fractal-core shell directions (static, t = 0):
+ * returns xyz unit directions for `count` agents so contracts can assert a true 3D volume (no planar ring).
+ */
+export function fractalCoreShellDirections(count) {
+  const n = Math.max(1, Math.floor(count));
+  const out = new Float32Array(n * 3);
+  for (let id = 0; id < n; id += 1) {
+    const i = id + 0.5;
+    const phi = Math.acos(Math.min(1, Math.max(-1, 1 - (2 * i) / n)));
+    const theta = i * 2.39996323;
+    out[id * 3] = Math.sin(phi) * Math.cos(theta);
+    out[id * 3 + 1] = Math.cos(phi);
+    out[id * 3 + 2] = Math.sin(phi) * Math.sin(theta);
+  }
+  return out;
+}
+
+/**
+ * ZUR-GH-007: shared optical centre (uv) of the swarm, the raymarched core and the kaleidoscope fold.
+ * NDC (0.0, u_viewportYOffset) -> uv (0.5, 0.5 + 0.5 * u_viewportYOffset).
+ */
+export function opticalCenterUv(viewportYOffset = 0) {
+  const offset = Number.isFinite(viewportYOffset) ? viewportYOffset : 0;
+  return [0.5, 0.5 + 0.5 * offset];
 }

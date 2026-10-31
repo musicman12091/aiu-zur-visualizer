@@ -406,8 +406,10 @@ try {
   if (canyon.litFraction <= 0) problems.push("spectral canyon rendered black");
   if (!(canyon.minLuma < 0.08)) problems.push(`spectral canyon minLuma ${canyon.minLuma?.toFixed?.(3)} >= 0.08 (flat wall?)`);
   if (!(canyon.maxLuma > 0.55)) problems.push(`spectral canyon maxLuma ${canyon.maxLuma?.toFixed?.(3)} <= 0.55`);
-  if (!(canyon.lumaStdDev > 0.14)) problems.push(`spectral canyon lumaStdDev ${canyon.lumaStdDev?.toFixed?.(3)} <= 0.14`);
-  if (!(canyon.skyMaxLuma < 0.12)) problems.push(`spectral canyon skyMaxLuma ${canyon.skyMaxLuma?.toFixed?.(3)} >= 0.12`);
+  // ZUR-GH-007 synthwave rewrite: palette-filled floor/walls + striped sun replace the obsidian upper-35% sky,
+  // so contrast is judged by std-dev + no white blowout (grid density lives in tests/smoke-zur-gh-007.mjs).
+  if (!(canyon.lumaStdDev > 0.08)) problems.push(`spectral canyon lumaStdDev ${canyon.lumaStdDev?.toFixed?.(3)} <= 0.08`);
+  if (!(canyon.maxLuma < 0.9)) problems.push(`spectral canyon white blowout maxLuma ${canyon.maxLuma?.toFixed?.(3)} >= 0.90`);
 
   for (const mode of ["static", "orbit-3d", "tunnel-fly", "beat-bank"]) {
     await evaluate(`window.__zurSetSelect("sel-camera-mode", "${mode}")`);
