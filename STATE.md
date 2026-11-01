@@ -126,7 +126,8 @@ Pages is enabled and serving Stage 3 from the `main` branch root (`/`). https://
 
 ## Fix — ZUR-GH-008 (Stage 4.2 high-trail chroma guard, formation ghosting clear, dart3d seams)
 
-- status: PENDING_MERGE
+- status: squash-merged to `main` — COMPLETE
+- commit_sha (main, squash): `8a356583320f2074489684ff0e98745995fe1b37` — PR https://github.com/musicman12091/aiu-zur-visualizer/pull/8 (branch `fix/zur-gh-008` head `34f14e3`; branch deleted)
 - branch: `fix/zur-gh-008` (direct `/workspace` patch; no Cursor Cloud Agent, no `cursor/*`, no Copilot CLI wait, no `@copilot` PR review)
 - pre-flight: `ZUR_v41_Sheet_01..08.jpg` were not present in `/workspace` or Google Drive (search `name contains 'ZUR_v41'` returned nothing); sheets 01–05 could not be re-inspected — proceeded with the 4 coded fixes from the ticket.
 - Fixes:
@@ -134,3 +135,8 @@ Pages is enabled and serving Stage 3 from the `main` branch root (`/`). https://
   2. Formation / flow / scene change: 250 ms trail clear window, keep <= 0.45 (`TrailTransitionGuard` in `PostProcessPass.js`).
   3. Dart3D: particle splat runs with `gl.disable(gl.DEPTH_TEST)` + `gl.depthMask(false)`; `invariant gl_Position` + shared-index vertices.
   4. School of Fish: 6 bait-ball leaders, Y offsets sum to zero. Gas: toroidal circulation + radial curl + Y / spherical wrap.
+- Ori audit: pre-merge `git diff` + shader audit in `/workspace` (no `@copilot` review). Megastructure first lost contrast under the floor (stage3.2 `lumaStdDev` 0.139 vs 0.14 gate; main 0.224). Fixed by gating the white shoulder + floor with `u_coreSpecular` (megastructure only); after the fix stage3.2 reads 0.235 / max luma 0.90.
+- contracts: `node tests/verify-contracts.mjs` → 105 passed (was 101).
+- headless @ 412×915 (SwiftShader): `tests/smoke-zur-gh-008.mjs` PASS. At 64k + Trail 1.00 + size 3.35x + 3D Fish/Bird Dart + God rays 0.35, across free-3d / supernova-shell × murmuration / fish / gas / fluid: whiteClip 0.00%, nearWhite 0.00%, meanSat 0.689–0.711. The pre-fix baseline on `07821e6` was meanSat 0.358–0.493 with a white-lavender wash. Megastructure stress: whiteClip 0%, nearWhite 0.78%. Formation switch Polygon Rings → Supernova Shell at Trail 0.76: 1 transition, keep 0.45 inside the window, 0.832 after it. GPU readback: fish 50.5% above Y = 0 (mean Y 0.006); gas central-column 6%, mean XZ radius 2.6. console.error / pageerror / WebGL 0; destinationConnections 0.
+- regression: `smoke:gh007` PASS (one run gave 5/6 logo glyph runs; two re-runs gave 7 — flaky metric), `smoke:stage3.2` PASS, `smoke` PASS.
+- pages_url: https://musicman12091.github.io/aiu-zur-visualizer/ — HTTP 200; Pages build `built 8a35658`. Live markers: `TRAIL_KEEP_CAP = 0.90`, `u_trailEnergyNorm`, `chromaFloor` / `u_coreSpecular`, `gl.depthMask(false)`, `TrailTransitionGuard`, `FISH_LEADER_Y` / `GAS_TORUS_RADIUS`, `invariant gl_Position`, and sw.js `zur-shell-v5` + `PostProcessPass.js`.
