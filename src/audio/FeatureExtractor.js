@@ -151,7 +151,7 @@ export class FeatureExtractor {
     this.preAmpGain = 1;
     this.masterGain = 1;
     this.bandGain = { sub: 1, bass: 1, lowMid: 1, highMid: 1, treble: 1 };
-    this.noiseGateThreshold = 0.02;
+    this.noiseGateThreshold = 0.015;
     this.minDecibels = MIN_DECIBELS;
     this.maxDecibels = MAX_DECIBELS;
     this.onsetThresholdMultiplier = 1.5;

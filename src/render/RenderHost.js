@@ -1,6 +1,6 @@
 import { clamp01 } from "../audio/FeatureExtractor.js";
 import { PALETTES, shiftPalette } from "../controls/palettes.js";
-import { PARTICLE_SCENE_IDS, PULSE_SCENE_ID, normalizeParticles, resolveFboSize } from "./particleMath.js";
+import { PARTICLE_SCENE_IDS, PULSE_SCENE_ID, normalizeParticles, resolveFboSize, spectralCentroidFromBands } from "./particleMath.js";
 import { TrailTransitionGuard, transitionSignature } from "./PostProcessPass.js";
 
 /** Four hardware tiers. Tier 1 matches Mode A; Tier 2 matches Mode B. */
@@ -202,7 +202,7 @@ export class RenderHost {
       this.framesThisSecond = 0;
       this.fpsWindowStart = now;
       if (PARTICLE_SCENE_IDS.includes(this.activeScene)) {
-        this.particleSystem?.reportFps(this.displayedFps, size.fps, preset.particles?.particleCountTier ?? "auto");
+        this.particleSystem?.reportFps(this.displayedFps, size.fps, preset.particles?.particleCountTier ?? "64k");
       }
     }
 
@@ -274,6 +274,7 @@ export class RenderHost {
             megastructure: scene === "megastructure-3d",
             bands: [frame.sub, frame.bass, frame.lowMid, frame.highMid, frame.treble],
             viewportYOffset: this.viewportYOffset,
+            spectralCentroid: spectralCentroidFromBands(frame.sub, frame.bass, frame.lowMid, frame.highMid, frame.treble),
             trailKeepCap: this.trailTransition.keepCap(now),
           },
         );

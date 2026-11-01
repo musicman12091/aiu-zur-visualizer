@@ -16,6 +16,7 @@ uniform float u_viewportYOffset; // NDC lift of the swarm (portrait HUD drawer);
 uniform float u_chromaticAberration; // 0..1, three radial RGB samples
 uniform float u_godRays; // 0..1, six additive radial samples
 uniform vec3 u_paletteHue; // ZUR-GH-008: dominant palette colour (u_palette[0]) for the high-luma chroma floor
+uniform int u_colorPalette; // ZUR-GH-009: 2 = white-static keeps its grey (no grey strip / chroma floor)
 uniform float u_coreSpecular; // ZUR-GH-008: 1 in megastructure-3d (raymarched core keeps its white specular), else 0
 
 in vec2 v_uv;
@@ -58,6 +59,7 @@ vec3 toneMap(vec3 c) {
 const float CHROMA_FLOOR_PEAK = 0.65;
 const float CHROMA_FLOOR_SAT = 0.6;
 vec3 chromaFloor(vec3 s) {
+  if (u_colorPalette == 2) return min(s, vec3(0.94)); // white-static stays neutral and never white-clips
   float peak = max(s.r, max(s.g, s.b));
   float low = min(s.r, min(s.g, s.b));
   float w = smoothstep(CHROMA_FLOOR_PEAK - 0.12, CHROMA_FLOOR_PEAK, peak) * (1.0 - u_coreSpecular);
@@ -99,6 +101,6 @@ void main() {
   scene += rays * (u_godRays / 6.0) * 0.35;
   scene = max(scene - vec3(u_blackFloor), vec3(0.0)) * vignette;
   // Strip the shared grey component so overlapping cyan + magenta stays electric instead of washing to silver.
-  scene -= vec3(min(scene.r, min(scene.g, scene.b))) * 0.7;
+  if (u_colorPalette != 2) scene -= vec3(min(scene.r, min(scene.g, scene.b))) * 0.7;
   fragColor = vec4(chromaFloor(linearToSRGB(toneMap(max(scene, vec3(0.0)) * u_exposure))), 1.0);
 }

@@ -39,6 +39,8 @@ import {
   encodePresetParam,
   isMobileAgent,
   normalizeParticles,
+  pinchZoom,
+  wheelZoom,
 } from "../render/particleMath.js";
 
 // zur_state_v3_2: older keys (zur_state_v3 / v2, zur.preset.v2) migrate through loadStoredState.
@@ -91,7 +93,7 @@ function applyExtractor(preset) {
   extractor.setMix({
     masterGain: preset.audio.masterGain,
     bandGain: preset.audio.bandGain,
-    noiseGateThreshold: preset.audio.noiseGateThreshold ?? 0.02,
+    noiseGateThreshold: preset.audio.noiseGateThreshold ?? 0.015,
   });
   extractor.setMediumEnvelope(preset.audio.attackMs, preset.audio.releaseMs);
   setFftSize(preset.audio.fftSize || 2048);
@@ -369,7 +371,62 @@ async function boot() {
 }
 
 // Tap the canvas to hide / restore the whole HUD drawer (fullscreen swarm).
-canvas.addEventListener("click", () => hud.toggleHidden());
+// A double-tap toggles twice (net no-op) and resets zoom; clicks that end a pinch are swallowed.
+let suppressClickUntil = 0;
+canvas.addEventListener("click", (event) => {
+  if (event.target !== canvas || performance.now() < suppressClickUntil) return;
+  hud.toggleHidden();
+});
+
+// ZUR-GH-009 camera zoom: 2-finger pinch, desktop wheel, double-tap reset. Everything acts on the canvas only,
+// so the HUD drawer keeps its one-finger pan-y scrolling.
+const pointers = new Map();
+let pinch = null;
+let lastTapAt = 0;
+const currentZoom = () => state.preset.particles?.cameraZoom ?? 1;
+const pointerDistance = () => {
+  const [a, b] = [...pointers.values()];
+  return a && b ? Math.hypot(a.x - b.x, a.y - b.y) : 0;
+};
+canvas.addEventListener("pointerdown", (event) => {
+  if (event.target !== canvas) return;
+  pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+  if (pointers.size === 2) {
+    pinch = { startZoom: currentZoom(), startDist: pointerDistance() };
+    suppressClickUntil = performance.now() + 450;
+  } else if (pointers.size === 1 && event.pointerType !== "mouse") {
+    const now = performance.now();
+    if (now - lastTapAt < 320) {
+      updateParticles({ cameraZoom: 1 });
+      lastTapAt = 0;
+    } else {
+      lastTapAt = now;
+    }
+  }
+});
+canvas.addEventListener("pointermove", (event) => {
+  if (event.target !== canvas || !pointers.has(event.pointerId)) return;
+  pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+  if (pinch && pointers.size === 2) {
+    updateParticles({ cameraZoom: pinchZoom(pinch.startZoom, pinch.startDist, pointerDistance()) });
+    suppressClickUntil = performance.now() + 450;
+  }
+});
+const endPointer = (event) => {
+  if (event.target !== canvas) return;
+  pointers.delete(event.pointerId);
+  if (pointers.size < 2) pinch = null;
+};
+canvas.addEventListener("pointerup", endPointer);
+canvas.addEventListener("pointercancel", endPointer);
+canvas.addEventListener("dblclick", (event) => {
+  if (event.target === canvas) updateParticles({ cameraZoom: 1 });
+});
+canvas.addEventListener("wheel", (event) => {
+  if (event.target !== canvas) return;
+  event.preventDefault();
+  updateParticles({ cameraZoom: wheelZoom(currentZoom(), event.deltaY) });
+}, { passive: false });
 
 document.addEventListener("pointerdown", () => {
   void acquireWakeLock();
