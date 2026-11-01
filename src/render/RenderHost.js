@@ -1,6 +1,7 @@
 import { clamp01 } from "../audio/FeatureExtractor.js";
 import { PALETTES, shiftPalette } from "../controls/palettes.js";
 import { PARTICLE_SCENE_IDS, PULSE_SCENE_ID, normalizeParticles, resolveFboSize } from "./particleMath.js";
+import { TrailTransitionGuard, transitionSignature } from "./PostProcessPass.js";
 
 /** Four hardware tiers. Tier 1 matches Mode A; Tier 2 matches Mode B. */
 export const QUALITY_TIERS = Object.freeze([
@@ -101,6 +102,8 @@ export class RenderHost {
     this.spectralCanyon = null;
     this.particleError = "";
     this.activeScene = "";
+    // ZUR-GH-008: sceneId / formationType / flowMode changes open a 250 ms trail decay window (keep <= 0.45).
+    this.trailTransition = new TrailTransitionGuard();
     shaderHost.onContextLost = () => {
       this.pausedForContextLoss = true;
     };
@@ -238,6 +241,10 @@ export class RenderHost {
       palette,
     });
     const scene = this.resolveScene(preset);
+    this.trailTransition.observe(
+      transitionSignature(preset?.sceneId, preset?.particles?.formationType, preset?.particles?.flowMode),
+      now,
+    );
     if (scene !== this.activeScene) {
       if (PARTICLE_SCENE_IDS.includes(scene) && this.particleSystem) this.particleSystem.resetAuto();
       this.activeScene = scene;
@@ -267,6 +274,7 @@ export class RenderHost {
             megastructure: scene === "megastructure-3d",
             bands: [frame.sub, frame.bass, frame.lowMid, frame.highMid, frame.treble],
             viewportYOffset: this.viewportYOffset,
+            trailKeepCap: this.trailTransition.keepCap(now),
           },
         );
       }

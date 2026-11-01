@@ -123,3 +123,14 @@ Pages is enabled and serving Stage 3 from the `main` branch root (`/`). https://
 - headless @ 412×915 (SwiftShader): `tests/smoke-zur-gh-007.mjs` PASS — megastructure core disk lit 1.00 at 0/4/8/16 mirrors (HUD open, offset 0.38) and 16 mirrors HUD hidden (offset 0); fractal-core GPU axis std ≈ 1.65/1.66/1.63 (ratio 0.98), lit width 0.76 at a ~92° orbit; logo `MON DAAIN` agents settle (median target error < 0.06), ≥ 6 glyph runs under Oscillation 3.00 + Comet 0.81, billboarded; canyon upper-viewport mid-luma 0.69 (HUD open) / 0.51 (hidden), grid crossings 35 / 37, max luma 0.62. `tests/smoke-stage3.2.mjs` + `tests/smoke-headless.mjs` PASS; console/page/WebGL 0.
 - known pre-existing: `tests/smoke-stage2.mjs` (localStorage particles) + `tests/smoke-stage3.mjs` (default-key drift) fail identically on `1760b29` main — stale vs Stage 4 defaults, not touched here.
 - pages_url: https://musicman12091.github.io/aiu-zur-visualizer/ — HTTP 200; live markers verified (core `0.5 + 0.5 * u_viewportYOffset`, `fractalCoreTarget`, `LOGO_OSCILLATION_SCALE`, `sel-attractor-preset`, canyon `SCROLL_SPEED = 2.5` + `guardNeon`).
+
+## Fix — ZUR-GH-008 (Stage 4.2 high-trail chroma guard, formation ghosting clear, dart3d seams)
+
+- status: PENDING_MERGE
+- branch: `fix/zur-gh-008` (direct `/workspace` patch; no Cursor Cloud Agent, no `cursor/*`, no Copilot CLI wait, no `@copilot` PR review)
+- pre-flight: `ZUR_v41_Sheet_01..08.jpg` were not present in `/workspace` or Google Drive (search `name contains 'ZUR_v41'` returned nothing); sheets 01–05 could not be re-inspected — proceeded with the 4 coded fixes from the ticket.
+- Fixes:
+  1. Steady-state trail energy: keep capped at 0.90 for >= 16k agents, `u_trailEnergyNorm = clamp((1 - k) / 0.45, 0.18, 1)` on dart + premultiplied capsule radiance/alpha, `sizeNorm` on the hot core above 1.5x; kaleido chroma-preserving peak tone map + high-luma chroma floor (sat 0.6; megastructure core specular exempt via `u_coreSpecular`).
+  2. Formation / flow / scene change: 250 ms trail clear window, keep <= 0.45 (`TrailTransitionGuard` in `PostProcessPass.js`).
+  3. Dart3D: particle splat runs with `gl.disable(gl.DEPTH_TEST)` + `gl.depthMask(false)`; `invariant gl_Position` + shared-index vertices.
+  4. School of Fish: 6 bait-ball leaders, Y offsets sum to zero. Gas: toroidal circulation + radial curl + Y / spherical wrap.

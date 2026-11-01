@@ -235,20 +235,43 @@ export function toneMap(x) {
   return x / (1 + x);
 }
 
-export const TONEMAP = Object.freeze({ shoulder: 0.65, whiteLo: 1.1, whiteHi: 3.2, whiteMix: 0.65 });
+/** ZUR-GH-008: chroma-preserving peak tone map (no white bleed) + display-space high-luma chroma floor. */
+export const TONEMAP = Object.freeze({ shoulder: 0.65, floorPeak: 0.65, floorSat: 0.6 });
 
 function smoothstep(lo, hi, x) {
   const t = Math.min(1, Math.max(0, (x - lo) / (hi - lo)));
   return t * t * (3 - 2 * t);
 }
 
-/** JS mirror of the chroma-preserving tone map in kaleido.frag.glsl. */
-export function chromaToneMap([r, g, b]) {
+/** JS mirror of the chroma-preserving peak tone map in kaleido.frag.glsl (ZUR-GH-008: never bleeds to white). */
+export function chromaToneMap([r, g, b], coreSpecular = 0) {
   const peak = Math.max(r, Math.max(g, b));
-  const inv = 1 / Math.max(peak, 1e-4);
-  const mappedPeak = peak / (1 + TONEMAP.shoulder * peak);
-  const white = smoothstep(TONEMAP.whiteLo, TONEMAP.whiteHi, peak) * TONEMAP.whiteMix;
-  return [r, g, b].map((c) => c * inv * mappedPeak * (1 - white) + white);
+  if (peak <= 1e-5) return [0, 0, 0];
+  const mappedPeak = Math.min(peak / (1 + TONEMAP.shoulder * peak), 1);
+  // megastructure-3d only (u_coreSpecular = 1): the raymarched core keeps its Stage 3 white specular bleed.
+  const white = smoothstep(1.1, 3.2, peak) * 0.65 * coreSpecular;
+  return [r, g, b].map((c) => (c / Math.max(peak, 1e-4)) * mappedPeak * (1 - white) + white);
+}
+
+/** JS mirror of chromaFloor() in kaleido.frag.glsl (display-space RGB 0..1, paletteHue = u_palette[0]). */
+export function chromaFloor([r, g, b], paletteHue = [1, 0, 1], coreSpecular = 0) {
+  const peak = Math.max(r, g, b);
+  const low = Math.min(r, g, b);
+  const w = smoothstep(TONEMAP.floorPeak - 0.12, TONEMAP.floorPeak, peak) * (1 - coreSpecular);
+  if (w <= 0 || peak <= 1e-4) return [r, g, b];
+  const sat = (peak - low) / peak;
+  if (sat >= TONEMAP.floorSat) return [r, g, b];
+  const ph = paletteHue.map((v) => Math.max(v, 0));
+  const pMax = Math.max(...ph);
+  const pMin = Math.min(...ph);
+  const pal = pMax - pMin > 1e-3 ? ph.map((v) => (v - pMin) / (pMax - pMin)) : [1, 0, 1];
+  const own = [r, g, b].map((v) => (v - low) / Math.max(peak - low, 1e-4));
+  const t = smoothstep(0.02, 0.15, sat);
+  return own.map((h, i) => {
+    const hue = pal[i] + (h - pal[i]) * t;
+    const floored = peak * (1 - TONEMAP.floorSat + TONEMAP.floorSat * hue);
+    return [r, g, b][i] + (floored - [r, g, b][i]) * w;
+  });
 }
 
 /** Neon comet sprite falloff (render.frag.glsl): saturated halo + tiny white pinprick core (peak 0.30). */
@@ -365,6 +388,27 @@ export function lissajous(index, time) {
     Math.sin(time * fy * 1.7 + ph * 0.5) * 1.6,
     Math.cos(time * fz + ph) * 3.4,
   ];
+}
+
+/** ZUR-GH-008: School of Fish bait-ball leader Y offsets (sim.vert.glsl FISH_LEADER_Y); they sum to zero. */
+export const FISH_LEADER_Y = Object.freeze([0.9, -0.9, 0.55, -0.55, 0.25, -0.25]);
+
+/** Mirror of fishLeader() in sim.vert.glsl. */
+export function fishLeader(index, time) {
+  const a = index * 1.0471975512 + time * 0.35;
+  const bob = Math.sin(time * 0.5 + index * 1.0471975512) * 0.25;
+  return [Math.cos(a) * 3.0, FISH_LEADER_Y[index] + bob, Math.sin(a) * 3.0];
+}
+
+/** ZUR-GH-008: Gas toroidal circulation ring radius / Y wrap (sim.vert.glsl GAS_TORUS_RADIUS / GAS_WRAP_Y). */
+export const GAS_TORUS_RADIUS = 2.4;
+export const GAS_WRAP_Y = 4.2;
+
+/** Meridional toroidal circulation (rho, y) of the Gas vortex ring: up inside, out over the top, down outside. */
+export function gasCirculation(rho, y) {
+  const mx = rho - GAS_TORUS_RADIUS;
+  const fall = Math.exp(-(mx * mx + y * y) / 10);
+  return [y * fall, -mx * fall];
 }
 
 /** Topological 6-neighbor ring (id±1, id±2, id±3 mod count). */

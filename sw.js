@@ -20,6 +20,7 @@ const ASSETS = [
   "./src/render/SpectralCanyon3D.js",
   "./src/render/spectralMath.js",
   "./src/render/particleMath.js",
+  "./src/render/PostProcessPass.js",
   "./src/shaders/sim.vert.glsl",
   "./src/shaders/sim.frag.glsl",
   "./src/shaders/render.vert.glsl",

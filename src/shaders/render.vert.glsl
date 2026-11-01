@@ -7,6 +7,10 @@ precision highp int;
 layout(location = 0) in vec4 a_pos;
 layout(location = 1) in vec4 a_vel;
 
+// ZUR-GH-008: shared dart3d edges must rasterise watertight. Each corner's clip position is a pure function of
+// (instance, vertex index) and gl_Position is invariant, so the 4 triangles meet bit-identically (no dotted seams).
+invariant gl_Position;
+
 uniform mat4 u_viewProj;
 uniform vec3 u_camPos;
 uniform vec2 u_resolution;
@@ -143,9 +147,10 @@ void main() {
     vec3 a = dartVertex(dartIndex(face, 0));
     vec3 b = dartVertex(dartIndex(face, 1));
     vec3 c = dartVertex(dartIndex(face, 2));
-    vec3 local = dartVertex(dartIndex(face, corner));
+    int vertexIndex = dartIndex(face, corner);
     float s = worldSize * 2.2 * floorScale;
-    vec3 world = center + frame * (local * s);
+    // Same expression for every face sharing this vertex index -> bit-identical shared-edge positions.
+    vec3 world = center + frame * (dartVertex(vertexIndex) * s);
     v_normal = normalize(frame * cross(b - a, c - a));
     v_view = normalize(u_camPos - world);
     // glow radius: 0 at the nose, 1 at the base (render.frag.glsl core/halo falloff)

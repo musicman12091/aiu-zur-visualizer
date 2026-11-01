@@ -8,6 +8,7 @@ uniform int u_shape;
 uniform float u_radianceScale;
 uniform float u_particleSize;   // user multiplier 0.5x – 4.0x
 uniform float u_activeCount;    // live agent count (16k / 64k crowds)
+uniform float u_trailEnergyNorm; // ZUR-GH-008: clamp((1 - keepFactor) / (1 - 0.55), 0.18, 1.0)
 uniform vec3 u_lightDir;
 uniform vec3 u_rimColor;
 
@@ -24,6 +25,9 @@ out vec4 fragColor;
 void main() {
   // Bounded radiance: big sprites in dense swarms never stack into solid white fireballs.
   float crowdNorm = 1.0 / (1.0 + 0.32 * u_particleSize * u_particleSize * sqrt(max(u_activeCount, 64.0) / 1024.0));
+  // ZUR-GH-008: steady-state trail energy normalisation + big-sprite core scaling (3.35x no longer blows out).
+  float sizeNorm = u_particleSize > 1.5 ? 1.0 / pow(max(u_particleSize, 1.0), 0.65) : 1.0;
+  float energyNorm = clamp(u_trailEnergyNorm, 0.18, 1.0);
   if (u_shape == 0) {
     vec3 n = normalize(v_normal);
     vec3 v = normalize(v_view);
@@ -36,8 +40,8 @@ void main() {
     vec3 paletteColor = v_color;
     vec3 paletteColorSecondary = mix(v_colorAlt, u_rimColor * length(v_color), 0.5);
     vec3 dartColor = paletteColor * (0.45 + 0.85 * normalShade) + paletteColorSecondary * (0.65 * rim);
-    vec3 hot = mix(v_color, vec3(1.0), 0.25) * core;
-    fragColor = vec4((dartColor * (0.4 + 0.6 * halo) + hot) * u_radianceScale * 4.0 * sqrt(crowdNorm), 1.0);
+    vec3 hot = mix(v_color, vec3(1.0), 0.25) * core * sizeNorm;
+    fragColor = vec4((dartColor * (0.4 + 0.6 * halo) + hot) * u_radianceScale * 4.0 * sqrt(crowdNorm) * energyNorm, 1.0);
     return;
   }
   vec2 q = vec2(max(abs(v_local.x) - v_halfSeg, 0.0), v_local.y);
@@ -45,9 +49,9 @@ void main() {
   if (r2 >= 1.0) discard;
   float core = exp(-r2 * 42.0) * 0.30;
   float halo = exp(-r2 * 4.5);
-  vec3 hot = mix(v_color, vec3(1.0), 0.25) * core;
+  vec3 hot = mix(v_color, vec3(1.0), 0.25) * core * sizeNorm;
   vec3 color = v_color * halo * 1.1 + hot;
-  float capsuleAlpha = 0.40 * crowdNorm;
+  float capsuleAlpha = 0.40 * crowdNorm * energyNorm;
   // Premultiplied: colour scales with the same bounded alpha so big sprites in 16k-64k crowds never stack to solid white.
   fragColor = vec4(color * u_radianceScale * 12.0 * capsuleAlpha, min(halo, 1.0) * capsuleAlpha);
 }

@@ -31,6 +31,7 @@ import {
   visibleThreshold,
 } from "./particleMath.js";
 import { sampleLogoTargets } from "./LogoAttractor.js";
+import { capKeepFactor, trailEnergyNorm } from "./PostProcessPass.js";
 
 export const SHADER_FILES = Object.freeze({
   sim: "sim.vert.glsl",
@@ -181,11 +182,11 @@ const RENDER_UNIFORMS = [
   "u_visibleThreshold", "u_exposure", "u_palette", "u_time", "u_high", "u_rms", "u_intensity",
   "u_radianceScale", "u_lightDir", "u_rimColor",
   "u_trailType", "u_trailLength", "u_densityScaleBoost", "u_pulseLayout", "u_bands",
-  "u_particleSize", "u_activeCount", "u_viewportYOffset",
+  "u_particleSize", "u_activeCount", "u_viewportYOffset", "u_trailEnergyNorm",
 ];
 const POST_UNIFORMS = [
   "u_scene", "u_resolution", "u_kaleidoSegments", "u_kaleidoAngle", "u_kaleidoZoom",
-  "u_exposure", "u_blackFloor", "u_viewportYOffset", "u_chromaticAberration", "u_godRays",
+  "u_exposure", "u_blackFloor", "u_viewportYOffset", "u_chromaticAberration", "u_godRays", "u_paletteHue", "u_coreSpecular",
 ];
 
 /**
@@ -557,7 +558,16 @@ export class ParticleSystem3D {
     multiply(this.viewProj, this.proj, this.view);
 
     // Pass 1: scene FBO — trail fade, then particles.
-    const keep60 = trailKeepFactor(particles.trailType, trailLength) * densityTrailScale(count, particles.densityAutoScale);
+    // ZUR-GH-008: keepFactor capped at 0.90 for >= 16k agents (and <= 0.45 inside a formation/flow/scene transition);
+    // u_trailEnergyNorm bounds the closed-form steady state 1 / (1 - keep) so long trails never wash out to white.
+    const keep60 = capKeepFactor(
+      trailKeepFactor(particles.trailType, trailLength) * densityTrailScale(count, particles.densityAutoScale),
+      count,
+      extras.trailKeepCap ?? 1,
+    );
+    const energyNorm = trailEnergyNorm(keep60);
+    this.lastKeep60 = keep60;
+    this.lastTrailEnergyNorm = energyNorm;
     const tau = tauFromKeep60(keep60);
     const keep = keepForDt(keep60, dt);
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.scene.framebuffer);
@@ -606,13 +616,11 @@ export class ParticleSystem3D {
     }
 
     const dart = particles.shape !== "capsule";
-    gl.depthMask(true);
-    gl.clear(gl.DEPTH_BUFFER_BIT);
-    if (dart) {
-      gl.enable(gl.DEPTH_TEST);
-      gl.depthFunc(gl.LEQUAL);
-    }
-    // Darts add (depth-tested); capsules are premultiplied so dense 16k–64k crowds saturate instead of whiting out.
+    // ZUR-GH-008: particle splatting never depth-tests. Additive darts / premultiplied capsules are order-independent,
+    // and a depth test against stale or sibling-dart depth punched dark dotted seams through bright dart3d spheres.
+    gl.disable(gl.DEPTH_TEST);
+    gl.depthMask(false);
+    // Darts add; capsules are premultiplied so dense 16k–64k crowds saturate instead of whiting out.
     if (dart) gl.blendFunc(gl.ONE, gl.ONE);
     else gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     gl.useProgram(this.renderProgram);
@@ -635,6 +643,7 @@ export class ParticleSystem3D {
     gl.uniform1f(R.u_rms, frame.rms || 0);
     gl.uniform1f(R.u_intensity, Math.min(1.2, Math.max(0.18, 0.22 * Math.sqrt(16384 / count))) * (dart ? 0.55 : 0.5));
     gl.uniform1f(R.u_radianceScale, trailRadianceScale(dt, tau));
+    gl.uniform1f(R.u_trailEnergyNorm, energyNorm);
     gl.uniform1i(R.u_trailType, trailType);
     gl.uniform1f(R.u_trailLength, trailLength);
     gl.uniform1f(R.u_densityScaleBoost, densityBoost);
@@ -649,7 +658,7 @@ export class ParticleSystem3D {
     if (dart) gl.drawArraysInstanced(gl.TRIANGLES, 0, 12, count);
     else gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, count);
     gl.bindVertexArray(null);
-    gl.disable(gl.DEPTH_TEST);
+    gl.depthMask(true);
     gl.invalidateFramebuffer(gl.FRAMEBUFFER, [gl.DEPTH_ATTACHMENT]);
 
     // Pass 2: default framebuffer — kaleidoscope + tone map + sRGB.
@@ -675,6 +684,8 @@ export class ParticleSystem3D {
     gl.uniform1f(P.u_viewportYOffset, viewportYOffset);
     gl.uniform1f(P.u_chromaticAberration, visual?.chromaticAberration ?? 0.30);
     gl.uniform1f(P.u_godRays, visual?.godRays ?? 0.35);
+    gl.uniform3f(P.u_paletteHue, palette[0], palette[1], palette[2]);
+    gl.uniform1f(P.u_coreSpecular, extras.megastructure ? 1 : 0);
     gl.bindVertexArray(this.emptyVao);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);
