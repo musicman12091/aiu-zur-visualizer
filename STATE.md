@@ -142,9 +142,12 @@ Pages is enabled and serving Stage 3 from the `main` branch root (`/`). https://
 - pages_url: https://musicman12091.github.io/aiu-zur-visualizer/ — HTTP 200; Pages build `built 8a35658`. Live markers: `TRAIL_KEEP_CAP = 0.90`, `u_trailEnergyNorm`, `chromaFloor` / `u_coreSpecular`, `gl.depthMask(false)`, `TrailTransitionGuard`, `FISH_LEADER_Y` / `GAS_TORUS_RADIUS`, `invariant gl_Position`, and sw.js `zur-shell-v5` + `PostProcessPass.js`.
 
 ## ZUR-GH-009 — Stage 5 "ZUR v5.0 — Blood, Brain & Deep Space"
-- branch: `feat/zur-gh-009`; merge SHA: TBD. Storage `zur_state_v5_0` (v4 key migrated), sw.js `zur-shell-v7`.
+- status: squash-merged to `main` — main_commit_sha `a1518f3` (PR https://github.com/musicman12091/aiu-zur-visualizer/pull/9); implementation `eaf00f2` on `feat/zur-gh-009`. Codegen: Copilot CLI `claude-sonnet-5.5` (session 53705344-59c1-4f47-9a81-f5c83316147e); Ori 6-point audit 6/6; no @copilot review.
+- Storage `zur_state_v5_0` (v4 key migrated), sw.js `zur-shell-v7`.
 - Density: tiers 64k/96k/128k/160k/256k (default 64k, `auto` + small tiers removed, migrated to 64k); `MAX_PARTICLES = 262144` sizes all TF VBOs + logo targets; glyph targets wrap with `sampledPoints[i % sampledPoints.length]`.
 - Pinch zoom: `cameraZoom` 0.35..3.50 (`u_cameraZoom` in render.vert + core.frag); canvas-only `touch-action: none`, HUD `pan-y`; 2-finger pinch, wheel, double-tap reset.
 - Styles `dart3d | blood-drop | synapse-spark | star-streak` (`orb` removed), palettes `true-neon | full-spectrum | white-static | blood-red`, 4 formations (`neural-brain`, `living-galaxy`, `supermassive-blackhole`, `wormhole`), `kineticMode` (6 modes), "Reactivity Punch" (`reactivityGain` 2.5), noise gate default 0.015 (0..0.1).
 - Notes: tree had no Visual Preset / Audio Profile rows, no `oVelocityAux` and no dart banking roll; the blood pin flag rides in the sim phase channel (+2.6). `v_neuralPulse` is a dedicated render.vert varying.
 - contracts: 124 passed. `tests/smoke-zur-gh-009.mjs` (`npm run smoke:gh009`) PASS at 412x915: 256k logo-attractor + neural-brain clean; all scenarios blackRatio < 0.85, whiteClip 0; audio-reactivity radius delta +0.22 at oscillationAmount 0.
+- Ori re-run (pre-merge): contracts 124/124; smoke:gh009 PASS — 256k logo blackRatio 0.449 / brain 0.823, scenarios blackRatio 0.436–0.74, whiteClip 0 everywhere, reactivity radiusDelta +0.204 / lumaDelta +97.8, console/page/WebGL errors 0, destinationConnections 0.
+- pages_url: https://musicman12091.github.io/aiu-zur-visualizer/ — HTTP 200, Pages build success; live markers sw.js `zur-shell-v7`, `zur_state_v5_0`, `MAX_PARTICLES = 262144`.
