@@ -1,3 +1,4 @@
+import { MAX_PARTICLES } from "./particleMath.js";
 const WIDTH = 512;
 const HEIGHT = 128;
 const FONT = {
@@ -99,15 +100,18 @@ function canvasPoints(text) {
 }
 
 /** Returns deterministic vec4 xyz logo targets, using a canvas in browsers and a 5x7 font in Node. */
-export function sampleLogoTargets(text = "AI: UNDERGROUND", count = 65536) {
+export function sampleLogoTargets(text = "AI: UNDERGROUND", count = MAX_PARTICLES) {
   const safeText = typeof text === "string" && text.length ? text.slice(0, 64) : "ZUR";
   const points = canvasPoints(safeText) || bitmapPoints(safeText);
+  // Golden-ratio ordering: any active prefix (64k..256k agents) covers the whole glyph, not just its top raster rows.
+  const sampledPoints = points.length
+    ? points.map((_, k) => points[Math.floor(((k * 0.6180339887498949) % 1) * points.length) % points.length])
+    : [[0.5, 0.5]];
   const targetCount = Math.max(0, Math.floor(count));
   const targets = new Float32Array(targetCount * 4);
   for (let i = 0; i < targetCount; i += 1) {
-    // Golden-ratio stride: any active prefix (2k..64k agents) covers the whole glyph, not just its top raster rows.
-    const pick = Math.floor(((i * 0.6180339887498949) % 1) * points.length) % points.length;
-    const [x, y] = points[pick];
+    // ZUR-GH-009: wrap with a modulo so 256k agents never read past the sampled glyph set.
+    const [x, y] = sampledPoints[i % sampledPoints.length];
     const offset = i * 4;
     targets[offset] = (x - 0.5) * 7.2;
     targets[offset + 1] = (0.5 - y) * 2.4;

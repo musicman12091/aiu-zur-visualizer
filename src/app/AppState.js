@@ -1,6 +1,13 @@
 import { PALETTE_IDS } from "../controls/palettes.js";
 import {
+  CAMERA_ZOOM_RANGE,
+  COLOR_PALETTES,
   COUNT_TIERS,
+  KINETIC_MODES,
+  NOISE_GATE_DEFAULT,
+  NOISE_GATE_RANGE,
+  PARTICLE_STYLES,
+  REACTIVITY_GAIN_RANGE,
   DEFAULT_PARTICLES,
   FLOW_MODES,
   FORMATION_TYPES,
@@ -75,7 +82,7 @@ export const MODE_A_PRESET = {
     attackMs: 25,
     releaseMs: 180,
     fftSize: 2048,
-    noiseGateThreshold: 0.02,
+    noiseGateThreshold: NOISE_GATE_DEFAULT,
   },
   visual: {
     paletteId: "neon-tunnel",
@@ -169,6 +176,11 @@ export const STAGE3_DEFAULTS = Object.freeze({
   oscillationAmount: DEFAULT_PARTICLES.oscillationAmount,
   oscillationSpeed: DEFAULT_PARTICLES.oscillationSpeed,
   pulseLayout: DEFAULT_PARTICLES.pulseLayout,
+  particleStyle: DEFAULT_PARTICLES.particleStyle,
+  colorPalette: DEFAULT_PARTICLES.colorPalette,
+  kineticMode: DEFAULT_PARTICLES.kineticMode,
+  reactivityGain: DEFAULT_PARTICLES.reactivityGain,
+  cameraZoom: DEFAULT_PARTICLES.cameraZoom,
 });
 
 /** Flat view of the Stage 3 keys for a preset (scene + palette + particles.*). */
@@ -193,17 +205,17 @@ function isObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-/** Stage 4 persisted state: `{ storageSchema, preset }` under this key. Older keys are migrated on load. */
-export const STORAGE_KEY = "zur_state_v4_0";
-export const STORAGE_SCHEMA = 4.0;
+/** Stage 5 persisted state: `{ storageSchema, preset }` under this key. Older keys are migrated on load. */
+export const STORAGE_KEY = "zur_state_v5_0";
+export const STORAGE_SCHEMA = 5.0;
 export const V4_NEON_FLAG = "zur_v4_neon_forced";
 export const LEGACY_STORAGE_KEYS = Object.freeze([
-  "zur_state_v3_2", "zur_state_v3", "zur_state_v2", "zur_state_v1", "zur.preset.v2", "zur.preset.v1",
+  "zur_state_v4_0", "zur_state_v3_2", "zur_state_v3", "zur_state_v2", "zur_state_v1", "zur.preset.v2", "zur.preset.v1",
 ]);
 /** Forced on any cached state older than v3.2 or still on copper-teal (grey-prone, small, dim). */
 export const V3_2_UPGRADE_DEFAULTS = Object.freeze({
   paletteId: "neon-tunnel",
-  particleCountTier: "2k",
+  particleCountTier: "64k",
   particleSize: 1.35,
   trailLength: 0.28,
   trailType: "comet",
@@ -238,6 +250,16 @@ export function upgradeToV40(preset) {
   return { preset: next, forcedNeon: wasCopper };
 }
 
+/** ZUR-GH-009: drops removed tiers / the orb style (normalizeParticles) and resets the old 0.2-range noise gate. */
+export function upgradeToV50(preset) {
+  const next = JSON.parse(JSON.stringify(preset));
+  next.particles = normalizeParticles(next.particles);
+  if (next.audio && !(next.audio.noiseGateThreshold <= NOISE_GATE_RANGE[1])) {
+    next.audio.noiseGateThreshold = NOISE_GATE_DEFAULT;
+  }
+  return next;
+}
+
 export function serializeStoredState(preset) {
   return JSON.stringify({ storageSchema: STORAGE_SCHEMA, preset });
 }
@@ -268,7 +290,7 @@ export function migrateStoredPayload(raw) {
   }
   if (schema < STORAGE_SCHEMA) {
     const upgraded = upgradeToV40(preset);
-    preset = upgraded.preset;
+    preset = upgradeToV50(upgraded.preset);
     forcedNeon = upgraded.forcedNeon;
     migrated = true;
   } else {
@@ -437,6 +459,17 @@ export function validatePreset(input) {
       numberIn(particles.oscillationAmount, OSCILLATION_AMOUNT_RANGE[0], OSCILLATION_AMOUNT_RANGE[1], "particles.oscillationAmount", errors);
       numberIn(particles.oscillationSpeed, OSCILLATION_SPEED_RANGE[0], OSCILLATION_SPEED_RANGE[1], "particles.oscillationSpeed", errors);
       if (!PULSE_LAYOUTS.includes(particles.pulseLayout)) errors.push(`particles.pulseLayout must be one of ${PULSE_LAYOUTS.join(", ")}`);
+      if (!PARTICLE_STYLES.includes(particles.particleStyle)) {
+        errors.push(`particles.particleStyle must be one of ${PARTICLE_STYLES.join(", ")}`);
+      }
+      if (!COLOR_PALETTES.includes(particles.colorPalette)) {
+        errors.push(`particles.colorPalette must be one of ${COLOR_PALETTES.join(", ")}`);
+      }
+      if (!KINETIC_MODES.includes(particles.kineticMode)) {
+        errors.push(`particles.kineticMode must be one of ${KINETIC_MODES.join(", ")}`);
+      }
+      numberIn(particles.reactivityGain, REACTIVITY_GAIN_RANGE[0], REACTIVITY_GAIN_RANGE[1], "particles.reactivityGain", errors);
+      numberIn(particles.cameraZoom, CAMERA_ZOOM_RANGE[0], CAMERA_ZOOM_RANGE[1], "particles.cameraZoom", errors);
       if (particles.attractorText != null && (typeof particles.attractorText !== "string" || particles.attractorText.length > 64)) {
         errors.push("particles.attractorText must be a string of at most 64 characters");
       }

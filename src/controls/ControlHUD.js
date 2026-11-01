@@ -3,6 +3,17 @@ import { QUALITY_TIERS } from "../render/RenderHost.js";
 import {
   COUNT_TIERS,
   COUNT_TIER_LABELS,
+  CAMERA_ZOOM_RANGE,
+  CAMERA_ZOOM_STEP,
+  COLOR_PALETTES,
+  COLOR_PALETTE_LABELS,
+  FORMATION_LABELS,
+  KINETIC_LABELS,
+  KINETIC_MODES,
+  NOISE_GATE_RANGE,
+  PARTICLE_STYLES,
+  PARTICLE_STYLE_LABELS,
+  REACTIVITY_GAIN_RANGE,
   DEFAULT_PARTICLES,
   FLOW_LABELS,
   FLOW_MODES,
@@ -34,14 +45,7 @@ const METERS = [
 const PULSE_SCENE_LABEL = "3D Audio Pulse Field — Stage 3";
 const LABELS = {
   trail: { comet: "Comet", electric: "Electric", strobe: "Strobe", ribbon: "Ribbon", none: "None" },
-  formation: {
-    "free-3d": "Free 3D",
-    "neon-tunnel": "Neon Tunnel",
-    "polygon-rings": "Polygon Rings",
-    "supernova-shell": "Supernova Shell",
-    "fractal-core": "Fractal Core",
-    "logo-attractor": "Logo Attractor",
-  },
+  formation: FORMATION_LABELS,
   scene: {
     "particle-swarm-3d": "3D Particle Swarm",
     "pulse-field-3d": PULSE_SCENE_LABEL,
@@ -210,6 +214,24 @@ export class ControlHUD {
       ["dart", "3D Fish/Bird Dart"],
       ["capsule", "Velocity Capsule"],
     ], (value) => this.handlers.particles?.({ shape: value }));
+    this.particleStyle = this._select(
+      "sel-particle-style",
+      "Particle style",
+      PARTICLE_STYLES.map((id) => [id, PARTICLE_STYLE_LABELS[id]]),
+      (value) => this.handlers.particles?.({ particleStyle: value }),
+    );
+    this.colorPalette = this._select(
+      "sel-color-palette",
+      "Color palette",
+      COLOR_PALETTES.map((id) => [id, COLOR_PALETTE_LABELS[id]]),
+      (value) => this.handlers.particles?.({ colorPalette: value }),
+    );
+    this.cameraZoom = this._range("rng-camera-zoom", "Camera Zoom", CAMERA_ZOOM_RANGE[0], CAMERA_ZOOM_RANGE[1], CAMERA_ZOOM_STEP, (value) => {
+      this.handlers.particles?.({ cameraZoom: value });
+    });
+    this.reactivity = this._range("rng-reactivity", "Reactivity Punch", REACTIVITY_GAIN_RANGE[0], REACTIVITY_GAIN_RANGE[1], 0.1, (value) => {
+      this.handlers.particles?.({ reactivityGain: value });
+    });
     this.size = this._range("rng-size", "Particle size", PARTICLE_SIZE_RANGE[0], PARTICLE_SIZE_RANGE[1], 0.05, (value) => {
       this.handlers.particles?.({ particleSize: value });
     });
@@ -240,6 +262,12 @@ export class ControlHUD {
     this.formation = this._select("sel-formation", "Formation", labelPairs(FORMATION_TYPES, LABELS.formation), (value) => {
       this.handlers.particles?.({ formationType: value });
     });
+    this.kinetic = this._select(
+      "sel-kinetic-mode",
+      "Kinetic Mode",
+      KINETIC_MODES.map((id) => [id, KINETIC_LABELS[id]]),
+      (value) => this.handlers.particles?.({ kineticMode: value }),
+    );
     this.oscillation = this._select("sel-oscillation", "Oscillation", labelPairs(OSCILLATION_TYPES, LABELS.oscillation), (value) => {
       this.handlers.particles?.({ oscillationType: value });
     });
@@ -284,10 +312,10 @@ export class ControlHUD {
       this._commit((draft) => { draft.visual.godRays = value; });
     });
     stage2.append(
-      this.flow.wrap, this.shape.wrap, this.size.wrap, this.kaleido.wrap, this.spin.label, this.count.wrap,
+      this.flow.wrap, this.shape.wrap, this.particleStyle.wrap, this.colorPalette.wrap, this.cameraZoom.wrap, this.reactivity.wrap, this.size.wrap, this.kaleido.wrap, this.spin.label, this.count.wrap,
       this.density.label, this.trailType.wrap, this.trailLength.wrap,
       this.formation.wrap, this.attractorPreset.wrap, this.attractorText.wrap, // logo text sits right under Formation
-      this.oscillation.wrap, this.oscAmount.wrap, this.oscSpeed.wrap, this.pulseLayout.wrap,
+      this.kinetic.wrap, this.oscillation.wrap, this.oscAmount.wrap, this.oscSpeed.wrap, this.pulseLayout.wrap,
       this.cameraMode.wrap, this.chromaticAberration.wrap, this.godRays.wrap,
     );
     this.body.append(stage2);
@@ -328,7 +356,7 @@ export class ControlHUD {
     });
     this.body.append(this.preamp.wrap);
 
-    this.gate = this._range("rng-gate", "Noise gate", 0, 0.2, 0.001, (value) => {
+    this.gate = this._range("rng-gate", "Noise gate", NOISE_GATE_RANGE[0], NOISE_GATE_RANGE[1], 0.001, (value) => {
       this._commit((draft) => {
         draft.audio.noiseGateThreshold = value;
       });
@@ -589,8 +617,8 @@ export class ControlHUD {
     this.systemAudio.select.value = audio.includeSystemAudio ? "include" : "exclude";
     this.preamp.input.value = String(audio.preAmpGain);
     this.preamp.value.textContent = `${Number(audio.preAmpGain).toFixed(1)}×`;
-    this.gate.input.value = String(audio.noiseGateThreshold ?? 0.02);
-    this.gate.value.textContent = Number(audio.noiseGateThreshold ?? 0.02).toFixed(3);
+    this.gate.input.value = String(audio.noiseGateThreshold ?? 0.015);
+    this.gate.value.textContent = Number(audio.noiseGateThreshold ?? 0.015).toFixed(3);
     this.gain.input.value = String(visual.gain ?? 1);
     this.gain.value.textContent = Number(visual.gain ?? 1).toFixed(1);
     this.fft.select.value = String(audio.fftSize || 2048);
@@ -602,6 +630,13 @@ export class ControlHUD {
     this.scene.select.value = SCENE_IDS.includes(preset.sceneId) ? preset.sceneId : "aurora-ribbons";
     this.flow.select.value = particles.flowMode;
     this.shape.select.value = particles.shape;
+    this.particleStyle.select.value = particles.particleStyle;
+    this.colorPalette.select.value = particles.colorPalette;
+    this.cameraZoom.input.value = String(particles.cameraZoom);
+    this.cameraZoom.value.textContent = `${Number(particles.cameraZoom).toFixed(2)}×`;
+    this.reactivity.input.value = String(particles.reactivityGain);
+    this.reactivity.value.textContent = Number(particles.reactivityGain).toFixed(1);
+    this.kinetic.select.value = particles.kineticMode;
     this.size.input.value = String(particles.particleSize);
     this.size.value.textContent = `${Number(particles.particleSize).toFixed(2)}×`;
     this.kaleido.select.value = String(particles.kaleidoSegments);

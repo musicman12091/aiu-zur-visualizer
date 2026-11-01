@@ -21,7 +21,10 @@ import {
   densityTrailScale,
   keepForDt,
   minRenderRadiusPx,
-  nextAutoCount,
+  PARTICLE_STYLES,
+  COLOR_PALETTES,
+  KINETIC_MODES,
+  clampCameraZoom,
   normalizeParticles,
   projectionScales,
   resolveParticleCount,
@@ -174,6 +177,7 @@ function multiply(out, a, b) {
 const SIM_UNIFORMS = [
   "u_dt", "u_time", "u_mode", "u_count", "u_damping", "u_rms", "u_sub", "u_bass", "u_mid", "u_high",
   "u_onset", "u_waveSpeed", "u_shock", "u_neighbors", "u_useNeighbors",
+  "u_particleStyle", "u_kineticMode", "u_reactivityGain",
   "u_formationType", "u_oscillationType", "u_oscillationAmount", "u_oscillationSpeed", "u_pulseLayout", "u_megastructure", "u_bands",
   "u_billboardRight", "u_billboardUp",
 ];
@@ -183,10 +187,12 @@ const RENDER_UNIFORMS = [
   "u_radianceScale", "u_lightDir", "u_rimColor",
   "u_trailType", "u_trailLength", "u_densityScaleBoost", "u_pulseLayout", "u_bands",
   "u_particleSize", "u_activeCount", "u_viewportYOffset", "u_trailEnergyNorm",
+  "u_cameraZoom", "u_particleStyle", "u_colorPalette", "u_formationType", "u_reactivityGain",
+  "u_bass", "u_onset", "u_treble", "u_spectralCentroid",
 ];
 const POST_UNIFORMS = [
   "u_scene", "u_resolution", "u_kaleidoSegments", "u_kaleidoAngle", "u_kaleidoZoom",
-  "u_exposure", "u_blackFloor", "u_viewportYOffset", "u_chromaticAberration", "u_godRays", "u_paletteHue", "u_coreSpecular",
+  "u_exposure", "u_blackFloor", "u_viewportYOffset", "u_chromaticAberration", "u_godRays", "u_paletteHue", "u_coreSpecular", "u_colorPalette",
 ];
 
 /**
@@ -209,7 +215,7 @@ export class ParticleSystem3D {
     this.stepsLastFrame = 0;
     this.totalSteps = 0;
     this.framesRendered = 0;
-    this.autoCount = resolveParticleCount("auto", mobile);
+    this.autoCount = resolveParticleCount("64k", mobile);
     this.slowWindows = 0;
     this.count = this.autoCount;
     this.sceneFormat = "none";
@@ -254,7 +260,7 @@ export class ParticleSystem3D {
       this.postLoc = locations(gl, this.postProgram, POST_UNIFORMS);
       this.coreLoc = locations(gl, this.coreProgram, [
         "u_resolution", "u_eye", "u_forward", "u_right", "u_up", "u_palette", "u_time", "u_bass", "u_steps",
-        "u_viewportYOffset",
+        "u_cameraZoom", "u_colorPalette", "u_spectralCentroid", "u_viewportYOffset",
       ]);
 
       // Ping-pong interleaved Float32 state: [a_pos vec4 | a_vel vec4] x MAX_PARTICLES.
@@ -380,19 +386,12 @@ export class ParticleSystem3D {
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
 
-  /** Called once per 1-second FPS window by RenderHost. Auto tier steps down if FPS < threshold. */
-  reportFps(fps, targetFps, countTier) {
-    if (countTier !== "auto") {
-      this.slowWindows = 0;
-      return;
-    }
-    const next = nextAutoCount(this.autoCount, fps, targetFps, this.slowWindows);
-    this.autoCount = next.count;
-    this.slowWindows = next.slowWindows;
+  /** ZUR-GH-009: tiers are fixed (64k..256k); the auto tier was removed, so FPS windows no longer change the count. */
+  reportFps() {
+    this.slowWindows = 0;
   }
 
   resetAuto() {
-    this.autoCount = resolveParticleCount("auto", this.mobile);
     this.slowWindows = 0;
   }
 
@@ -426,7 +425,7 @@ export class ParticleSystem3D {
     const dt = Math.min(Math.max(frame.delta || 0, 0), 0.25);
     const modeIndex = Math.max(0, FLOW_MODES.indexOf(particles.flowMode));
     const tierCount = resolveParticleCount(particles.particleCountTier, this.mobile);
-    this.count = particles.particleCountTier === "auto" ? this.autoCount : tierCount;
+    this.count = tierCount;
     // Logo glyph needs dense coverage; floor active agents at 16k even if HUD tier is 2k.
     if (particles.formationType === "logo-attractor") {
       this.count = Math.max(this.count, 16384);
@@ -440,6 +439,11 @@ export class ParticleSystem3D {
       gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.logoTargets);
       gl.bindBuffer(gl.ARRAY_BUFFER, null);
     }
+    const styleIndex = Math.max(0, PARTICLE_STYLES.indexOf(particles.particleStyle));
+    const paletteIndex = Math.max(0, COLOR_PALETTES.indexOf(particles.colorPalette));
+    const zoom = clampCameraZoom(particles.cameraZoom);
+    const formationIndex = Math.max(0, FORMATION_TYPES.indexOf(particles.formationType));
+    const centroid = extras.spectralCentroid ?? 0.5;
     const pulse = Boolean(extras.pulse);
     const pulseLayout = pulse ? Math.max(0, PULSE_LAYOUTS.indexOf(particles.pulseLayout)) : -1;
     const trailType = Math.max(0, TRAIL_TYPES.indexOf(particles.trailType));
@@ -488,6 +492,9 @@ export class ParticleSystem3D {
       gl.uniform4fv(L.u_shock, this.shock);
       gl.uniform1i(L.u_useNeighbors, useNeighbors);
       gl.uniform1i(L.u_formationType, Math.max(0, FORMATION_TYPES.indexOf(particles.formationType)));
+      gl.uniform1i(L.u_particleStyle, styleIndex);
+      gl.uniform1i(L.u_kineticMode, Math.max(0, KINETIC_MODES.indexOf(particles.kineticMode)));
+      gl.uniform1f(L.u_reactivityGain, particles.reactivityGain);
       gl.uniform1i(L.u_oscillationType, Math.max(0, OSCILLATION_TYPES.indexOf(particles.oscillationType)));
       gl.uniform1f(L.u_oscillationAmount, particles.oscillationAmount);
       gl.uniform1f(L.u_oscillationSpeed, particles.oscillationSpeed);
@@ -608,6 +615,9 @@ export class ParticleSystem3D {
       gl.uniform3fv(C.u_palette, palette);
       gl.uniform1f(C.u_time, t);
       gl.uniform1f(C.u_bass, frame.bass || 0);
+      gl.uniform1f(C.u_cameraZoom, zoom);
+      gl.uniform1i(C.u_colorPalette, paletteIndex);
+      gl.uniform1f(C.u_spectralCentroid, centroid);
       gl.uniform1i(C.u_steps, visual?.qualityTier === "safe" ? 16 : 24);
       // ZUR-GH-007: core, swarm (u_viewportYOffset in render.vert) and kaleido fold share one optical centre.
       gl.uniform1f(C.u_viewportYOffset, viewportYOffset);
@@ -615,7 +625,7 @@ export class ParticleSystem3D {
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     }
 
-    const dart = particles.shape !== "capsule";
+    const dart = styleIndex === 0 && particles.shape !== "capsule";
     // ZUR-GH-008: particle splatting never depth-tests. Additive darts / premultiplied capsules are order-independent,
     // and a depth test against stale or sibling-dart depth punched dark dotted seams through bright dart3d spheres.
     gl.disable(gl.DEPTH_TEST);
@@ -630,6 +640,15 @@ export class ParticleSystem3D {
     gl.uniform2f(R.u_resolution, this.width, this.height);
     gl.uniform1f(R.u_projScale, this.proj[5]);
     gl.uniform1i(R.u_shape, dart ? 0 : 1);
+    gl.uniform1f(R.u_cameraZoom, zoom);
+    gl.uniform1i(R.u_particleStyle, styleIndex);
+    gl.uniform1i(R.u_colorPalette, paletteIndex);
+    gl.uniform1i(R.u_formationType, formationIndex);
+    gl.uniform1f(R.u_reactivityGain, particles.reactivityGain);
+    gl.uniform1f(R.u_bass, frame.bass || 0);
+    gl.uniform1f(R.u_onset, onset);
+    gl.uniform1f(R.u_treble, extras.bands?.[4] || frame.high || 0);
+    gl.uniform1f(R.u_spectralCentroid, centroid);
     gl.uniform1f(R.u_size, particles.particleSize);
     gl.uniform1f(R.u_particleSize, particles.particleSize);
     gl.uniform1f(R.u_activeCount, count);
@@ -685,6 +704,7 @@ export class ParticleSystem3D {
     gl.uniform1f(P.u_chromaticAberration, visual?.chromaticAberration ?? 0.30);
     gl.uniform1f(P.u_godRays, visual?.godRays ?? 0.35);
     gl.uniform3f(P.u_paletteHue, palette[0], palette[1], palette[2]);
+    gl.uniform1i(P.u_colorPalette, paletteIndex);
     gl.uniform1f(P.u_coreSpecular, extras.megastructure ? 1 : 0);
     gl.bindVertexArray(this.emptyVao);
     gl.drawArrays(gl.TRIANGLES, 0, 3);

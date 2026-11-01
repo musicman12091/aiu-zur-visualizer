@@ -26,24 +26,67 @@ export const FLOW_LABELS = Object.freeze({
 });
 export const PARTICLE_SHAPES = Object.freeze(["dart", "capsule"]);
 export const KALEIDO_SEGMENTS = Object.freeze([0, 4, 6, 8, 12, 16]);
-export const COUNT_TIERS = Object.freeze(["auto", "64", "128", "256", "512", "1k", "2k", "4k", "16k", "32k", "64k"]);
+/** ZUR-GH-009: five density tiers only (no 16k/32k or smaller). */
+export const COUNT_TIERS = Object.freeze(["64k", "96k", "128k", "160k", "256k"]);
 export const COUNT_TIER_VALUES = Object.freeze({
-  "64": 64,
-  "128": 128,
-  "256": 256,
-  "512": 512,
-  "1k": 1024,
-  "2k": 2048,
-  "4k": 4096,
-  "16k": 16384,
-  "32k": 32768,
   "64k": 65536,
+  "96k": 98304,
+  "128k": 131072,
+  "160k": 163840,
+  "256k": 262144,
 });
-export const COUNT_TIER_LABELS = Object.freeze({ auto: "Auto (64k desktop / 16k mobile)" });
+export const COUNT_TIER_LABELS = Object.freeze({
+  "64k": "64k (65,536)",
+  "96k": "96k (98,304)",
+  "128k": "128k (131,072)",
+  "160k": "160k (163,840)",
+  "256k": "256k (262,144)",
+});
 export const TRAIL_TYPES = Object.freeze(["comet", "electric", "strobe", "ribbon", "none"]);
+/** Index = `u_formationType` in sim.vert.glsl; ZUR-GH-009 ids 6..9 are appended after logo-attractor. */
 export const FORMATION_TYPES = Object.freeze([
   "free-3d", "neon-tunnel", "polygon-rings", "supernova-shell", "fractal-core", "logo-attractor",
+  "neural-brain", "living-galaxy", "supermassive-blackhole", "wormhole",
 ]);
+export const FORMATION_LABELS = Object.freeze({
+  "neural-brain": "3D Brain (Golden Neurons & Synapses)",
+  "living-galaxy": "Living Spiral Galaxy",
+  "supermassive-blackhole": "Supermassive Black Hole (Gargantua)",
+  "wormhole": "Spacetime Wormhole (Einstein-Rosen)",
+});
+/** Index = `u_particleStyle`. "orb" was removed in ZUR-GH-009. */
+export const PARTICLE_STYLES = Object.freeze(["dart3d", "blood-drop", "synapse-spark", "star-streak"]);
+export const PARTICLE_STYLE_LABELS = Object.freeze({
+  "dart3d": "3D Dart",
+  "blood-drop": "Blood Drop",
+  "synapse-spark": "Synapse Spark",
+  "star-streak": "Star Streak",
+});
+/** Index = `u_colorPalette`. */
+export const COLOR_PALETTES = Object.freeze(["true-neon", "full-spectrum", "white-static", "blood-red"]);
+export const COLOR_PALETTE_LABELS = Object.freeze({
+  "true-neon": "True Neon",
+  "full-spectrum": "Full Spectrum",
+  "white-static": "White Static",
+  "blood-red": "Blood Red",
+});
+/** Index = `u_kineticMode`. */
+export const KINETIC_MODES = Object.freeze([
+  "off", "splatter-run", "synapse-cascade", "accretion-warp", "ribbon-curtain", "shock-shatter",
+]);
+export const KINETIC_LABELS = Object.freeze({
+  "off": "Off",
+  "splatter-run": "Splatter Run",
+  "synapse-cascade": "Synapse Cascade",
+  "accretion-warp": "Accretion Warp",
+  "ribbon-curtain": "Ribbon Curtain",
+  "shock-shatter": "Shock Shatter",
+});
+export const CAMERA_ZOOM_RANGE = Object.freeze([0.35, 3.5]);
+export const CAMERA_ZOOM_STEP = 0.05;
+export const REACTIVITY_GAIN_RANGE = Object.freeze([0.5, 5.0]);
+export const NOISE_GATE_RANGE = Object.freeze([0, 0.1]);
+export const NOISE_GATE_DEFAULT = 0.015;
 export const OSCILLATION_TYPES = Object.freeze(["off", "wave", "helix", "bounce", "pulse"]);
 /** ZUR-GH-007: Logo / Attractor Text presets shown directly under the Formation dropdown. */
 export const LOGO_TEXT_PRESETS = Object.freeze(["AI: UNDERGROUND", "MON DAAIN", "TENTH GATE", "ZUR"]);
@@ -55,10 +98,11 @@ export const PULSE_LAYOUTS = Object.freeze(["band-clouds", "geodesic-sphere", "w
 export const TRAIL_LENGTH_RANGE = Object.freeze([0, 1]);
 export const OSCILLATION_AMOUNT_RANGE = Object.freeze([0, 3]);
 export const OSCILLATION_SPEED_RANGE = Object.freeze([0.25, 4]);
-export const MAX_PARTICLES = 65536;
+/** ZUR-GH-009: every TF / logo-target buffer is allocated at this capacity regardless of the active tier. */
+export const MAX_PARTICLES = 262144;
 export const MIN_PARTICLES = 4096;
 export const DESKTOP_PARTICLES = 65536;
-export const MOBILE_PARTICLES = 16384;
+export const MOBILE_PARTICLES = 65536;
 export const PARTICLE_SIZE_RANGE = Object.freeze([0.5, 4.0]);
 /** Bytes per agent: vec4 a_pos + vec4 a_vel, interleaved Float32. */
 export const BYTES_PER_AGENT = 32;
@@ -83,7 +127,7 @@ export const DEFAULT_PARTICLES = Object.freeze({
   particleSize: 1.0,
   kaleidoSegments: 0,
   kaleidoSpin: true,
-  particleCountTier: "1k",
+  particleCountTier: "64k",
   densityAutoScale: true,
   trailLength: 0.28,
   trailType: "comet",
@@ -93,6 +137,11 @@ export const DEFAULT_PARTICLES = Object.freeze({
   oscillationAmount: 1.0,
   oscillationSpeed: 1.2,
   pulseLayout: "band-clouds",
+  particleStyle: "dart3d",
+  colorPalette: "true-neon",
+  kineticMode: "off",
+  reactivityGain: 2.5,
+  cameraZoom: 1.0,
 });
 
 /** Converts a per-step retention factor (e.g. 0.985 per 1/60 s) into a continuous damping rate (1/s). */
@@ -471,10 +520,10 @@ export function normalizeParticles(input) {
   }
   if (KALEIDO_SEGMENTS.includes(src.kaleidoSegments)) out.kaleidoSegments = src.kaleidoSegments;
   if (typeof src.kaleidoSpin === "boolean") out.kaleidoSpin = src.kaleidoSpin;
+  // Removed tiers (auto, 64..32k) and legacy numeric `countTier` values fall back to 64k unless they map to a live tier.
   if (COUNT_TIERS.includes(src.particleCountTier)) out.particleCountTier = src.particleCountTier;
   else if (src.countTier != null) {
-    // Stage 2 stored presets / URLs used `countTier` (auto or a number).
-    const legacy = src.countTier === "auto" ? "auto" : tierFromCount(src.countTier);
+    const legacy = tierFromCount(src.countTier);
     if (legacy) out.particleCountTier = legacy;
   }
   if (typeof src.densityAutoScale === "boolean") out.densityAutoScale = src.densityAutoScale;
@@ -486,6 +535,12 @@ export function normalizeParticles(input) {
   if (Number.isFinite(src.oscillationAmount)) out.oscillationAmount = clampRange(src.oscillationAmount, OSCILLATION_AMOUNT_RANGE);
   if (Number.isFinite(src.oscillationSpeed)) out.oscillationSpeed = clampRange(src.oscillationSpeed, OSCILLATION_SPEED_RANGE);
   if (PULSE_LAYOUTS.includes(src.pulseLayout)) out.pulseLayout = src.pulseLayout;
+  // Legacy "orb" (or any unknown style) migrates to the default dart3d.
+  if (PARTICLE_STYLES.includes(src.particleStyle)) out.particleStyle = src.particleStyle;
+  if (COLOR_PALETTES.includes(src.colorPalette)) out.colorPalette = src.colorPalette;
+  if (KINETIC_MODES.includes(src.kineticMode)) out.kineticMode = src.kineticMode;
+  if (Number.isFinite(src.reactivityGain)) out.reactivityGain = clampRange(src.reactivityGain, REACTIVITY_GAIN_RANGE);
+  if (Number.isFinite(src.cameraZoom)) out.cameraZoom = clampRange(src.cameraZoom, CAMERA_ZOOM_RANGE);
   return out;
 }
 
@@ -520,12 +575,15 @@ export function encodePresetParam(sceneId, particles) {
     `oa:${Number(p.oscillationAmount.toFixed(2))}`,
     `os:${Number(p.oscillationSpeed.toFixed(2))}`,
     `pl:${p.pulseLayout}`,
+    `ps:${p.particleStyle}`,
+    `cp:${p.colorPalette}`,
+    `km:${p.kineticMode}`,
   ].join("_");
 }
 
 /** Accepts the encoded form above or a bare flow name (`?preset=gas`). Returns null when nothing usable. */
 export function decodePresetParam(value) {
-  if (typeof value !== "string" || value.length === 0 || value.length > 200) return null;
+  if (typeof value !== "string" || value.length === 0 || value.length > 400) return null;
   if (FLOW_MODES.includes(value)) {
     return { sceneId: PARTICLE_SCENE_ID, particles: { flowMode: value } };
   }
@@ -546,7 +604,7 @@ export function decodePresetParam(value) {
     else if (key === "size") result.particles.particleSize = Number(raw);
     else if (key === "k") result.particles.kaleidoSegments = Number(raw);
     else if (key === "spin") result.particles.kaleidoSpin = raw === "1";
-    else if (key === "count") result.particles.particleCountTier = raw === "auto" || COUNT_TIERS.includes(raw) ? raw : tierFromCount(raw);
+    else if (key === "count") result.particles.particleCountTier = COUNT_TIERS.includes(raw) ? raw : tierFromCount(raw);
     else if (key === "das") result.particles.densityAutoScale = raw === "1";
     else if (key === "tl") result.particles.trailLength = Number(raw);
     else if (key === "tt") result.particles.trailType = raw;
@@ -562,6 +620,9 @@ export function decodePresetParam(value) {
     else if (key === "oa") result.particles.oscillationAmount = Number(raw);
     else if (key === "os") result.particles.oscillationSpeed = Number(raw);
     else if (key === "pl") result.particles.pulseLayout = raw;
+    else if (key === "ps") result.particles.particleStyle = raw;
+    else if (key === "cp") result.particles.colorPalette = raw;
+    else if (key === "km") result.particles.kineticMode = raw;
   }
   return matched ? result : null;
 }
@@ -631,4 +692,67 @@ export function fractalCoreShellDirections(count) {
 export function opticalCenterUv(viewportYOffset = 0) {
   const offset = Number.isFinite(viewportYOffset) ? viewportYOffset : 0;
   return [0.5, 0.5 + 0.5 * offset];
+}
+
+// ---- ZUR-GH-009 pure mirrors of shader / input math (pinned by tests/verify-contracts.mjs) ----
+
+export function clampCameraZoom(value) {
+  return Number.isFinite(value) ? clampRange(value, CAMERA_ZOOM_RANGE) : 1;
+}
+
+/** Two-finger pinch: newZoom = clamp(startZoom * currentDist / startDist). */
+export function pinchZoom(startZoom, startDist, currentDist) {
+  if (!(startDist > 0) || !Number.isFinite(currentDist)) return clampCameraZoom(startZoom);
+  return clampCameraZoom(startZoom * (currentDist / startDist));
+}
+
+/** Wheel zoom: scroll up (negative deltaY) zooms in. */
+export function wheelZoom(zoom, deltaY) {
+  return clampCameraZoom(zoom * Math.exp(-Math.max(-400, Math.min(400, deltaY)) * 0.0015));
+}
+
+/** Radial kick applied to sim target positions even when Oscillation amount is 0 (sim.vert.glsl). */
+export function radialKick(gain, sub, bass) {
+  return 1 + 0.28 * gain * (sub * 0.65 + bass * 0.35);
+}
+
+/** Onset velocity impulse (sim.vert.glsl). */
+export function onsetImpulse(gain, onset) {
+  return onset * 2.2 * gain;
+}
+
+/** Point-size pulse (render.vert.glsl). */
+export function pointSizePulse(gain, bass, onset) {
+  return 1 + 0.45 * gain * (bass * 0.5 + onset * 0.5);
+}
+
+/** v_neuralPulse mirror (render.vert.glsl). */
+export function neuralPulse(radius, time, onset, treble) {
+  const wave = Math.sin(radius * 14 - time * 9 - onset * 5);
+  const t = Math.min(1, Math.max(0, (wave - 0.72) / (0.98 - 0.72)));
+  return t * t * (3 - 2 * t) * Math.min(1.5, Math.max(0, 0.45 + treble * 0.9 + onset * 1.1));
+}
+
+/** Weighted band centroid 0..1 (sub = 0 ... treble = 1) fed to u_spectralCentroid. */
+export function spectralCentroidFromBands(sub, bass, lowMid, highMid, treble) {
+  const sum = sub + bass + lowMid + highMid + treble;
+  if (!(sum > 1e-6)) return 0.5;
+  return (bass * 0.25 + lowMid * 0.5 + highMid * 0.75 + treble) / sum;
+}
+
+/** Blood-drop wall pin (sim.vert.glsl, normalised units): returns the new state or null when not pinned. */
+export function bloodPin(posZ, velZ) {
+  if (posZ >= 0.78) return { z: 0.79, vz: 0, pinned: true };
+  return { z: posZ, vz: velZ, pinned: false };
+}
+
+/** Blood-drop respawn trigger (sim.vert.glsl, normalised units). */
+export function bloodNeedsRespawn(posY) {
+  return posY < -1.25;
+}
+
+/** Saturation floor used by the true-neon palette (render.frag.glsl satFloor). Input / output linear-ish rgb. */
+export function hsvSaturation([r, g, b]) {
+  const mx = Math.max(r, g, b);
+  return mx <= 0 ? 0 : (mx - Math.min(r, g, b)) / mx;
 }

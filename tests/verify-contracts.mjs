@@ -98,7 +98,7 @@ import {
 import { PALETTES, PALETTE_IDS } from "../src/controls/palettes.js";
 import { STAGE3_DEFAULTS, stage3View } from "../src/app/AppState.js";
 import {
-  STORAGE_KEY, STORAGE_SCHEMA, V3_2_UPGRADE_DEFAULTS, V4_NEON_FLAG, loadStoredState, serializeStoredState,
+  STORAGE_KEY, STORAGE_SCHEMA, LEGACY_STORAGE_KEYS, V3_2_UPGRADE_DEFAULTS, V4_NEON_FLAG, loadStoredState, serializeStoredState,
 } from "../src/app/AppState.js";
 import { NEON_PALETTE_IDS, NEON_MIN_SATURATION } from "../src/controls/palettes.js";
 import { CAPSULE_ALPHA, capsuleAlpha, crowdNorm, foldRadius, kaleidoVignette, mirrorRepeat } from "../src/render/particleMath.js";
@@ -722,25 +722,20 @@ test("render shader builds velocity-aligned darts and capsules from gl_VertexID"
   assert.match(frag, /float core = exp\(-r2 \* 42\.0\) \* 0\.30/);
 });
 
-test("particle tiers: 65,536 desktop / 16,384 mobile with FPS step-down", () => {
-  assert.deepEqual([...COUNT_TIERS], ["auto", "64", "128", "256", "512", "1k", "2k", "4k", "16k", "32k", "64k"]);
-  assert.equal(resolveParticleCount("auto", false), 65536);
-  assert.equal(resolveParticleCount("auto", true), 16384);
-  assert.equal(resolveParticleCount(32768, false), 32768);
-  assert.equal(resolveParticleCount("32k", false), 32768);
+test("particle tiers: 64k..256k fixed tiers (ZUR-GH-009), no auto step-down", () => {
+  assert.deepEqual([...COUNT_TIERS], ["64k", "96k", "128k", "160k", "256k"]);
+  assert.equal(DEFAULT_PARTICLES.particleCountTier, "64k");
+  assert.equal(resolveParticleCount("64k", false), 65536);
+  assert.equal(resolveParticleCount("96k", false), 98304);
+  assert.equal(resolveParticleCount("128k", false), 131072);
+  assert.equal(resolveParticleCount("160k", false), 163840);
+  assert.equal(resolveParticleCount("256k", false), 262144);
+  assert.equal(resolveParticleCount(131072, false), 131072);
   assert.equal(isMobileAgent("Mozilla/5.0 (Linux; Android 15; SM-A576B) Mobile"), true);
   assert.equal(isMobileAgent("Mozilla/5.0 (X11; Linux x86_64) Chrome/141"), false);
   assert.equal(stepdownThreshold(60), 50);
   assert.equal(stepdownThreshold(30), 25);
-  let r = nextAutoCount(65536, 45, 60, 0);
-  assert.deepEqual(r, { count: 65536, slowWindows: 1 });
-  r = nextAutoCount(65536, 45, 60, r.slowWindows);
-  assert.deepEqual(r, { count: 32768, slowWindows: 0 });
-  assert.deepEqual(nextAutoCount(65536, 12, 60, 0), { count: 16384, slowWindows: 0 });
-  assert.deepEqual(nextAutoCount(65536, 58, 60, 1), { count: 65536, slowWindows: 0 });
   assert.equal(nextAutoCount(4096, 5, 60, 3).count, 4096);
-  assert.equal(nextAutoCount(65536, 29, 30, 1).count, 65536, "30 fps cap is not a miss");
-  assert.deepEqual(nextAutoCount(65536, 49, 60, 1), { count: 32768, slowWindows: 0 }, "FPS < 50 steps down");
 });
 
 test("Stage 2 preset schema, Mode A/B scene retention and ?preset= URL state", () => {
@@ -759,7 +754,7 @@ test("Stage 2 preset schema, Mode A/B scene retention and ?preset= URL state", (
   assert.equal(kept.particles.flowMode, "gas");
   assert.equal(kept.visual.fps, 60);
   assert.equal(validatePreset(kept).ok, true);
-  const particles = { flowMode: "fish", shape: "capsule", particleSize: 2.5, kaleidoSegments: 12, kaleidoSpin: false, particleCountTier: "16k" };
+  const particles = { flowMode: "fish", shape: "capsule", particleSize: 2.5, kaleidoSegments: 12, kaleidoSpin: false, particleCountTier: "128k" };
   const encoded = encodePresetParam(PARTICLE_SCENE_ID, particles);
   const decoded = decodePresetParam(encoded);
   assert.equal(decoded.sceneId, PARTICLE_SCENE_ID);
@@ -839,7 +834,7 @@ test("Stage 3 frozen AppState keys, enums and defaults", () => {
   assert.deepEqual({ ...STAGE3_DEFAULTS }, {
     sceneId: "particle-swarm-3d",
     paletteId: "neon-tunnel",
-    particleCountTier: "1k",
+    particleCountTier: "64k",
     densityAutoScale: true,
     trailLength: 0.28,
     trailType: "comet",
@@ -849,6 +844,11 @@ test("Stage 3 frozen AppState keys, enums and defaults", () => {
     oscillationAmount: 1.0,
     oscillationSpeed: 1.2,
     pulseLayout: "band-clouds",
+    particleStyle: "dart3d",
+    colorPalette: "true-neon",
+    kineticMode: "off",
+    reactivityGain: 2.5,
+    cameraZoom: 1.0,
   });
   assert.deepEqual([...SCENE_IDS], [
     "particle-swarm-3d", "pulse-field-3d", "megastructure-3d", "spectral-canyon-3d", "aurora-ribbons",
@@ -861,6 +861,7 @@ test("Stage 3 frozen AppState keys, enums and defaults", () => {
   assert.deepEqual([...TRAIL_TYPES], ["comet", "electric", "strobe", "ribbon", "none"]);
   assert.deepEqual([...FORMATION_TYPES], [
     "free-3d", "neon-tunnel", "polygon-rings", "supernova-shell", "fractal-core", "logo-attractor",
+    "neural-brain", "living-galaxy", "supermassive-blackhole", "wormhole",
   ]);
   assert.deepEqual([...OSCILLATION_TYPES], ["off", "wave", "helix", "bounce", "pulse"]);
   assert.deepEqual([...PULSE_LAYOUTS], ["band-clouds", "geodesic-sphere", "wave-grid"]);
@@ -872,7 +873,7 @@ test("Stage 3 frozen AppState keys, enums and defaults", () => {
   assert.equal(validatePreset(MODE_B_PRESET).ok, true);
   for (const [key, bad] of [
     ["trailLength", 1.01], ["trailType", "laser"], ["formationType", "cube"], ["oscillationType", "spin"],
-    ["oscillationAmount", 3.5], ["oscillationSpeed", 0.1], ["pulseLayout", "grid"], ["particleCountTier", "8k"], ["densityAutoScale", "yes"],
+    ["oscillationAmount", 3.5], ["oscillationSpeed", 0.1], ["pulseLayout", "grid"], ["particleCountTier", "8k"], ["particleStyle", "orb"], ["densityAutoScale", "yes"],
   ]) {
     const preset = JSON.parse(JSON.stringify(STAGE2_DEFAULT_PRESET));
     preset.particles[key] = bad;
@@ -882,19 +883,17 @@ test("Stage 3 frozen AppState keys, enums and defaults", () => {
   assert.equal(clamped.trailLength, 1);
   assert.equal(clamped.oscillationAmount, 0);
   assert.equal(clamped.oscillationSpeed, 4);
-  assert.equal(normalizeParticles({ countTier: 16384 }).particleCountTier, "16k", "Stage 2 countTier migrates");
-  assert.equal(normalizeParticles({ countTier: "auto" }).particleCountTier, "auto");
-  assert.deepEqual(decodePresetParam("scene:pulse_count:2k"), { particles: { particleCountTier: "2k" }, sceneId: "pulse-field-3d" });
-  assert.equal(decodePresetParam("count:4096").particles.particleCountTier, "4k");
+  assert.equal(normalizeParticles({ countTier: 131072 }).particleCountTier, "128k", "numeric countTier migrates");
+  assert.equal(normalizeParticles({ countTier: 16384 }).particleCountTier, "64k", "removed small tiers migrate to 64k");
+  assert.equal(normalizeParticles({ countTier: "auto" }).particleCountTier, "64k");
+  assert.deepEqual(decodePresetParam("scene:pulse_count:160k"), { particles: { particleCountTier: "160k" }, sceneId: "pulse-field-3d" });
 });
 
 test("Stage 3 count tiers and density auto-scale formulas", () => {
   assert.deepEqual({ ...COUNT_TIER_VALUES }, {
-    "64": 64, "128": 128, "256": 256, "512": 512, "1k": 1024, "2k": 2048, "4k": 4096, "16k": 16384, "32k": 32768, "64k": 65536,
+    "64k": 65536, "96k": 98304, "128k": 131072, "160k": 163840, "256k": 262144,
   });
-  assert.equal(DEFAULT_PARTICLES.particleCountTier, "1k");
-  assert.equal(resolveParticleCount("1k", false), 1024);
-  assert.equal(resolveParticleCount("64", true), 64);
+  assert.equal(DEFAULT_PARTICLES.particleCountTier, "64k");
   assert.equal(resolveParticleCount("64k", true), 65536);
   assert.ok(near(densityScaleBoost(1024), Math.pow(4, 0.32), 1e-12));
   assert.ok(near(densityScaleBoost(4096), 1, 1e-12));
@@ -1044,10 +1043,10 @@ test("Stage 3 pulse-field-3d scene: five-band bound, no destination connection",
       oscillationAmount: 2.25,
       oscillationSpeed: 0.75,
       pulseLayout: "geodesic-sphere",
-      particleCountTier: "2k",
+      particleCountTier: "96k",
     }));
     assert.equal(round.sceneId, PARTICLE_SCENE_ID);
-    assert.equal(round.particles.particleCountTier, "2k");
+    assert.equal(round.particles.particleCountTier, "96k");
     assert.equal(round.particles.densityAutoScale, false);
     assert.equal(round.particles.trailLength, 0.55);
     assert.equal(round.particles.trailType, "electric");
@@ -1080,10 +1079,11 @@ function hexSaturation(hex) {
 const frag32 = () => stripComments(read("src/shaders/render.frag.glsl"));
 const sim32 = () => stripComments(read("src/shaders/sim.vert.glsl"));
 
-test("Stage 4 storage key and schema are zur_state_v4_0 / 4.0", () => {
-  assert.equal(STORAGE_KEY, "zur_state_v4_0");
-  assert.equal(STORAGE_SCHEMA, 4.0);
-  assert.deepEqual({ ...V3_2_UPGRADE_DEFAULTS }, { paletteId: "neon-tunnel", particleCountTier: "2k", particleSize: 1.35, trailLength: 0.28, trailType: "comet" });
+test("ZUR-GH-009 storage key and schema are zur_state_v5_0 / 5.0 (v4 key kept as legacy)", () => {
+  assert.equal(STORAGE_KEY, "zur_state_v5_0");
+  assert.equal(STORAGE_SCHEMA, 5.0);
+  assert.ok(LEGACY_STORAGE_KEYS.includes("zur_state_v4_0"));
+  assert.deepEqual({ ...V3_2_UPGRADE_DEFAULTS }, { paletteId: "neon-tunnel", particleCountTier: "64k", particleSize: 1.35, trailLength: 0.28, trailType: "comet" });
   assert.match(read("src/app/main.js"), /serializeStoredState\(/);
 });
 
@@ -1095,7 +1095,7 @@ test("Stage 3.2 migration: cached copper-teal upgrades to neon-tunnel 2k / 1.35 
   assert.equal(loaded.migrated, true);
   assert.equal(loaded.preset.visual.paletteId, "neon-tunnel");
   const p = loaded.preset.particles;
-  assert.equal(p.particleCountTier, "2k");
+  assert.equal(p.particleCountTier, "64k");
   assert.equal(p.particleSize, 1.35);
   assert.equal(p.trailLength, 0.28);
   assert.equal(p.trailType, "comet");
@@ -1109,7 +1109,7 @@ test("Stage 3.2 migration: legacy keys and schema < 3.2 are force-upgraded", () 
     assert.equal(loaded.key, key, `${key} read`);
     assert.equal(loaded.migrated, true);
     assert.equal(loaded.preset.visual.paletteId, "neon-tunnel");
-    assert.equal(loaded.preset.particles.particleCountTier, "2k");
+    assert.equal(loaded.preset.particles.particleCountTier, "64k");
   }
   const old = structuredClone(MODE_A_PRESET);
   const enveloped = JSON.stringify({ storageSchema: 3, preset: old });
@@ -1121,11 +1121,11 @@ test("Stage 3.2 migration: legacy keys and schema < 3.2 are force-upgraded", () 
 test("Stage 4 migration preserves current non-copper state values", () => {
   const preset = structuredClone(MODE_A_PRESET);
   preset.visual.paletteId = "solar-plasma";
-  preset.particles = { ...preset.particles, particleCountTier: "16k", particleSize: 2.2 };
+  preset.particles = { ...preset.particles, particleCountTier: "128k", particleSize: 2.2 };
   const loaded = loadStoredState(mockStorage({ zur_state_v3_2: serializeStoredState(preset) }));
   assert.equal(loaded.migrated, false);
   assert.equal(loaded.preset.visual.paletteId, "solar-plasma");
-  assert.equal(loaded.preset.particles.particleCountTier, "16k");
+  assert.equal(loaded.preset.particles.particleCountTier, "128k");
   assert.equal(loaded.preset.particles.particleSize, 2.2);
 });
 
@@ -1251,9 +1251,9 @@ test("Stage 3.2 HUD: Scene, Palette, Hue shift on top; Hide HUD button; pulse la
   assert.match(read("index.html"), /\.hud-hide\s*\{[^}]*position:\s*sticky/);
 });
 
-test("Stage 4 sw.js cache is v5, claims clients and precaches new shaders", () => {
+test("Stage 5 sw.js cache is v7, claims clients and precaches new shaders", () => {
   const sw = read("sw.js");
-  assert.match(sw, /const CACHE = "zur-shell-v5"/);
+  assert.match(sw, /const CACHE = "zur-shell-v7"/);
   assert.match(sw, /self\.skipWaiting\(\)/);
   assert.match(sw, /self\.clients\.claim\(\)/);
   assert.match(sw, /\.(html|js|glsl)/);
@@ -1530,7 +1530,7 @@ test("Stage 4 docs record the new scene, post effects, autopilot, and migration"
   assert.match(contracts, /spectral-canyon-3d/);
   assert.match(contracts, /chromaticAberration/);
   assert.match(state, /ZUR-GH-005/);
-  assert.match(state, /zur_state_v4_0/);
+  assert.match(state, /zur_state_v[45]_0/);
 });
 
 test("Spectral canyon draws neon wireframe ridges with an idle baseline wave", () => {
@@ -1884,6 +1884,237 @@ test("ZUR-GH-008 smoke script asserts whiteClip, meanSat, errors and silence at 
   assert.match(smoke, /keepFactor not clamped <= 0\.45 inside the window/);
   assert.match(smoke, /destinationConnections !== 0/);
   assert.match(read("package.json"), /smoke:gh008/);
+});
+
+
+// ───────────────────────── ZUR-GH-009 Stage 5: Blood, Brain & Deep Space ─────────────────────────
+import * as pm009 from "../src/render/particleMath.js";
+const g009 = {
+  sim: () => stripComments(read("src/shaders/sim.vert.glsl")),
+  vert: () => stripComments(read("src/shaders/render.vert.glsl")),
+  frag: () => stripComments(read("src/shaders/render.frag.glsl")),
+  core: () => stripComments(read("src/shaders/core.frag.glsl")),
+  hud: () => read("src/controls/ControlHUD.js"),
+  ps: () => read("src/render/ParticleSystem3D.js"),
+};
+
+test("ZUR-GH-009 sw.js cache is zur-shell-v7 and storage key zur_state_v5_0 with v4 migration", () => {
+  assert.match(read("sw.js"), /const CACHE = "zur-shell-v7"/);
+  assert.equal(STORAGE_KEY, "zur_state_v5_0");
+  assert.equal(LEGACY_STORAGE_KEYS[0], "zur_state_v4_0");
+  const old = structuredClone(MODE_A_PRESET);
+  old.particles = { ...old.particles, particleCountTier: "16k", particleStyle: "orb" };
+  const loaded = loadStoredState(mockStorage({ zur_state_v4_0: JSON.stringify({ storageSchema: 4.0, preset: old }) }));
+  assert.equal(loaded.migrated, true);
+  assert.equal(loaded.preset.particles.particleCountTier, "64k", "legacy small tier -> 64k");
+  assert.equal(loaded.preset.particles.particleStyle, "dart3d", "legacy orb -> dart3d");
+});
+
+test("ZUR-GH-009 five count tiers: 64k 96k 128k 160k 256k, default 64k, no small tiers", () => {
+  assert.deepEqual([...pm009.COUNT_TIERS], ["64k", "96k", "128k", "160k", "256k"]);
+  assert.deepEqual({ ...pm009.COUNT_TIER_VALUES }, { "64k": 65536, "96k": 98304, "128k": 131072, "160k": 163840, "256k": 262144 });
+  for (const tier of ["16k", "32k", "2k", "1k", "64", "auto"]) {
+    assert.equal(normalizeParticles({ particleCountTier: tier }).particleCountTier, "64k", tier);
+  }
+  assert.doesNotMatch(g009.hud(), /"16k"|"32k"/);
+});
+
+test("ZUR-GH-009 MAX_PARTICLES 262144 sizes every transform-feedback VBO and the logo target buffer", () => {
+  assert.equal(pm009.MAX_PARTICLES, 262144);
+  const ps = g009.ps();
+  assert.match(ps, /seedParticleState\(MAX_PARTICLES\)/);
+  assert.match(ps, /gl\.bufferData\(gl\.ARRAY_BUFFER, this\.initialState, gl\.DYNAMIC_COPY\)/);
+  assert.match(ps, /sampleLogoTargets\(attractorText, MAX_PARTICLES\)/);
+  assert.match(ps, /logoTargetVBO/);
+  assert.equal(sampleLogoTargets("ZUR", pm009.MAX_PARTICLES).length, pm009.MAX_PARTICLES * 4);
+});
+
+test("ZUR-GH-009 logo glyph targets wrap with % sampledPoints.length (guards 256k + logo-attractor)", () => {
+  const src = read("src/render/LogoAttractor.js");
+  assert.match(src, /sampledPoints\[i % sampledPoints\.length\]/);
+  assert.match(src, /: \[\[0\.5, 0\.5\]\]/, "empty sample set guard");
+  const t = sampleLogoTargets("A", 262144);
+  for (let i = 0; i < t.length; i += 1) assert.ok(Number.isFinite(t[i]));
+});
+
+test("ZUR-GH-009 cameraZoom: 0.35..3.50, default 1.00, step 0.05, HUD slider", () => {
+  assert.deepEqual([...pm009.CAMERA_ZOOM_RANGE], [0.35, 3.5]);
+  assert.equal(pm009.CAMERA_ZOOM_STEP, 0.05);
+  assert.equal(DEFAULT_PARTICLES.cameraZoom, 1.0);
+  assert.equal(normalizeParticles({ cameraZoom: 9 }).cameraZoom, 3.5);
+  assert.equal(normalizeParticles({ cameraZoom: 0 }).cameraZoom, 0.35);
+  assert.match(g009.hud(), /"rng-camera-zoom", "Camera Zoom"/);
+  const bad = structuredClone(STAGE2_DEFAULT_PRESET);
+  bad.particles.cameraZoom = 4;
+  assert.equal(validatePreset(bad).ok, false);
+});
+
+test("ZUR-GH-009 touch-action none ONLY on the canvas, pan-y on the HUD (Audit Fix 4)", () => {
+  const html = read("index.html");
+  assert.match(html, /#gl-canvas, #stage \{ touch-action: none; \}/);
+  assert.match(html, /\.hud, \.control-hud \{ touch-action: pan-y; \}/);
+  assert.equal((html.match(/touch-action: none/g) || []).length, 1);
+});
+
+test("ZUR-GH-009 pinch / wheel / double-tap handlers act only on the canvas", () => {
+  const main = read("src/app/main.js");
+  assert.match(main, /canvas\.addEventListener\("pointerdown"/);
+  assert.match(main, /canvas\.addEventListener\("wheel"[\s\S]*?\{ passive: false \}/);
+  assert.equal((main.match(/event\.target !== canvas/g) || []).length >= 5, true);
+  assert.match(main, /pinchZoom\(pinch\.startZoom, pinch\.startDist/);
+  assert.match(main, /updateParticles\(\{ cameraZoom: 1 \}\)/);
+  assert.equal(pm009.pinchZoom(1, 100, 200), 2);
+  assert.equal(pm009.pinchZoom(1, 100, 1), 0.35);
+  assert.equal(pm009.pinchZoom(2, 100, 400), 3.5);
+});
+
+test("ZUR-GH-009 u_cameraZoom in render.vert and core.frag, wired through ParticleSystem3D", () => {
+  assert.match(g009.vert(), /uniform float u_cameraZoom;/);
+  assert.match(g009.vert(), /gl_Position\.xy \*= u_cameraZoom/);
+  assert.match(g009.core(), /uniform float u_cameraZoom;/);
+  assert.match(g009.core(), /0\.72 \/ max\(u_cameraZoom/);
+  assert.match(g009.ps(), /gl\.uniform1f\(R\.u_cameraZoom, zoom\)/);
+  assert.match(g009.ps(), /gl\.uniform1f\(C\.u_cameraZoom, zoom\)/);
+});
+
+test("ZUR-GH-009 particleStyle options exclude orb everywhere (state, HUD, shaders)", () => {
+  assert.deepEqual([...pm009.PARTICLE_STYLES], ["dart3d", "blood-drop", "synapse-spark", "star-streak"]);
+  assert.equal(DEFAULT_PARTICLES.particleStyle, "dart3d");
+  assert.equal(normalizeParticles({ particleStyle: "orb" }).particleStyle, "dart3d");
+  for (const f of ["src/controls/ControlHUD.js", "src/shaders/render.vert.glsl", "src/shaders/render.frag.glsl", "src/shaders/sim.vert.glsl"]) {
+    assert.doesNotMatch(stripComments(read(f)), /"orb"|\borb\b/i, f);
+  }
+  assert.doesNotMatch(JSON.stringify(pm009.PARTICLE_STYLE_LABELS), /orb/i);
+  assert.match(g009.frag(), /uniform int u_particleStyle;/);
+  assert.match(g009.vert(), /uniform int u_particleStyle;/);
+});
+
+test("ZUR-GH-009 particle style shading: blood-drop teardrop, synapse-spark, star-streak needle", () => {
+  const f = g009.frag();
+  assert.match(f, /length\(vec2\(uv\.x \* \(1\.0 \+ 0\.65 \* uv\.y\), uv\.y\)\)/);
+  assert.match(f, /mix\(vec3\(0\.18, 0\.0, 0\.02\), vec3\(0\.92, 0\.02, 0\.08\), core\)/);
+  assert.match(f, /vec3\(1\.0, 0\.35, 0\.35\)/);
+  assert.match(f, /sin\(atan\(uv\.y, uv\.x\) \* 7\.0 \+ v_seed \* 19\.0\)/);
+  assert.match(f, /v_neuralPulse > 0\.5/);
+  assert.match(f, /vec3\(0\.7454, 1\.0, 1\.0\)/, "#E0FFFF in linear light");
+  assert.match(g009.vert(), /clamp\(speed \* 14\.0, 1\.0, 6\.5\)/);
+  assert.match(g009.vert(), /headR = 1\.5/);
+});
+
+test("ZUR-GH-009 colorPalette options + u_colorPalette in render.frag, core.frag and kaleido", () => {
+  assert.deepEqual([...pm009.COLOR_PALETTES], ["true-neon", "full-spectrum", "white-static", "blood-red"]);
+  assert.equal(DEFAULT_PARTICLES.colorPalette, "true-neon");
+  assert.match(g009.frag(), /uniform int u_colorPalette;/);
+  assert.match(g009.core(), /uniform int u_colorPalette;/);
+  assert.match(stripComments(read("src/shaders/kaleido.frag.glsl")), /uniform int u_colorPalette;/);
+  assert.match(g009.frag(), /hsv2rgb\(vec3\(fract\(v_seed \* 0\.618 \+ u_time \* 0\.12 \+ u_spectralCentroid \* 0\.5\), 0\.95, 1\.0\)\)/);
+  assert.match(g009.frag(), /step\(0\.35, fract\(sin\(dot\(gl_FragCoord\.xy, vec2\(12\.9898, 78\.233\)\) \+ u_time \* 43\.0\) \* 43758\.5453\)\) \* u_treble/);
+  assert.match(g009.frag(), /\* u_trailEnergyNorm|energyNorm/);
+  assert.match(g009.ps(), /gl\.uniform1i\(R\.u_colorPalette, paletteIndex\)/);
+  assert.ok(pm009.hsvSaturation([0, 0.9131, 1.0]) >= 0.85 && pm009.hsvSaturation([1.0, 0.0, 0.2122]) >= 0.85);
+});
+
+test("ZUR-GH-009 four new formations in state and sim.vert (ids appended after logo-attractor)", () => {
+  const ids = ["neural-brain", "living-galaxy", "supermassive-blackhole", "wormhole"];
+  assert.deepEqual(FORMATION_TYPES.slice(6), ids);
+  assert.equal(FORMATION_TYPES.indexOf("logo-attractor"), 5);
+  assert.deepEqual(ids.map((id) => pm009.FORMATION_LABELS[id]), [
+    "3D Brain (Golden Neurons & Synapses)", "Living Spiral Galaxy",
+    "Supermassive Black Hole (Gargantua)", "Spacetime Wormhole (Einstein-Rosen)",
+  ]);
+  const sim = g009.sim();
+  assert.match(sim, /u_formationType == 6/);
+  assert.match(sim, /u_formationType == 7/);
+  assert.match(sim, /u_formationType == 8/);
+  assert.match(sim, /u_formationType == 9/);
+  assert.match(sim, /0\.06 \* sin\(pos\.x \* 18\.0 \+ sin\(pos\.z \* 14\.0\)\) \* cos\(pos\.y \* 16\.0\)/);
+  assert.match(sim, /0\.12 \+ 0\.58 \* abs\(cos\(phi\)\) \* sin\(theta\)/);
+  assert.match(sim, /0\.08 \* exp\(0\.32 \* /);
+  assert.match(sim, /1\.35 \/ pow\(r \+ 0\.12, 1\.15\)/);
+  assert.match(sim, /sqrt\(max\(0\.0, rDisk - 0\.22\)\)/);
+  assert.match(sim, /sqrt\(0\.18 \* 0\.18 \+ z \* z \* 1\.4\)/);
+});
+
+test("ZUR-GH-009 neural-brain v_neuralPulse is a dedicated varying (out in render.vert, in render.frag)", () => {
+  assert.match(g009.vert(), /out float v_neuralPulse;/);
+  assert.match(g009.frag(), /in float v_neuralPulse;/);
+  assert.match(g009.vert(), /sin\(length\(a_pos\.xyz\) \* 14\.0 - u_time \* 9\.0 - u_onset \* 5\.0\)/);
+  assert.match(g009.vert(), /v_neuralPulse = smoothstep\(0\.72, 0\.98, wave\) \* clamp\(0\.45 \+ u_treble \* 0\.9 \+ u_onset \* 1\.1, 0\.0, 1\.5\)/);
+  assert.ok(Math.abs(pm009.neuralPulse(0.5, 0, 0.5, 0.3, 0.3) - pm009.neuralPulse(0.5, 0, 0.5, 0.3, 0.3)) < 1e-12);
+});
+
+test("ZUR-GH-009 blood-drop pin (0.79) and respawn (-1.25 / -0.65) in sim.vert (Audit Fix 3)", () => {
+  const sim = g009.sim();
+  assert.match(sim, /u_particleStyle == 1 \|\| u_kineticMode == 1/);
+  assert.match(sim, /\(1\.1 \+ 2\.2 \* u_onset\)/);
+  assert.match(sim, /0\.78/);
+  assert.match(sim, /0\.79/);
+  assert.match(sim, /vel\.x \*= 0\.85/);
+  assert.match(sim, /outAuxW = 2\.6/);
+  assert.match(sim, /\(1\.8 \+ 2\.4 \* u_bass\)/);
+  assert.match(sim, /-1\.25/);
+  assert.match(sim, /-0\.65/);
+  assert.match(sim, /formationPos \* 0\.25/);
+  assert.match(sim, /1\.35 \+ 1\.8 \* u_onset/);
+  assert.deepEqual(pm009.bloodPin(0.8, 1.5), { z: 0.79, vz: 0, pinned: true });
+  assert.equal(pm009.bloodNeedsRespawn(-1.3), true);
+  assert.equal(pm009.bloodNeedsRespawn(-1.0), false);
+});
+
+test("ZUR-GH-009 kineticMode options, default off, u_kineticMode in sim.vert, HUD row above Oscillation", () => {
+  assert.deepEqual([...pm009.KINETIC_MODES], ["off", "splatter-run", "synapse-cascade", "accretion-warp", "ribbon-curtain", "shock-shatter"]);
+  assert.equal(DEFAULT_PARTICLES.kineticMode, "off");
+  const sim = g009.sim();
+  assert.match(sim, /uniform int u_kineticMode;/);
+  for (let mode = 2; mode <= 5; mode += 1) assert.match(sim, new RegExp(`u_kineticMode == ${mode}`));
+  const hud = g009.hud();
+  assert.ok(hud.indexOf('"sel-kinetic-mode"') > 0 && hud.indexOf('"sel-kinetic-mode"') < hud.indexOf('"sel-oscillation"'));
+  assert.match(hud, /this\.kinetic\.wrap, this\.oscillation\.wrap/);
+});
+
+test("ZUR-GH-009 Reactivity Punch: gain 0.5..5.0 default 2.5, noise gate default 0.015 (0..0.100)", () => {
+  assert.deepEqual([...pm009.REACTIVITY_GAIN_RANGE], [0.5, 5]);
+  assert.equal(DEFAULT_PARTICLES.reactivityGain, 2.5);
+  assert.match(g009.hud(), /"rng-reactivity", "Reactivity Punch"/);
+  assert.match(g009.sim(), /uniform float u_reactivityGain;/);
+  assert.match(g009.vert(), /uniform float u_reactivityGain;/);
+  assert.equal(pm009.NOISE_GATE_DEFAULT, 0.015);
+  assert.deepEqual([...pm009.NOISE_GATE_RANGE], [0, 0.1]);
+  assert.equal(MODE_A_PRESET.audio.noiseGateThreshold, 0.015);
+  assert.match(read("src/audio/FeatureExtractor.js"), /noiseGateThreshold = 0\.015/);
+  const old = structuredClone(MODE_A_PRESET);
+  old.audio.noiseGateThreshold = 0.2;
+  const loaded = loadStoredState(mockStorage({ zur_state_v4_0: JSON.stringify({ storageSchema: 4.0, preset: old }) }));
+  assert.equal(loaded.preset.audio.noiseGateThreshold, 0.015);
+});
+
+test("ZUR-GH-009 reactivity applies at oscillationAmount 0: radial kick, onset impulse, point-size pulse", () => {
+  assert.match(g009.sim(), /1\.0 \+ 0\.28 \* u_reactivityGain \* \(u_sub \* 0\.65 \+ u_bass \* 0\.35\)/);
+  assert.match(g009.sim(), /u_onset \* 2\.2 \* u_reactivityGain/);
+  assert.match(g009.vert(), /1\.0 \+ 0\.45 \* u_reactivityGain \* \(u_bass \* 0\.5 \+ u_onset \* 0\.5\)/);
+  assert.ok(Math.abs(pm009.radialKick(2.5, 1, 1) - (1 + 0.28 * 2.5)) < 1e-12);
+  assert.equal(pm009.radialKick(2.5, 0, 0), 1);
+  assert.ok(Math.abs(pm009.onsetImpulse(1, 2.5) - 5.5) < 1e-12);
+  assert.ok(Math.abs(pm009.pointSizePulse(2.5, 1, 1) - (1 + 0.45 * 2.5)) < 1e-12);
+});
+
+test("ZUR-GH-009 HUD has no Visual Preset / Audio Profile rows and ships the new controls", () => {
+  const hud = g009.hud();
+  assert.doesNotMatch(hud, /Visual Preset|Audio Profile|presetId|audioProfile/);
+  for (const id of ["sel-particle-style", "sel-color-palette", "sel-kinetic-mode", "rng-camera-zoom", "rng-reactivity"]) {
+    assert.match(hud, new RegExp(`"${id}"`));
+  }
+});
+
+test("ZUR-GH-009 smoke script covers 256k stability, scenarios and audio-reactivity delta", () => {
+  const smoke = read("tests/smoke-zur-gh-009.mjs");
+  assert.match(smoke, /256k/);
+  assert.match(smoke, /blackRatio < 0\.85/);
+  assert.match(smoke, /whiteClip < 0\.01/);
+  assert.match(smoke, /blood-red/);
+  assert.match(smoke, /wormhole/);
+  assert.match(smoke, /rng-osc-amount", 0/);
+  assert.match(read("package.json"), /smoke:gh009/);
 });
 
 
