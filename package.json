@@ -9,6 +9,7 @@
     "smoke:stage2": "node tests/smoke-stage2.mjs",
     "smoke:stage3": "node tests/smoke-stage3.mjs",
     "smoke:stage3.2": "node tests/smoke-stage3.2.mjs",
-    "smoke:gh007": "node tests/smoke-zur-gh-007.mjs"
+    "smoke:gh007": "node tests/smoke-zur-gh-007.mjs",
+    "smoke:gh008": "node tests/smoke-zur-gh-008.mjs"
   }
 }

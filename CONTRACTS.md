@@ -351,3 +351,33 @@ When `u_kaleidoSegments > 1`: mirrored polar radius `r = 1.0 - abs(fract(r · 0.
   (HUD open + hidden), fractal-core GPU axis-spread ratio > 0.55 and lit width > 0.35 at a 90° orbit, logo agents on
   target + ≥ 6 glyph runs under Oscillation 3.00 + Comet 0.81, canyon ≥ 35% upper-viewport pixels with
   0.15 < luma < 0.90, ≥ 12 grid crossings and max luma < 0.90.
+
+## ZUR-GH-008 — Stage 4.2 high-trail chroma guard, formation ghosting clear, dart3d seams (`ZUR_v41_Sheet_06..08`)
+
+- **Steady-state trail energy** (`src/render/PostProcessPass.js`). The scene FBO steady state of a static emitter is
+  `1 / (1 - keepFactor)` (28.5x at Trail 1.00). `capKeepFactor()` caps the per-60 Hz keep at `TRAIL_KEEP_CAP = 0.90`
+  when `activeCount >= 16384`; `ParticleSystem3D` passes `u_trailEnergyNorm = clamp((1 - k) / (1 - 0.55), 0.18, 1.0)`,
+  so the normalised steady state is `1 / 0.45 ≈ 2.2x` for every `k` in `[0.55, 0.918]`.
+- **render.frag.glsl**: dart radiance and premultiplied capsule radiance + alpha are multiplied by `u_trailEnergyNorm`;
+  the hot core is scaled by `sizeNorm = 1 / pow(max(u_particleSize, 1), 0.65)` when `u_particleSize > 1.5`.
+- **kaleido.frag.glsl**: chroma-preserving peak tone map (no white bleed in particle scenes) + display-space
+  `chromaFloor()`: above peak 0.65, desaturated pixels are pulled back to HSV saturation 0.6 along their own hue
+  (or `u_paletteHue` = `u_palette[0]` when grey). `u_coreSpecular = 1` only in `megastructure-3d`, where the
+  raymarched core keeps its Stage 3 white specular shoulder and the floor is off (ZUR-GH-006/007 look preserved).
+- **Formation / flow / scene transition**: `RenderHost.trailTransition` (`TrailTransitionGuard`) watches
+  `transitionSignature(sceneId, formationType, flowMode)`; a change opens a 250 ms window where the keep is clamped
+  to `<= 0.45` (`extras.trailKeepCap`), so stale silhouettes (Polygon Rings → Supernova Shell) clear in ~15 frames
+  without a keep = 0 flash.
+- **Dart3D seams**: the particle pass runs `gl.disable(gl.DEPTH_TEST)` + `gl.depthMask(false)` right before the
+  instanced draw (additive darts / premultiplied capsules are order-independent); `render.vert.glsl` declares
+  `invariant gl_Position` and builds every corner from its shared vertex index, so shared edges are bit-identical.
+  (The dart has no banking-roll attribute; `velocityFrame()` is roll-free.)
+- **School of Fish**: six bait-ball leaders (`fishLeader()`), Y offsets `FISH_LEADER_Y = [0.9, -0.9, 0.55, -0.55,
+  0.25, -0.25]` (sum 0) with equally spaced bob phases (also sum 0 at every t).
+- **Gas**: toroidal thermal circulation around a ring of radius 2.4 (up through the core, out over the top, down at
+  the rim), radial curl about Y, outward spill of plume tops, toroidal Y wrap at ±4.2, spherical wrap at r > 6.5,
+  reseed across the full disk instead of a central column.
+- **Tests:** `tests/smoke-zur-gh-008.mjs` (`npm run smoke:gh008`) at 412×915, 64k + Trail 1.00 + size 3.35x + dart +
+  God rays 0.35 over free-3d / supernova-shell × murmuration / fish / gas / fluid: `whiteClip < 1%`, `nearWhite < 1%`,
+  `meanSat >= 0.55`; megastructure whiteClip < 1%; GPU readback fish Y balance and gas spread; keep ≤ 0.45 inside the
+  250 ms window and released after; console.error / pageerror / WebGL warnings 0; `destinationConnections` 0.

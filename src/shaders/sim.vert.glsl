@@ -159,6 +159,20 @@ vec3 lissajous(int index, float t) {
   return vec3(sin(t * fx + ph) * 3.4, sin(t * fy * 1.7 + ph * 0.5) * 1.6, cos(t * fz + ph) * 3.4);
 }
 
+// ZUR-GH-008: School of Fish bait-ball leaders. Y offsets sum to zero (mirrored in particleMath.js FISH_LEADER_Y).
+const float FISH_LEADER_Y[6] = float[6](0.9, -0.9, 0.55, -0.55, 0.25, -0.25);
+vec3 fishLeader(int index, float t) {
+  float i = float(index);
+  float a = i * 1.0471975512 + t * 0.35;
+  // equally spaced bob phases: the six bobs also sum to zero at every t
+  float bob = sin(t * 0.5 + i * 1.0471975512) * 0.25;
+  return vec3(cos(a) * 3.0, FISH_LEADER_Y[index] + bob, sin(a) * 3.0);
+}
+
+// ZUR-GH-008: Gas toroidal circulation ring radius and Y wrap height (mirrored in particleMath.js).
+const float GAS_TORUS_RADIUS = 2.4;
+const float GAS_WRAP_Y = 4.2;
+
 // Causal Gaussian predator shockwaves: zero ahead of the expanding front.
 vec3 shockwaveAcceleration(vec3 pos) {
   vec3 acc = vec3(0.0);
@@ -445,22 +459,36 @@ void main() {
     F += radial * u_bass * u_onset * 22.0;
     phase = fract(phase + dt * (0.15 + u_rms));
   } else if (u_mode == 1) {
-    // GAS: high-frequency multi-octave curl + thermal buoyancy + treble burst.
+    // GAS (ZUR-GH-008): multi-octave curl + toroidal thermal circulation. Heat rises through the core, a radial
+    // curl disperses it outward over the top, it sinks at the rim and returns underneath, so buoyancy circulates
+    // the full 3D volume instead of stalling in one central white-hot column. Smooth spherical / Y wrap bounds it.
     vec3 q = pos * 0.55 + vec3(0.0, -u_time * 0.35, u_time * 0.12);
     vec3 turb = curlAnalytic(q) + 0.5 * curlAnalytic(q * 2.07 + 11.0);
     float heat = phase + u_onset * 0.6;
     F = k * turb * (0.9 + 1.2 * u_high + 0.6 * u_rms);
-    F += vec3(0.0, 2.6 * heat + 0.5, 0.0);
-    vec3 fromCore = pos - vec3(0.0, -2.0, 0.0);
-    F += normalize(fromCore + 1e-4) * u_high * u_high * 18.0 * step(0.45, seed);
-    F += -vec3(pos.x, 0.0, pos.z) * 0.35;
+    float rxz = length(pos.xz) + 1e-4;
+    vec3 radDir = vec3(pos.x / rxz, 0.0, pos.z / rxz);
+    vec2 merid = vec2(rxz - GAS_TORUS_RADIUS, pos.y);          // meridional plane, centred on the vortex ring
+    vec2 circ = vec2(merid.y, -merid.x) * exp(-dot(merid, merid) / 10.0);
+    F += (radDir * circ.x + vec3(0.0, circ.y, 0.0)) * (1.6 + 1.1 * heat + 0.8 * u_mid);
+    F += vec3(0.0, 0.9 * heat + 0.15, 0.0);                   // residual thermal buoyancy
+    F += cross(vec3(0.0, 1.0, 0.0), radDir) * (0.9 + 0.8 * u_mid);  // radial curl (swirl about Y)
+    F += radDir * smoothstep(0.0, 3.0, pos.y) * (1.2 + 1.5 * u_high); // plume tops spill outward
+    F += normalize(pos + 1e-4) * u_high * u_high * 18.0 * step(0.45, seed);
+    F -= pos * 0.06 * smoothstep(4.0, 6.0, length(pos));      // soft spherical bound
     phase -= dt / (2.8 + 2.2 * seed);
-    if (phase <= 0.0 || pos.y > 5.5) {
+    if (pos.y > GAS_WRAP_Y) {
+      pos.y -= 2.0 * GAS_WRAP_Y;                               // toroidal Y wrap: re-enter underneath, same column
+    } else if (pos.y < -GAS_WRAP_Y) {
+      pos.y += 2.0 * GAS_WRAP_Y;
+    }
+    if (length(pos) > 6.5) pos *= -0.85;                       // spherical wrap through the opposite side
+    if (phase <= 0.0) {
       vec3 h = hash3(uid ^ hash32(uint(u_time * 60.0) + 7u));
       float a = h.x * 6.2831853;
-      float rr = sqrt(h.y) * (1.0 + 0.8 * u_sub);
-      pos = vec3(cos(a) * rr, -3.6 + h.z * 0.5, sin(a) * rr);
-      vel = vec3(0.0, 0.6 + h.z, 0.0);
+      float rr = sqrt(h.y) * (3.2 + 0.8 * u_sub);              // reseed across the full disk, not the centre
+      pos = vec3(cos(a) * rr, (h.z * 2.0 - 1.0) * 3.0, sin(a) * rr);
+      vel = vec3(0.0, 0.3 + h.z * 0.6, 0.0);
       phase = 1.0;
     }
   } else if (u_mode == 2) {
@@ -491,9 +519,16 @@ void main() {
     float rf = length(flat_) + 1e-4;
     vec3 outward = flat_ / rf;
     float lane = (seed - 0.5) * 1.1;
-    vec3 core = outward * (3.0 + lane + 0.5 * u_bass) + vec3(0.0, sin(atan(pos.z, pos.x) * 2.0 + u_time * 0.4) * 0.45, 0.0);
+    // ZUR-GH-008: six bait-ball leaders orbit the torus; their Y offsets (and bob phases) sum to zero so the
+    // school is balanced across +Y / -Y instead of clustering in the upper hemisphere.
+    int lead = int(hash32(uid ^ 0x9e3779b9u) % 6u);
+    vec3 leaderPos = fishLeader(lead, u_time);
+    vec3 core = outward * (3.0 + lane + 0.5 * u_bass)
+      + vec3(0.0, leaderPos.y + sin(atan(pos.z, pos.x) * 2.0 + u_time * 0.4) * 0.45, 0.0);
     vec3 toCore = core - pos;
     F = vec3(toCore.x * 3.0, toCore.y * 7.0, toCore.z * 3.0);
+    vec3 toLeaderBall = leaderPos - pos;
+    F += toLeaderBall * 0.35 / (1.0 + 0.15 * dot(toLeaderBall, toLeaderBall));
     vec3 swim = cross(vec3(0.0, 1.0, 0.0), outward);
     F += swim * (5.5 + 3.0 * u_mid);
     float burstSlot = floor(u_time * 1.5 + seed * 7.0);

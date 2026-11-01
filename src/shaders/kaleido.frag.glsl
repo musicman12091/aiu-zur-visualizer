@@ -15,6 +15,8 @@ uniform float u_blackFloor;     // RGBA8 fallback: removes 8-bit trail residue
 uniform float u_viewportYOffset; // NDC lift of the swarm (portrait HUD drawer); the mirror centre follows it
 uniform float u_chromaticAberration; // 0..1, three radial RGB samples
 uniform float u_godRays; // 0..1, six additive radial samples
+uniform vec3 u_paletteHue; // ZUR-GH-008: dominant palette colour (u_palette[0]) for the high-luma chroma floor
+uniform float u_coreSpecular; // ZUR-GH-008: 1 in megastructure-3d (raymarched core keeps its white specular), else 0
 
 in vec2 v_uv;
 out vec4 fragColor;
@@ -40,12 +42,36 @@ vec2 kaleidoFold(vec2 uv, out float vignette) {
   return mirrorRepeat(vec2(cos(a) * r / aspect, sin(a) * r) + center);
 }
 
-// Tone-map the peak channel only so saturated neon stays saturated; very hot pixels bleed to white.
+// ZUR-GH-008: chroma-preserving peak tone map. Only the peak channel is compressed (hue and channel ratios
+// survive) and particle scenes never bleed to white (the white shoulder is kept only for the megastructure core).
 vec3 toneMap(vec3 c) {
   float peak = max(c.r, max(c.g, c.b));
+  if (peak <= 1e-5) return vec3(0.0);
   vec3 chroma = c / max(peak, 1e-4);
   float mappedPeak = peak / (1.0 + 0.65 * peak);
-  return mix(chroma * mappedPeak, vec3(1.0), smoothstep(1.1, 3.2, peak) * 0.65);
+  // Megastructure only: the raymarched ferrofluid core keeps its hot specular bleed (ZUR-GH-006/007 look).
+  return mix(chroma * min(mappedPeak, 1.0), vec3(1.0), smoothstep(1.1, 3.2, peak) * 0.65 * u_coreSpecular);
+}
+
+// ZUR-GH-008 high-luma chroma floor (display space): once the peak passes 0.65, pull desaturated channels back
+// toward the dominant hue (the pixel's own, or the palette's when it is grey) so HSV saturation stays >= 0.55.
+const float CHROMA_FLOOR_PEAK = 0.65;
+const float CHROMA_FLOOR_SAT = 0.6;
+vec3 chromaFloor(vec3 s) {
+  float peak = max(s.r, max(s.g, s.b));
+  float low = min(s.r, min(s.g, s.b));
+  float w = smoothstep(CHROMA_FLOOR_PEAK - 0.12, CHROMA_FLOOR_PEAK, peak) * (1.0 - u_coreSpecular);
+  if (w <= 0.0 || peak <= 1e-4) return s;
+  float sat = (peak - low) / peak;
+  if (sat >= CHROMA_FLOOR_SAT) return s;
+  vec3 hue = (s - low) / max(peak - low, 1e-4);
+  vec3 ph = max(u_paletteHue, vec3(0.0));
+  float pMax = max(ph.r, max(ph.g, ph.b));
+  float pMin = min(ph.r, min(ph.g, ph.b));
+  vec3 paletteHue = pMax - pMin > 1e-3 ? (ph - pMin) / (pMax - pMin) : vec3(1.0, 0.0, 1.0);
+  hue = mix(paletteHue, hue, smoothstep(0.02, 0.15, sat));
+  vec3 floored = peak * (1.0 - CHROMA_FLOOR_SAT + CHROMA_FLOOR_SAT * hue);
+  return mix(s, floored, w);
 }
 
 vec3 linearToSRGB(vec3 c) {
@@ -74,5 +100,5 @@ void main() {
   scene = max(scene - vec3(u_blackFloor), vec3(0.0)) * vignette;
   // Strip the shared grey component so overlapping cyan + magenta stays electric instead of washing to silver.
   scene -= vec3(min(scene.r, min(scene.g, scene.b))) * 0.7;
-  fragColor = vec4(linearToSRGB(toneMap(max(scene, vec3(0.0)) * u_exposure)), 1.0);
+  fragColor = vec4(chromaFloor(linearToSRGB(toneMap(max(scene, vec3(0.0)) * u_exposure))), 1.0);
 }

@@ -17,6 +17,19 @@ import {
 import { QUALITY_TIERS, resolveRenderSize, shouldRenderFrame } from "../src/render/RenderHost.js";
 import { trailDecay } from "../src/render/ShaderHost.js";
 import { TransitionController } from "../src/render/TransitionController.js";
+import {
+  TRAIL_ENERGY_NORM_MIN,
+  TRAIL_HIGH_COUNT,
+  TRAIL_KEEP_CAP,
+  TRAIL_TRANSITION_KEEP_MAX,
+  TRAIL_TRANSITION_MS,
+  TrailTransitionGuard,
+  capKeepFactor,
+  normalizedSteadyStateEnergy,
+  particleSizeNorm,
+  trailEnergyNorm,
+  transitionSignature,
+} from "../src/render/PostProcessPass.js";
 import { STAGE2_DEFAULT_PRESET, applyModeKeepingScene } from "../src/app/AppState.js";
 import {
   COUNT_TIERS,
@@ -660,7 +673,7 @@ test("five flow modes are implemented in sim.vert.glsl with curl, buoyancy, shim
   assert.match(sim, /simplexValueGradient/);
   assert.match(sim, /cross\(vec3\(0\.0, 1\.0, 0\.0\), pos\)/, "fluid laminar swirl");
   assert.match(sim, /radial \* u_bass \* u_onset/, "fluid bass radial impulse");
-  assert.match(sim, /2\.6 \* heat/, "gas buoyancy");
+  assert.match(sim, /0\.9 \* heat/, "gas buoyancy (ZUR-GH-008: residual thermal lift inside the toroidal circulation)");
   assert.match(sim, /u_high \* u_high \* 18\.0/, "gas treble burst");
   assert.match(sim, /sin\(phase \* 50\.0 \+ u_time \* 31\.0\) \* u_high/, "fish shimmer");
   assert.match(sim, /senseLeft = physarumField/);
@@ -960,12 +973,15 @@ test("Stage 3 neon glow + chroma-preserving tone map constants", () => {
   assert.match(kaleido, /float peak = max\(c\.r, max\(c\.g, c\.b\)\);/);
   assert.match(kaleido, /vec3 chroma = c \/ max\(peak, 1e-4\);/);
   assert.match(kaleido, /float mappedPeak = peak \/ \(1\.0 \+ 0\.65 \* peak\);/);
-  assert.match(kaleido, /mix\(chroma \* mappedPeak, vec3\(1\.0\), smoothstep\(1\.1, 3\.2, peak\) \* 0\.65\)/);
+  // ZUR-GH-008 supersedes the Stage 3 white-bleed shoulder: it survives only for the megastructure raymarched core
+  // (u_coreSpecular = 1); particle scenes never mix toward vec3(1.0).
+  assert.match(kaleido, /return mix\(chroma \* min\(mappedPeak, 1\.0\), vec3\(1\.0\), smoothstep\(1\.1, 3\.2, peak\) \* 0\.65 \* u_coreSpecular\);/);
+  assert.match(read("src/render/ParticleSystem3D.js"), /gl\.uniform1f\(P\.u_coreSpecular, extras\.megastructure \? 1 : 0\);/);
   const [r, gg, b] = chromaToneMap([0.2, 0.8, 0.4]);
-  assert.ok(near(gg / r, 4, 1e-9) && near(gg / b, 2, 1e-9), "hue ratios preserved below the white blend");
+  assert.ok(near(gg / r, 4, 1e-9) && near(gg / b, 2, 1e-9), "hue ratios preserved");
   assert.ok(chromaToneMap([0.5, 0, 0])[1] === 0, "pure channel stays pure");
   const hot = chromaToneMap([8, 2, 0.5]);
-  assert.ok(hot[1] > 0.5 && hot[2] > 0.5 && hot.every((v) => v <= 1.2), "very hot pixels bleed toward white");
+  assert.ok(near(hot[1] / hot[0], 0.25, 1e-9) && near(hot[2] / hot[0], 0.0625, 1e-9) && hot.every((v) => v <= 1), "very hot pixels keep their hue (no white bleed)");
   assert.deepEqual(chromaToneMap([0, 0, 0]), [0, 0, 0]);
   const neon = PALETTES["neon-tunnel"];
   assert.equal(neon.length, 5);
@@ -1754,6 +1770,120 @@ test("ZUR-GH-007 is logged in STATE.md and CONTRACTS.md", () => {
   assert.match(state, /ZUR-GH-007/);
   assert.match(contracts, /ZUR-GH-007/);
   assert.match(contracts, /Logo \/ Attractor Text/);
+});
+
+test("ZUR-GH-008 caps keepFactor at 0.90 for >= 16k agents and bounds steady-state trail energy", async () => {
+  const { trailKeepFactor, chromaFloor, FISH_LEADER_Y, fishLeader, gasCirculation } = await import("../src/render/particleMath.js");
+  assert.equal(TRAIL_HIGH_COUNT, 16384);
+  assert.equal(TRAIL_KEEP_CAP, 0.9);
+  const keepMax = trailKeepFactor("comet", 1);
+  assert.ok(near(1 / (1 - keepMax), 28.571428, 1e-6), "uncapped Trail 1.00 accumulates 28.5x");
+  assert.equal(capKeepFactor(keepMax, 65536), 0.9);
+  assert.equal(capKeepFactor(keepMax, 16384), 0.9);
+  assert.equal(capKeepFactor(keepMax, 16383), keepMax, "below 16k the keep is untouched");
+  assert.equal(capKeepFactor(0.3, 65536), 0.3);
+  // u_trailEnergyNorm = clamp((1 - k) / (1 - 0.55), 0.18, 1)
+  assert.equal(TRAIL_ENERGY_NORM_MIN, 0.18);
+  assert.ok(near(trailEnergyNorm(0.9), 0.1 / 0.45));
+  assert.equal(trailEnergyNorm(0.3), 1);
+  assert.equal(trailEnergyNorm(0.999), 0.18);
+  for (const k of [0.55, 0.7, 0.85, 0.9]) assert.ok(near(normalizedSteadyStateEnergy(k), 1 / 0.45, 1e-9), `steady state bounded @${k}`);
+  assert.ok(normalizedSteadyStateEnergy(capKeepFactor(keepMax, 65536)) < 2.3, "64k + Trail 1.00 steady state ~2.2x, not 28.5x");
+  assert.equal(particleSizeNorm(1.5), 1);
+  assert.ok(near(particleSizeNorm(3.35), 1 / 3.35 ** 0.65));
+  const src = read("src/render/ParticleSystem3D.js");
+  assert.match(src, /capKeepFactor\(/);
+  assert.match(src, /gl\.uniform1f\(R\.u_trailEnergyNorm, energyNorm\)/);
+  assert.match(src, /"u_trailEnergyNorm"/);
+  const frag = stripComments(read("src/shaders/render.frag.glsl"));
+  assert.match(frag, /uniform float u_trailEnergyNorm;/);
+  assert.match(frag, /float sizeNorm = u_particleSize > 1\.5 \? 1\.0 \/ pow\(max\(u_particleSize, 1\.0\), 0\.65\) : 1\.0;/);
+  assert.match(frag, /\* sqrt\(crowdNorm\) \* energyNorm, 1\.0\)/, "dart radiance scaled by u_trailEnergyNorm");
+  assert.match(frag, /float capsuleAlpha = 0\.40 \* crowdNorm \* energyNorm;/, "premultiplied capsule radiance + alpha scaled");
+  const kaleido = stripComments(read("src/shaders/kaleido.frag.glsl"));
+  assert.match(kaleido, /uniform vec3 u_paletteHue;/);
+  assert.match(kaleido, /const float CHROMA_FLOOR_PEAK = 0\.65;/);
+  assert.match(kaleido, /fragColor = vec4\(chromaFloor\(linearToSRGB\(toneMap\(/);
+  assert.match(kaleido, /\* \(1\.0 - u_coreSpecular\);/);
+  const sat = (c) => (Math.max(...c) - Math.min(...c)) / Math.max(...c);
+  const lavender = chromaFloor([0.95, 0.88, 0.97], [1, 0, 0.63]);
+  assert.ok(sat(lavender) >= 0.55 && Math.max(...lavender) <= 1, "white-lavender pulled back to >= 0.55 saturation");
+  const grey = chromaFloor([0.9, 0.9, 0.9], [1, 0, 0.63]);
+  assert.ok(sat(grey) >= 0.55 && grey[0] > grey[1], "pure white takes the dominant palette hue");
+  assert.deepEqual(chromaFloor([0.3, 0.3, 0.3]), [0.3, 0.3, 0.3], "dim pixels untouched");
+  assert.deepEqual(chromaFloor([0.95, 0.9, 0.97], [1, 0, 0.63], 1), [0.95, 0.9, 0.97], "megastructure core specular exempt");
+  // Fix 4 mirrors.
+  assert.equal(FISH_LEADER_Y.length, 6);
+  assert.ok(Math.abs(FISH_LEADER_Y.reduce((a, b) => a + b, 0)) < 1e-12, "fish leader Y offsets sum to zero");
+  for (const t of [0, 1.7, 13.2, 99]) {
+    const ySum = [0, 1, 2, 3, 4, 5].reduce((acc, i) => acc + fishLeader(i, t)[1], 0);
+    assert.ok(Math.abs(ySum) < 1e-9, `fish leaders balanced @t=${t}`);
+  }
+  assert.ok(gasCirculation(0.5, 0)[1] > 0 && gasCirculation(4.5, 0)[1] < 0, "gas rises inside the ring, sinks outside");
+  assert.ok(gasCirculation(2.4, 2)[0] > 0 && gasCirculation(2.4, -2)[0] < 0, "gas spills outward on top, returns underneath");
+  const sim = stripComments(read("src/shaders/sim.vert.glsl"));
+  assert.match(sim, /const float FISH_LEADER_Y\[6\] = float\[6\]\(0\.9, -0\.9, 0\.55, -0\.55, 0\.25, -0\.25\);/);
+  assert.match(sim, /vec3 leaderPos = fishLeader\(lead, u_time\);/);
+  assert.match(sim, /const float GAS_TORUS_RADIUS = 2\.4;/);
+  assert.match(sim, /pos\.y -= 2\.0 \* GAS_WRAP_Y;/, "gas toroidal Y wrap");
+  assert.match(sim, /cross\(vec3\(0\.0, 1\.0, 0\.0\), radDir\)/, "gas radial curl dispersion");
+  assert.doesNotMatch(sim, /pos\.y > 5\.5/, "no single central-plume respawn");
+});
+
+test("ZUR-GH-008 particle splatting disables DEPTH_TEST + depth writes; dart3d edges are watertight", () => {
+  const src = read("src/render/ParticleSystem3D.js");
+  const start = src.indexOf("  render(frame, palette");
+  const end = src.indexOf("  stats()");
+  const body = stripComments(src.slice(start, end));
+  const draw = body.indexOf("gl.drawArraysInstanced(gl.TRIANGLES, 0, 12, count)");
+  const disable = body.lastIndexOf("gl.disable(gl.DEPTH_TEST);", draw);
+  const mask = body.lastIndexOf("gl.depthMask(false);", draw);
+  assert.ok(disable > 0 && mask > disable && draw > mask, "gl.disable(gl.DEPTH_TEST) + gl.depthMask(false) right before the instanced draw");
+  assert.ok(!/gl\.enable\(gl\.DEPTH_TEST\)/.test(body), "particle pass never re-enables depth testing");
+  const between = body.slice(mask, draw);
+  assert.ok(!/DEPTH_TEST|depthMask\(true\)/.test(between));
+  const vert = stripComments(read("src/shaders/render.vert.glsl"));
+  assert.match(vert, /invariant gl_Position;/);
+  assert.match(vert, /vec3 world = center \+ frame \* \(dartVertex\(vertexIndex\) \* s\);/);
+});
+
+test("ZUR-GH-008 formation / flow / scene change opens a 250 ms trail clear window (keep <= 0.45)", () => {
+  assert.equal(TRAIL_TRANSITION_MS, 250);
+  assert.equal(TRAIL_TRANSITION_KEEP_MAX, 0.45);
+  const guard = new TrailTransitionGuard();
+  const sig = (form, flow = "murmuration", scene = "particle-swarm-3d") => transitionSignature(scene, form, flow);
+  assert.equal(guard.observe(sig("polygon-rings"), 0), false, "first observation never triggers");
+  assert.equal(guard.keepCap(10), 1);
+  assert.equal(guard.observe(sig("polygon-rings"), 100), false);
+  assert.equal(guard.observe(sig("supernova-shell"), 1000), true, "formation change triggers");
+  assert.equal(guard.keepCap(1000), 0.45);
+  assert.equal(guard.keepCap(1249), 0.45);
+  assert.equal(guard.keepCap(1250), 1, "window closes after 250 ms");
+  assert.equal(guard.observe(sig("supernova-shell", "gas"), 2000), true, "flow change triggers");
+  assert.equal(guard.observe(sig("supernova-shell", "gas", "megastructure-3d"), 3000), true, "scene change triggers");
+  assert.equal(guard.count, 3);
+  assert.equal(capKeepFactor(0.9, 65536, guard.keepCap(3100)), 0.45);
+  assert.ok(0.45 ** 15 < 1e-5, "15 frames at keep 0.45 clear a stale silhouette");
+  assert.ok(normalizedSteadyStateEnergy(0.45) < normalizedSteadyStateEnergy(0.9), "no flash: clear-window energy stays below the capped steady state");
+  const host = read("src/render/RenderHost.js");
+  assert.match(host, /this\.trailTransition = new TrailTransitionGuard\(\);/);
+  assert.match(host, /transitionSignature\(preset\?\.sceneId, preset\?\.particles\?\.formationType, preset\?\.particles\?\.flowMode\)/);
+  assert.match(host, /trailKeepCap: this\.trailTransition\.keepCap\(now\)/);
+  assert.match(read("src/render/ParticleSystem3D.js"), /extras\.trailKeepCap \?\? 1/);
+  assert.match(read("sw.js"), /\.\/src\/render\/PostProcessPass\.js/);
+});
+
+test("ZUR-GH-008 smoke script asserts whiteClip, meanSat, errors and silence at 64k + Trail 1.00 + size 3.35x + dart", () => {
+  const smoke = read("tests/smoke-zur-gh-008.mjs");
+  assert.match(smoke, /sel-count", "64k"/);
+  assert.match(smoke, /rng-trail-length", 1\)/);
+  assert.match(smoke, /rng-size", 3\.35\)/);
+  assert.match(smoke, /sel-shape", "dart"/);
+  assert.match(smoke, /m\.whiteClip < 0\.01/);
+  assert.match(smoke, /m\.meanSat >= 0\.55/);
+  assert.match(smoke, /keepFactor not clamped <= 0\.45 inside the window/);
+  assert.match(smoke, /destinationConnections !== 0/);
+  assert.match(read("package.json"), /smoke:gh008/);
 });
 
 
