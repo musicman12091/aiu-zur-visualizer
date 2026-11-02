@@ -385,6 +385,11 @@ export function switchHudTab(state, hudTab, { swarmMode, shaderScene } = {}) {
   if (changed) {
     const palette = entryPalette(tab, mode);
     if (palette) next.colorPalette = palette;
+    // 3D Brain entry defaults: synapse-spark neurons firing synapse-cascade (user may change them afterwards).
+    if (tab === "brain-3d") {
+      next.particleStyle = "synapse-spark";
+      next.kineticMode = "synapse-cascade";
+    }
   }
   return enforceTabConstraints(next);
 }
