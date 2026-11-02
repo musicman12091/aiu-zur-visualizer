@@ -38,6 +38,8 @@ uniform float u_bass;
 uniform float u_onset;
 uniform float u_treble;
 uniform float u_reactivityGain; // ZUR-GH-009: Reactivity Punch 0.5..5.0
+uniform float u_activeCount;    // ZUR-GH-010: live agent count (shortens needle streaks at 96k..256k so the swarm stays readable)
+uniform int u_kineticMode;      // ZUR-GH-010: 1 = splatter-run (blood sprite ceiling 28 px)
 
 out vec3 v_color;
 out vec3 v_colorAlt;            // secondary palette color for the dart rim (chromatic, never white)
@@ -53,6 +55,9 @@ flat out float v_tint;          // scalar brightness (energy * shimmer * depth *
 flat out float v_group;         // 0..1 colour slot for the fragment palette
 flat out vec3 v_formColor;      // formation-owned colour (golden brain neurons) used by the true-neon palette
 flat out float v_formMix;
+flat out float v_hue;           // ZUR-GH-010: spatial hue (3D position + particle hash, never u_time)
+flat out vec3 v_bh;             // ZUR-GH-010: black-hole event horizon (screen px centre xy, radius px z; 0 = off)
+flat out float v_axon;          // ZUR-GH-010: 1 = 20% white-matter axon tract, 0 = 80% cortical soma
 flat out vec4 v_style;          // non-dart styles: head offset px, head radius px, half length px, half width px
 
 uint hash32(uint x) {
@@ -115,6 +120,16 @@ void main() {
   v_group = 0.0;
   v_formColor = vec3(0.0);
   v_formMix = 0.0;
+  v_hue = 0.0;
+  v_axon = 0.0;
+  v_bh = vec3(0.0);
+  if (u_formationType == 8) {
+    vec4 bhClip = u_viewProj * vec4(0.0, 0.0, 0.0, 1.0);
+    float bhW = max(bhClip.w, 0.05);
+    vec2 bhNdc = bhClip.xy / bhW * u_cameraZoom + vec2(0.0, u_viewportYOffset);
+    float bhPx = u_projScale * 0.5 * u_resolution.y / bhW * u_cameraZoom * (0.24 * 3.2 * 1.2); // 1.2x margin hides the sprite edge halo/bloom bleed around the r < 0.24 void
+    v_bh = vec3((bhNdc * 0.5 + 0.5) * u_resolution, bhPx);
+  }
   v_style = vec4(0.0, 1.0, 1.0, 1.0);
   if (u_visibleThreshold != 0xffffffffu && hash32(iid) >= u_visibleThreshold) {
     gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
@@ -145,7 +160,13 @@ void main() {
   // ZUR-GH-009: point-size pulse applies even when Oscillation amount == 0.
   float sizePulse = 1.0 + 0.45 * u_reactivityGain * (u_bass * 0.5 + u_onset * 0.5);
   float worldSize = 0.055 * u_size * u_densityScaleBoost * (0.65 + 0.7 * seed) * (1.0 + 0.45 * bandLevel) * sizePulse;
-  float radiusPx = worldSize * pxPerUnit;
+  // ZUR-GH-010: zoom damps the sprite sub-linearly (1 / zoom^0.35 above 1x) and a hard pixel ceiling bounds it
+  // (14 px standard, 28 px blood splatters) so 256k swarms at 3.5x zoom never fuse into a white fireball.
+  bool bloodStyle = u_particleStyle == 1 || u_kineticMode == 1;
+  float maxRadiusPx = bloodStyle ? 28.0 : 14.0;
+  float zoomDamp = u_cameraZoom > 1.0 ? 1.0 / pow(u_cameraZoom, 0.35) : 1.0;
+  float radiusPx = min(worldSize * pxPerUnit * zoomDamp, maxRadiusPx);
+  worldSize = radiusPx / max(pxPerUnit, 1e-4);
   float floorScale = radiusPx < u_minRadiusPx ? u_minRadiusPx / max(radiusPx, 1e-4) : 1.0;
 
   uint group = hash32(iid ^ 0x5bd1e995u) % 5u;
@@ -157,6 +178,9 @@ void main() {
   float tint = energy * shimmer * depthCue * u_intensity;
   float tintScalar = tint;
   v_group = float(group) * 0.2 + 0.1 * fract(seed * 7.0);
+  float hueHash = float(hash32(iid ^ 0x2545f491u) >> 8u) * (1.0 / 16777216.0);
+  v_hue = fract(hueHash + dot(center, vec3(0.071, 0.053, 0.087)));
+  v_axon = float(hash32(iid ^ 0xb5297a4du) >> 8u) * (1.0 / 16777216.0) < 0.8 ? 0.0 : 1.0;
   if (u_formationType == 8) tintScalar *= max(0.25, 1.0 + 0.65 * normalize(vel + vec3(1e-4)).x); // Doppler beaming
   if (u_formationType == 6) {
     // 80% cortical soma gold / 20% white-matter axon tracts (same split as sim.vert.glsl isCorticalSoma)
@@ -229,26 +253,26 @@ void main() {
     if (u_particleStyle == 1) {
       // blood-drop: teardrop head + arterial comet tail; a pinned drop is a short fat splat
       bool wallSplat = pinned > 0.5;
-      headR = radius * (wallSplat ? 2.1 : 1.35);
-      float tailPx = wallSplat || u_trailType == 4 ? 0.0
+      headR = min(radius * (wallSplat ? 2.1 : 1.35), 28.0);
+      // pinned drops keep a vertical streak: tail length follows the downward run speed
+      float tailPx = u_trailType == 4 ? 0.0
         : headR * (0.8 + clamp(pixelSpeed * 0.045, 0.0, 6.0) * (0.5 + u_trailLength));
       headX = tailPx * 0.5;
       centerShift = -tailPx * 0.5;
       halfL = headR * 1.3 + tailPx * 0.5;
       halfW = headR * 1.3;
-      if (wallSplat) { halfL = headR * 1.45; halfW = headR * 1.45; }
     } else if (u_particleStyle == 2) {
-      headR = radius * 1.2;
+      headR = min(radius * 1.2, 14.0);
       halfL = headR * 4.0;
       halfW = halfL;
     } else {
       // star-streak: razor-thin ~1.5 px core, anisotropic velocity-stretched needle, zero halo
       float needleStretch = clamp(speed * 14.0, 1.0, 6.5);
       headR = 1.5;
-      halfL = radius * 2.0 * needleStretch + 2.0;
-      halfW = 2.5;
+      halfL = min(radius, 14.0) * 2.0 * needleStretch * clamp(65536.0 / max(u_activeCount, 65536.0), 0.15, 1.0) + 2.0;
+      halfW = 2.5 * clamp(pow(65536.0 / max(u_activeCount, 65536.0), 0.3), 0.6, 1.0);
     }
-    vec2 styleDir = (u_particleStyle == 2 || pinned > 0.5) ? vec2(1.0, 0.0) : dir;
+    vec2 styleDir = u_particleStyle == 2 ? vec2(1.0, 0.0) : (pinned > 0.5 ? vec2(0.0, -1.0) : dir);
     vec2 stylePerp = vec2(-styleDir.y, styleDir.x);
     vec2 styleExtent = vec2(halfL, halfW);
     vec2 styleOffset = styleDir * (corner.x * styleExtent.x + centerShift) + stylePerp * corner.y * styleExtent.y;

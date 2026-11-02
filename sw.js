@@ -1,4 +1,4 @@
-const CACHE = "zur-shell-v7";
+const CACHE = "zur-shell-v8";
 const ASSETS = [
   "./",
   "./index.html",
@@ -14,6 +14,7 @@ const ASSETS = [
   "./src/render/TransitionController.js",
   "./src/controls/ControlHUD.js",
   "./src/controls/palettes.js",
+  "./src/controls/hudTabs.js",
   "./src/scenes/aurora-ribbons.glsl",
   "./src/render/ParticleSystem3D.js",
   "./src/render/LogoAttractor.js",

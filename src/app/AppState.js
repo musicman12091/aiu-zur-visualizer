@@ -4,6 +4,11 @@ import {
   COLOR_PALETTES,
   COUNT_TIERS,
   KINETIC_MODES,
+  LOGO_TEXT_PRESETS,
+  MEGASTRUCTURE_SCENE_ID,
+  PULSE_SCENE_ID,
+  SPECTRAL_CANYON_SCENE_ID,
+  AURORA_SCENE_ID,
   NOISE_GATE_DEFAULT,
   NOISE_GATE_RANGE,
   PARTICLE_STYLES,
@@ -154,13 +159,292 @@ export const MODE_B_PRESET = {
  * Stage 2 default: Mode A capture/visual settings with the 3D particle swarm
  * scene. Mode A / Mode B stay unchanged for Stage 1 contracts.
  */
-export const STAGE2_DEFAULT_PRESET = {
+const STAGE2_BASE_PRESET = {
   ...MODE_A_PRESET,
   sceneId: PARTICLE_SCENE_ID,
   name: "Stage 3 — Neon 3D Particle Swarm",
   visual: { ...MODE_A_PRESET.visual, paletteId: "neon-tunnel" },
   particles: { ...DEFAULT_PARTICLES },
 };
+
+// ---- ZUR-GH-010 context-gated HUD tabs -------------------------------------------------------------------------
+
+export const HUD_TABS = Object.freeze(["deep-space", "brain-3d", "blood-swarm", "megastructure", "canyon-pulse", "audio-rig"]);
+/** Tabs that own a visualizer scene (audio-rig never changes the scene). */
+export const VISUAL_HUD_TABS = Object.freeze(HUD_TABS.slice(0, 5));
+export const SWARM_MODES = Object.freeze(["blood-drip", "logo-text", "free-swarm"]);
+export const SHADER_SCENES = Object.freeze([SPECTRAL_CANYON_SCENE_ID, PULSE_SCENE_ID, AURORA_SCENE_ID]);
+export const DEFAULT_HUD = Object.freeze({
+  hudTab: "deep-space",
+  swarmMode: "blood-drip",
+  shaderScene: SPECTRAL_CANYON_SCENE_ID,
+  visualTab: "deep-space",
+});
+
+const NEON_PALETTES = Object.freeze(["true-neon", "full-spectrum", "white-static", "blood-red"]);
+const TAB_FLOWS = Object.freeze(["physarum", "murmuration", "fish"]);
+const ALL_STYLES = PARTICLE_STYLES;
+const SOFT_STYLES = Object.freeze(["star-streak", "dart3d", "synapse-spark"]);
+const CAMERA_MODES = Object.freeze(["static", "orbit-3d", "tunnel-fly", "beat-bank"]);
+/** The ticket's "flock" is the School of Fish flow (FLOW_MODES has no separate "flock" id; sim u_mode is index based). */
+const FLOW_ALIASES = Object.freeze({ flock: "fish", flocking: "fish" });
+export const PARTICLE_SIZE_HUD_MAX = 2.5;
+export const BLOOD_TRAIL_MIN = 0.25;
+export const BLOOD_TRAIL_DEFAULT = 0.72;
+export const LOGO_OSCILLATION_HUD_MAX = 0.15;
+export const LOGO_TRAIL_HUD_MAX = 0.35;
+export const LOGO_HUD_TEXTS = Object.freeze(["MON DAAIN", "AI: UNDERGROUND", "TENTH GATE", "ZUR"]);
+
+/** Allowed values per tab; the HUD builds its option lists from this table and the autopilot picks from it. */
+export const TAB_RULES = Object.freeze({
+  "deep-space": {
+    formations: ["wormhole", "supermassive-blackhole", "living-galaxy", "neon-tunnel", "polygon-rings", "supernova-shell"],
+    flows: TAB_FLOWS,
+    styles: ["star-streak", "dart3d", "synapse-spark"],
+    kinetics: ["off", "accretion-warp", "ribbon-curtain", "shock-shatter"],
+    palettes: NEON_PALETTES,
+  },
+  "brain-3d": {
+    formations: ["neural-brain"],
+    flows: TAB_FLOWS,
+    styles: ["synapse-spark", "star-streak", "dart3d"],
+    kinetics: ["synapse-cascade", "shock-shatter", "off"],
+    palettes: ["golden-cortex", ...NEON_PALETTES],
+  },
+  "blood-drip": { formations: ["free-3d"], styles: ["blood-drop"], kinetics: ["splatter-run"], palettes: NEON_PALETTES },
+  "logo-text": { formations: ["logo-attractor"], styles: SOFT_STYLES, kinetics: ["off"], palettes: NEON_PALETTES },
+  "free-swarm": {
+    formations: ["fractal-core", "free-3d"],
+    flows: ["flock", "murmuration", "physarum", "fluid", "gas"].map((id) => FLOW_ALIASES[id] || id),
+    styles: ALL_STYLES,
+    kinetics: KINETIC_MODES,
+    palettes: NEON_PALETTES,
+  },
+  "megastructure": { formations: ["fractal-core"], styles: ["dart3d"], kinetics: ["off"], palettes: NEON_PALETTES },
+  "pulse-field-3d": { styles: ["dart3d"], kinetics: ["off"], palettes: NEON_PALETTES },
+});
+
+const FLAT_DEFAULTS = Object.freeze({
+  ...DEFAULT_HUD,
+  sceneId: PARTICLE_SCENE_ID,
+  paletteId: "neon-tunnel",
+  hueShift: 0,
+  cameraMode: "orbit-3d",
+  chromaticAberration: 0.30,
+  godRays: 0.35,
+  ...DEFAULT_PARTICLES,
+});
+
+function pick(value, allowed, fallback) {
+  return allowed.includes(value) ? value : fallback;
+}
+
+function clampNum(value, min, max, fallback) {
+  return Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : fallback;
+}
+
+/** Entering a tab / sub-mode can reset the palette to that mode's default. */
+function entryPalette(hudTab, swarmMode) {
+  if (hudTab === "brain-3d") return "golden-cortex";
+  if (hudTab === "blood-swarm" && swarmMode === "blood-drip") return "blood-red";
+  return null;
+}
+
+/**
+ * Pure: returns the flat state constrained to what the active HUD tab allows. Idempotent.
+ * `formation` / `formationType` and `flowMode` / `flowType` are always kept equal. The Audio & Rig tab does not
+ * change the scene; it only normalises ranges and the aliases.
+ */
+export function enforceTabConstraints(input) {
+  const src = isObject(input) ? input : {};
+  const s = { ...FLAT_DEFAULTS, ...src };
+  const hudTab = pick(s.hudTab, HUD_TABS, DEFAULT_HUD.hudTab);
+  s.hudTab = hudTab;
+  s.swarmMode = pick(s.swarmMode, SWARM_MODES, DEFAULT_HUD.swarmMode);
+  s.shaderScene = pick(s.shaderScene, SHADER_SCENES, DEFAULT_HUD.shaderScene);
+  s.visualTab = pick(s.visualTab, VISUAL_HUD_TABS, hudTab === "audio-rig" ? DEFAULT_HUD.visualTab : hudTab);
+  if (hudTab !== "audio-rig") s.visualTab = hudTab;
+
+  const formationIn = src.formation !== undefined ? src.formation : src.formationType;
+  let formation = pick(formationIn, FORMATION_TYPES, DEFAULT_PARTICLES.formationType);
+  const flowIn = src.flowMode !== undefined ? src.flowMode : src.flowType;
+  let flow = pick(FLOW_ALIASES[flowIn] || flowIn, FLOW_MODES, DEFAULT_PARTICLES.flowMode);
+  let style = pick(s.particleStyle, PARTICLE_STYLES, DEFAULT_PARTICLES.particleStyle);
+  let kinetic = pick(s.kineticMode, KINETIC_MODES, DEFAULT_PARTICLES.kineticMode);
+  let osc = pick(s.oscillationType, OSCILLATION_TYPES, DEFAULT_PARTICLES.oscillationType);
+  let palette = pick(s.colorPalette, COLOR_PALETTES, DEFAULT_PARTICLES.colorPalette);
+  let trailType = pick(s.trailType, TRAIL_TYPES, DEFAULT_PARTICLES.trailType);
+  let trailLength = clampNum(s.trailLength, TRAIL_LENGTH_RANGE[0], TRAIL_LENGTH_RANGE[1], DEFAULT_PARTICLES.trailLength);
+  let oscAmount = clampNum(s.oscillationAmount, OSCILLATION_AMOUNT_RANGE[0], OSCILLATION_AMOUNT_RANGE[1], DEFAULT_PARTICLES.oscillationAmount);
+  let sceneId = pick(s.sceneId, SCENE_IDS, PARTICLE_SCENE_ID);
+  let attractorText = typeof s.attractorText === "string" ? s.attractorText.slice(0, 64) : DEFAULT_PARTICLES.attractorText;
+
+  const rules = TAB_RULES[hudTab];
+  if (hudTab === "deep-space") {
+    sceneId = PARTICLE_SCENE_ID;
+    formation = pick(formation, rules.formations, "wormhole");
+    flow = pick(flow, rules.flows, "physarum");
+    style = pick(style, rules.styles, "star-streak");
+    kinetic = pick(kinetic, rules.kinetics, "off");
+    palette = pick(palette, rules.palettes, "true-neon");
+    if (["wormhole", "supermassive-blackhole", "living-galaxy"].includes(formation)) osc = "off";
+  } else if (hudTab === "brain-3d") {
+    sceneId = PARTICLE_SCENE_ID;
+    formation = "neural-brain";
+    flow = pick(flow, rules.flows, "physarum");
+    style = pick(style, rules.styles, "synapse-spark");
+    kinetic = pick(kinetic, rules.kinetics, "synapse-cascade");
+    osc = "off";
+    palette = pick(palette, rules.palettes, "golden-cortex");
+  } else if (hudTab === "blood-swarm") {
+    sceneId = PARTICLE_SCENE_ID;
+    if (s.swarmMode === "blood-drip") {
+      formation = "free-3d";
+      style = "blood-drop";
+      kinetic = "splatter-run";
+      osc = "off";
+      const noTrail = trailType === "none" || trailLength < BLOOD_TRAIL_MIN;
+      trailType = "comet";
+      trailLength = noTrail ? BLOOD_TRAIL_DEFAULT : Math.max(trailLength || 0, BLOOD_TRAIL_DEFAULT);
+      palette = pick(palette, TAB_RULES["blood-drip"].palettes, "blood-red");
+    } else if (s.swarmMode === "logo-text") {
+      formation = "logo-attractor";
+      kinetic = "off";
+      oscAmount = Math.min(oscAmount, LOGO_OSCILLATION_HUD_MAX);
+      trailLength = Math.min(trailLength, LOGO_TRAIL_HUD_MAX);
+      style = pick(style, TAB_RULES["logo-text"].styles, "star-streak");
+      palette = pick(palette, TAB_RULES["logo-text"].palettes, "true-neon");
+      attractorText = pick(attractorText, LOGO_HUD_TEXTS, LOGO_TEXT_PRESETS.includes(attractorText) ? attractorText : "MON DAAIN");
+    } else {
+      formation = pick(formation, TAB_RULES["free-swarm"].formations, "free-3d");
+      palette = pick(palette, TAB_RULES["free-swarm"].palettes, "true-neon");
+    }
+  } else if (hudTab === "megastructure") {
+    sceneId = MEGASTRUCTURE_SCENE_ID;
+    formation = "fractal-core";
+    style = "dart3d";
+    kinetic = "off";
+    palette = pick(palette, rules.palettes, "true-neon");
+  } else if (hudTab === "canyon-pulse") {
+    sceneId = s.shaderScene;
+    if (sceneId === PULSE_SCENE_ID) {
+      style = "dart3d";
+      kinetic = "off";
+      palette = pick(palette, TAB_RULES["pulse-field-3d"].palettes, "true-neon");
+    }
+  }
+
+  const out = {
+    ...s,
+    sceneId,
+    formation,
+    formationType: formation,
+    flowMode: flow,
+    flowType: flow,
+    particleStyle: style,
+    kineticMode: kinetic,
+    oscillationType: osc,
+    oscillationAmount: oscAmount,
+    oscillationSpeed: clampNum(s.oscillationSpeed, OSCILLATION_SPEED_RANGE[0], OSCILLATION_SPEED_RANGE[1], DEFAULT_PARTICLES.oscillationSpeed),
+    colorPalette: palette,
+    trailType,
+    trailLength,
+    attractorText,
+    particleCountTier: pick(s.particleCountTier, COUNT_TIERS, DEFAULT_PARTICLES.particleCountTier),
+    particleSize: clampNum(s.particleSize, PARTICLE_SIZE_RANGE[0], PARTICLE_SIZE_HUD_MAX, DEFAULT_PARTICLES.particleSize),
+    cameraZoom: clampNum(s.cameraZoom, CAMERA_ZOOM_RANGE[0], CAMERA_ZOOM_RANGE[1], DEFAULT_PARTICLES.cameraZoom),
+    reactivityGain: clampNum(s.reactivityGain, REACTIVITY_GAIN_RANGE[0], REACTIVITY_GAIN_RANGE[1], DEFAULT_PARTICLES.reactivityGain),
+    kaleidoSegments: pick(s.kaleidoSegments, KALEIDO_SEGMENTS, DEFAULT_PARTICLES.kaleidoSegments),
+    kaleidoSpin: typeof s.kaleidoSpin === "boolean" ? s.kaleidoSpin : DEFAULT_PARTICLES.kaleidoSpin,
+    pulseLayout: pick(s.pulseLayout, PULSE_LAYOUTS, DEFAULT_PARTICLES.pulseLayout),
+    cameraMode: pick(s.cameraMode, CAMERA_MODES, "orbit-3d"),
+    paletteId: PALETTE_IDS.includes(s.paletteId) ? s.paletteId : "neon-tunnel",
+    hueShift: clampNum(s.hueShift, -1, 1, 0),
+    chromaticAberration: clampNum(s.chromaticAberration, 0, 1, 0.30),
+    godRays: clampNum(s.godRays, 0, 1, 0.35),
+  };
+  return out;
+}
+
+/** Key into TAB_RULES / the HUD layout for a flat state (audio-rig uses the last visual tab). */
+export function layoutKeyFor(flat) {
+  const tab = flat.hudTab === "audio-rig" ? flat.visualTab : flat.hudTab;
+  if (tab === "blood-swarm") return flat.swarmMode;
+  if (tab === "canyon-pulse") return flat.shaderScene;
+  return tab;
+}
+
+/** Pure tab switch: applies the entry defaults of the new tab / sub-mode, then constrains. */
+export function switchHudTab(state, hudTab, { swarmMode, shaderScene } = {}) {
+  const prev = enforceTabConstraints(state);
+  const tab = pick(hudTab, HUD_TABS, prev.hudTab);
+  const mode = swarmMode ? pick(swarmMode, SWARM_MODES, prev.swarmMode) : prev.swarmMode;
+  const scene = shaderScene ? pick(shaderScene, SHADER_SCENES, prev.shaderScene) : prev.shaderScene;
+  const next = { ...prev, hudTab: tab, swarmMode: mode, shaderScene: scene };
+  const changed = tab !== prev.hudTab || (tab === "blood-swarm" && mode !== prev.swarmMode);
+  if (changed) {
+    const palette = entryPalette(tab, mode);
+    if (palette) next.colorPalette = palette;
+    // 3D Brain entry defaults: synapse-spark neurons firing synapse-cascade (user may change them afterwards).
+    if (tab === "brain-3d") {
+      next.particleStyle = "synapse-spark";
+      next.kineticMode = "synapse-cascade";
+    }
+  }
+  return enforceTabConstraints(next);
+}
+
+const FLAT_PARTICLE_KEYS = Object.freeze(Object.keys(DEFAULT_PARTICLES).filter((key) => key !== "shape"));
+
+/** Flat view used by enforceTabConstraints: scene + visual.* + hud.* + particles.* (formation / flow aliases filled in). */
+export function flattenPreset(preset) {
+  const hud = { ...DEFAULT_HUD, ...(preset?.hud || {}) };
+  const particles = { ...DEFAULT_PARTICLES, ...(preset?.particles || {}) };
+  const visual = preset?.visual || {};
+  return {
+    ...hud,
+    sceneId: preset?.sceneId ?? PARTICLE_SCENE_ID,
+    paletteId: visual.paletteId ?? "neon-tunnel",
+    hueShift: visual.hueShift ?? 0,
+    cameraMode: visual.cameraMode ?? "orbit-3d",
+    chromaticAberration: visual.chromaticAberration ?? 0.30,
+    godRays: visual.godRays ?? 0.35,
+    ...particles,
+    formation: particles.formationType,
+    flowType: particles.flowMode,
+  };
+}
+
+/** Writes a flat (constrained) state back into a copy of the preset. */
+export function applyFlatToPreset(preset, flat) {
+  const next = JSON.parse(JSON.stringify(preset));
+  next.sceneId = flat.sceneId;
+  next.hud = { hudTab: flat.hudTab, swarmMode: flat.swarmMode, shaderScene: flat.shaderScene, visualTab: flat.visualTab };
+  next.visual = {
+    ...next.visual,
+    paletteId: flat.paletteId,
+    hueShift: flat.hueShift,
+    cameraMode: flat.cameraMode,
+    chromaticAberration: flat.chromaticAberration,
+    godRays: flat.godRays,
+  };
+  const particles = { ...(next.particles || {}) };
+  for (const key of FLAT_PARTICLE_KEYS) particles[key] = flat[key];
+  next.particles = normalizeParticles(particles);
+  return next;
+}
+
+export function enforcePresetConstraints(preset) {
+  return applyFlatToPreset(preset, enforceTabConstraints(flattenPreset(preset)));
+}
+
+/** Preset-level tab switch (used by the HUD and tests). */
+export function switchPresetTab(preset, hudTab, options) {
+  return applyFlatToPreset(preset, switchHudTab(flattenPreset(preset), hudTab, options));
+}
+
+/** Stage 3 default + HUD tab state (Deep Space). */
+export const STAGE2_DEFAULT_PRESET = enforcePresetConstraints({ ...STAGE2_BASE_PRESET, hud: { ...DEFAULT_HUD } });
 
 /** Flat particle-control keys exposed through AppState. */
 export const STAGE3_DEFAULTS = Object.freeze({
@@ -198,6 +482,7 @@ export function applyModeKeepingScene(modePreset, current) {
   const next = JSON.parse(JSON.stringify(modePreset));
   if (current?.sceneId) next.sceneId = current.sceneId;
   next.particles = { ...DEFAULT_PARTICLES, ...(current?.particles || {}) };
+  if (current?.hud) next.hud = { ...current.hud };
   return next;
 }
 
@@ -205,12 +490,12 @@ function isObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-/** Stage 5 persisted state: `{ storageSchema, preset }` under this key. Older keys are migrated on load. */
-export const STORAGE_KEY = "zur_state_v5_0";
-export const STORAGE_SCHEMA = 5.0;
+/** Stage 5.1 persisted state: `{ storageSchema, preset }` under this key. Older keys are migrated on load. */
+export const STORAGE_KEY = "zur_state_v5_1";
+export const STORAGE_SCHEMA = 5.1;
 export const V4_NEON_FLAG = "zur_v4_neon_forced";
 export const LEGACY_STORAGE_KEYS = Object.freeze([
-  "zur_state_v4_0", "zur_state_v3_2", "zur_state_v3", "zur_state_v2", "zur_state_v1", "zur.preset.v2", "zur.preset.v1",
+  "zur_state_v5_0", "zur_state_v4_0", "zur_state_v3_2", "zur_state_v3", "zur_state_v2", "zur_state_v1", "zur.preset.v2", "zur.preset.v1",
 ]);
 /** Forced on any cached state older than v3.2 or still on copper-teal (grey-prone, small, dim). */
 export const V3_2_UPGRADE_DEFAULTS = Object.freeze({
@@ -260,6 +545,31 @@ export function upgradeToV50(preset) {
   return next;
 }
 
+/** ZUR-GH-010: adds the HUD tab keys (inferred from the stored scene) and runs the tab constraints once. */
+export function upgradeToV51(preset) {
+  const next = JSON.parse(JSON.stringify(preset));
+  if (!isObject(next.hud)) {
+    const hud = { ...DEFAULT_HUD };
+    if (next.sceneId === MEGASTRUCTURE_SCENE_ID) hud.hudTab = "megastructure";
+    else if (SHADER_SCENES.includes(next.sceneId)) {
+      hud.hudTab = "canyon-pulse";
+      hud.shaderScene = next.sceneId;
+    }
+    else {
+      const formation = next.particles?.formationType;
+      if (formation === "neural-brain") hud.hudTab = "brain-3d";
+      else if (formation === "logo-attractor") { hud.hudTab = "blood-swarm"; hud.swarmMode = "logo-text"; }
+      else if (next.particles?.particleStyle === "blood-drop" || next.particles?.kineticMode === "splatter-run") {
+        hud.hudTab = "blood-swarm";
+      } else if (formation === "fractal-core" || formation === "free-3d") { hud.hudTab = "blood-swarm"; hud.swarmMode = "free-swarm"; }
+    }
+    hud.visualTab = hud.hudTab;
+    next.hud = hud;
+  }
+  next.particles = normalizeParticles(next.particles);
+  return enforcePresetConstraints(next);
+}
+
 export function serializeStoredState(preset) {
   return JSON.stringify({ storageSchema: STORAGE_SCHEMA, preset });
 }
@@ -290,7 +600,7 @@ export function migrateStoredPayload(raw) {
   }
   if (schema < STORAGE_SCHEMA) {
     const upgraded = upgradeToV40(preset);
-    preset = upgradeToV50(upgraded.preset);
+    preset = upgradeToV51(upgradeToV50(upgraded.preset));
     forcedNeon = upgraded.forcedNeon;
     migrated = true;
   } else {
@@ -305,6 +615,7 @@ export function migrateStoredPayload(raw) {
       },
       particles: normalizeParticles(preset.particles),
     };
+    if (!isObject(preset.hud)) preset = upgradeToV51(preset);
   }
   return { preset, migrated, forcedNeon };
 }
@@ -476,6 +787,19 @@ export function validatePreset(input) {
     }
   }
 
+  if (input.hud != null) {
+    const hud = input.hud;
+    if (!isObject(hud)) errors.push("hud must be an object");
+    else {
+      if (!HUD_TABS.includes(hud.hudTab)) errors.push(`hud.hudTab must be one of ${HUD_TABS.join(", ")}`);
+      if (!SWARM_MODES.includes(hud.swarmMode)) errors.push(`hud.swarmMode must be one of ${SWARM_MODES.join(", ")}`);
+      if (!SHADER_SCENES.includes(hud.shaderScene)) errors.push(`hud.shaderScene must be one of ${SHADER_SCENES.join(", ")}`);
+      if (hud.visualTab != null && !VISUAL_HUD_TABS.includes(hud.visualTab)) {
+        errors.push(`hud.visualTab must be one of ${VISUAL_HUD_TABS.join(", ")}`);
+      }
+    }
+  }
+
   const transition = input.transition;
   if (!isObject(transition)) {
     errors.push("transition is required");
@@ -522,6 +846,8 @@ export class AppState {
   replacePreset(preset) {
     const result = validatePreset(preset);
     if (!result.ok) return result;
+    // Presets that carry HUD tab state are always re-constrained (ZUR-GH-010); legacy HUD-less presets are untouched.
+    if (result.preset.hud) result.preset = enforcePresetConstraints(result.preset);
     this.preset = result.preset;
     this.emit("preset");
     return result;

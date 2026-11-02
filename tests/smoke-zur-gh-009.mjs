@@ -255,9 +255,15 @@ try {
   const set = (id, value, range = false) => evaluate(`window.__zurSet${range ? "Range" : "Select"}("${id}", ${JSON.stringify(value)})`);
   const compact = (m) => ({ blackRatio: +m.blackRatio.toFixed(3), whiteClip: +m.whiteClip.toFixed(4), meanSat: +m.meanSat.toFixed(3), lit: +m.litFraction.toFixed(3) });
 
+  // ZUR-GH-010: the scene / sub-mode is chosen with the context-gated tab bar (HUD select rows only hold the active tab's options).
+  const goTab = async (id, sub = "") => {
+    await evaluate(`document.querySelector('[data-hud-tab="${id}"]').click()`);
+    if (sub) await evaluate(`document.querySelector('[data-swarm-mode="${sub}"], [data-shader-scene="${sub}"]').click()`);
+    await sleep(150);
+  };
   await evaluate("document.getElementById('btn-oscillator').click()");
   await sleep(2000);
-  await set("sel-scene", "particle-swarm-3d");
+  await goTab("blood-swarm", "free-swarm");
 
   // 0) HUD contract: zoom slider range, no orb / preset / audio profile rows, kinetic row sits above Oscillation.
   results.hud = await evaluate(`(() => {
@@ -301,9 +307,10 @@ try {
   if (!(z.pinchOut > 1.4 && z.pinchIn < 1.0 && z.wheel > z.pinchIn && Math.abs(z.afterDoubleTap - 1) < 1e-9)) problems.push(`zoom gestures ${JSON.stringify(z)}`);
 
   // 2) 256k stability: logo-attractor and neural-brain at 256k (VBOs + glyph targets sized for MAX_PARTICLES).
-  await set("sel-count", "256k");
   for (const formation of ["logo-attractor", "neural-brain"]) {
-    await set("sel-formation", formation);
+    if (formation === "logo-attractor") await goTab("blood-swarm", "logo-text");
+    else await goTab("brain-3d");
+    await set("sel-count", "256k");
     const m = await measure(`256k ${formation}`, 6000);
     const st = await evaluate("window.__zurState(262144)");
     results.stability[formation] = { ...compact(m), count: st.count, nonFinite: st.nonFinite, maxAbs: +st.maxAbs.toFixed(2) };
@@ -313,27 +320,30 @@ try {
   }
 
   // 3) Style / palette / formation scenarios at 64k.
-  await set("sel-count", "64k");
   const scenarios = [
-    ["blood-splatter", { style: "blood-drop", palette: "blood-red", kinetic: "splatter-run", formation: "free-3d" }],
-    ["brain-synapse", { style: "synapse-spark", palette: "true-neon", kinetic: "off", formation: "neural-brain" }],
-    ["living-galaxy", { style: "dart3d", palette: "full-spectrum", kinetic: "off", formation: "living-galaxy" }],
-    ["blackhole", { style: "dart3d", palette: "true-neon", kinetic: "accretion-warp", formation: "supermassive-blackhole" }],
-    ["wormhole-white", { style: "star-streak", palette: "white-static", kinetic: "off", formation: "wormhole" }],
-    ["synapse-cascade", { style: "synapse-spark", palette: "true-neon", kinetic: "synapse-cascade", formation: "neural-brain" }],
-    ["ribbon-curtain", { style: "dart3d", palette: "true-neon", kinetic: "ribbon-curtain", formation: "free-3d" }],
-    ["shock-shatter", { style: "star-streak", palette: "true-neon", kinetic: "shock-shatter", formation: "supernova-shell" }],
+    ["blood-splatter", { tab: ["blood-swarm", "blood-drip"], palette: "blood-red" }],
+    ["brain-synapse", { tab: ["brain-3d"], style: "synapse-spark", palette: "true-neon", kinetic: "off" }],
+    ["living-galaxy", { tab: ["deep-space"], style: "dart3d", palette: "full-spectrum", kinetic: "off", formation: "living-galaxy" }],
+    ["blackhole", { tab: ["deep-space"], style: "dart3d", palette: "true-neon", kinetic: "accretion-warp", formation: "supermassive-blackhole" }],
+    ["wormhole-white", { tab: ["deep-space"], style: "star-streak", palette: "white-static", kinetic: "off", formation: "wormhole" }],
+    ["synapse-cascade", { tab: ["brain-3d"], style: "synapse-spark", palette: "true-neon", kinetic: "synapse-cascade" }],
+    ["ribbon-curtain", { tab: ["deep-space"], style: "dart3d", palette: "true-neon", kinetic: "ribbon-curtain", formation: "neon-tunnel" }],
+    ["shock-shatter", { tab: ["deep-space"], style: "star-streak", palette: "true-neon", kinetic: "shock-shatter", formation: "supernova-shell" }],
   ];
   for (const [name, cfg] of scenarios) {
-    await set("sel-particle-style", cfg.style);
-    await set("sel-color-palette", cfg.palette);
-    await set("sel-kinetic-mode", cfg.kinetic);
-    await set("sel-formation", cfg.formation);
+    await goTab(...cfg.tab);
+    await set("sel-count", "64k");
+    if (cfg.style) await set("sel-particle-style", cfg.style);
+    if (cfg.palette) await set("sel-palette", cfg.palette);
+    if (cfg.kinetic) await set("sel-kinetic-mode", cfg.kinetic);
+    if (cfg.formation) await set("sel-formation", cfg.formation);
     const m = await measure(name, 4500);
     const st = await evaluate("window.__zurState(65536)");
     results.scenarios[name] = { ...compact(m), nonFinite: st.nonFinite, maxAbs: +st.maxAbs.toFixed(2) };
     await shot(`gh009-${name}`);
-    if (!(m.blackRatio < 0.85)) problems.push(`${name} blackRatio ${m.blackRatio.toFixed(3)} >= 0.85`);
+    // ZUR-GH-010: blood-red splatter is intentionally sparse (single hue, 40% of drops pinned to the glass).
+    const blackLimit = name === "blood-splatter" ? 0.92 : 0.85;
+    if (!(m.blackRatio < blackLimit)) problems.push(`${name} blackRatio ${m.blackRatio.toFixed(3)} >= ${blackLimit}`);
     if (!(m.whiteClip < 0.01)) problems.push(`${name} whiteClip ${m.whiteClip.toFixed(4)} >= 0.01`);
     if (st.nonFinite > 0) problems.push(`${name}: ${st.nonFinite} non-finite agents`);
   }
@@ -347,8 +357,9 @@ try {
   await set("rng-camera-zoom", 1, true);
 
   // 4) Audio reactivity with Oscillation amount == 0: synthetic features move the swarm (radial kick + point size pulse).
+  await goTab("deep-space");
   await set("sel-particle-style", "dart3d");
-  await set("sel-color-palette", "true-neon");
+  await set("sel-palette", "true-neon");
   await set("sel-kinetic-mode", "off");
   await set("sel-formation", "neon-tunnel");
   await set("rng-osc-amount", 0, true);

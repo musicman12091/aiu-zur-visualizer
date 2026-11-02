@@ -188,7 +188,7 @@ const RENDER_UNIFORMS = [
   "u_trailType", "u_trailLength", "u_densityScaleBoost", "u_pulseLayout", "u_bands",
   "u_particleSize", "u_activeCount", "u_viewportYOffset", "u_trailEnergyNorm",
   "u_cameraZoom", "u_particleStyle", "u_colorPalette", "u_formationType", "u_reactivityGain",
-  "u_bass", "u_onset", "u_treble", "u_spectralCentroid",
+  "u_bass", "u_onset", "u_treble", "u_spectralCentroid", "u_kineticMode",
 ];
 const POST_UNIFORMS = [
   "u_scene", "u_resolution", "u_kaleidoSegments", "u_kaleidoAngle", "u_kaleidoZoom",
@@ -625,7 +625,9 @@ export class ParticleSystem3D {
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     }
 
-    const dart = styleIndex === 0 && particles.shape !== "capsule";
+    // ZUR-GH-010: only dart3d draws the 12-vertex cone (TRIANGLES); blood-drop / synapse-spark / star-streak bind the
+    // 4-vertex billboard quad (TRIANGLE_STRIP).
+    const dart = styleIndex === 0;
     // ZUR-GH-008: particle splatting never depth-tests. Additive darts / premultiplied capsules are order-independent,
     // and a depth test against stale or sibling-dart depth punched dark dotted seams through bright dart3d spheres.
     gl.disable(gl.DEPTH_TEST);
@@ -642,6 +644,7 @@ export class ParticleSystem3D {
     gl.uniform1i(R.u_shape, dart ? 0 : 1);
     gl.uniform1f(R.u_cameraZoom, zoom);
     gl.uniform1i(R.u_particleStyle, styleIndex);
+    gl.uniform1i(R.u_kineticMode, Math.max(0, KINETIC_MODES.indexOf(particles.kineticMode)));
     gl.uniform1i(R.u_colorPalette, paletteIndex);
     gl.uniform1i(R.u_formationType, formationIndex);
     gl.uniform1f(R.u_reactivityGain, particles.reactivityGain);

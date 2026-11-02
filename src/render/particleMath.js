@@ -21,7 +21,7 @@ export const FLOW_LABELS = Object.freeze({
   fluid: "Fluid",
   gas: "Gas",
   murmuration: "Murmuration (Birds)",
-  fish: "School of Fish",
+  fish: "School of Fish (Flock)",
   physarum: "Physarum Neural Web",
 });
 export const PARTICLE_SHAPES = Object.freeze(["dart", "capsule"]);
@@ -49,6 +49,12 @@ export const FORMATION_TYPES = Object.freeze([
   "neural-brain", "living-galaxy", "supermassive-blackhole", "wormhole",
 ]);
 export const FORMATION_LABELS = Object.freeze({
+  "free-3d": "Free 3D Swarm",
+  "neon-tunnel": "Neon Tunnel Vortex",
+  "polygon-rings": "Polygon Rings",
+  "supernova-shell": "Supernova Shell",
+  "fractal-core": "Fractal Core",
+  "logo-attractor": "Logo / Text Attractor",
   "neural-brain": "3D Brain (Golden Neurons & Synapses)",
   "living-galaxy": "Living Spiral Galaxy",
   "supermassive-blackhole": "Supermassive Black Hole (Gargantua)",
@@ -62,13 +68,14 @@ export const PARTICLE_STYLE_LABELS = Object.freeze({
   "synapse-spark": "Synapse Spark",
   "star-streak": "Star Streak",
 });
-/** Index = `u_colorPalette`. */
-export const COLOR_PALETTES = Object.freeze(["true-neon", "full-spectrum", "white-static", "blood-red"]);
+/** Index = `u_colorPalette` (golden-cortex = 4, ZUR-GH-010). */
+export const COLOR_PALETTES = Object.freeze(["true-neon", "full-spectrum", "white-static", "blood-red", "golden-cortex"]);
 export const COLOR_PALETTE_LABELS = Object.freeze({
   "true-neon": "True Neon",
   "full-spectrum": "Full Spectrum",
   "white-static": "White Static",
   "blood-red": "Blood Red",
+  "golden-cortex": "Golden Cortex",
 });
 /** Index = `u_kineticMode`. */
 export const KINETIC_MODES = Object.freeze([
@@ -740,15 +747,30 @@ export function spectralCentroidFromBands(sub, bass, lowMid, highMid, treble) {
   return (bass * 0.25 + lowMid * 0.5 + highMid * 0.75 + treble) / sum;
 }
 
+/** ZUR-GH-010: blood-drop impact glass plane, downward-streak respawn floor and the share of particles routed there. */
+export const BLOOD_GLASS_Z = 0.79;
+export const BLOOD_RESPAWN_Y = -1.18;
+export const BLOOD_ROUTE_MOD = 5;
+export const BLOOD_ROUTE_BELOW = 2;
+/** `(gl_VertexID % 5) < 2` bypasses the formation tether and rushes the front glass (40%). */
+export function isBloodRouted(id) {
+  return id % BLOOD_ROUTE_MOD < BLOOD_ROUTE_BELOW;
+}
+/** Downward streak speed (normalised units / s) of a pinned drop: -clamp(0.55 + 1.55 * fract(seed * 13.1) + 1.2 * bass, 0.55, 2.8). */
+export function bloodStreakSpeed(seed, bass) {
+  const f = seed * 13.1 - Math.floor(seed * 13.1);
+  return Math.min(2.8, Math.max(0.55, 0.55 + 1.55 * f + 1.2 * bass));
+}
+
 /** Blood-drop wall pin (sim.vert.glsl, normalised units): returns the new state or null when not pinned. */
 export function bloodPin(posZ, velZ) {
-  if (posZ >= 0.78) return { z: 0.79, vz: 0, pinned: true };
+  if (posZ >= 0.78) return { z: BLOOD_GLASS_Z, vz: 0, pinned: true };
   return { z: posZ, vz: velZ, pinned: false };
 }
 
 /** Blood-drop respawn trigger (sim.vert.glsl, normalised units). */
 export function bloodNeedsRespawn(posY) {
-  return posY < -1.25;
+  return posY < BLOOD_RESPAWN_Y;
 }
 
 /** Saturation floor used by the true-neon palette (render.frag.glsl satFloor). Input / output linear-ish rgb. */
@@ -756,3 +778,63 @@ export function hsvSaturation([r, g, b]) {
   const mx = Math.max(r, g, b);
   return mx <= 0 ? 0 : (mx - Math.min(r, g, b)) / mx;
 }
+
+// ---- ZUR-GH-010 pure mirrors of shader math (pinned by tests/verify-contracts.mjs) ----
+
+/** render.frag.glsl crowdNorm: clamp(pow(65536 / max(count, 65536), 0.58), 0.28, 1.0). */
+export function densityCrowdNorm(activeCount) {
+  return Math.min(1, Math.max(0.28, (65536 / Math.max(activeCount, 65536)) ** 0.58));
+}
+
+/** render.vert.glsl: sub-linear sprite radius damping above 1x zoom (1 / zoom^0.35). */
+export function zoomSpriteDamp(zoom) {
+  return zoom > 1 ? 1 / zoom ** 0.35 : 1;
+}
+/** render.vert.glsl max sprite radius in px: 14 standard, 28 for blood splatters. */
+export const SPRITE_MAX_PX = 14;
+export const SPRITE_MAX_PX_BLOOD = 28;
+export function spriteRadiusPx(rawRadiusPx, zoom, blood = false) {
+  return Math.min(rawRadiusPx * zoomSpriteDamp(zoom), blood ? SPRITE_MAX_PX_BLOOD : SPRITE_MAX_PX);
+}
+
+/** Stage 5 formations (u_formationType >= 6): minimum tether stiffness and turbulent-curl cap (fraction of formation radius). */
+export const FORMATION_LOCK_MIN_INDEX = 6;
+export const FORMATION_TETHER_MIN = 4.2;
+export const FORMATION_CURL_CAP = 0.18;
+export function formationTether(formationIndex, pull) {
+  return formationIndex >= FORMATION_LOCK_MIN_INDEX ? Math.max(pull, FORMATION_TETHER_MIN) : pull;
+}
+export function formationCurlCap(formationRadius) {
+  return FORMATION_CURL_CAP * formationRadius;
+}
+
+/**
+ * Interstellar Gargantua (supermassive-blackhole, FORMATION_TYPES index 8 — the ticket's index matches the real one).
+ * 60% tilted spiral accretion disk / 28% full-360 Einstein photon ring / 12% collimated polar jets.
+ * Radii are normalised formation units (sim.vert.glsl scales by HOLE_SCALE).
+ */
+export const BLACKHOLE_FORMATION_INDEX = 8;
+export const BH_DISK_FRACTION = 0.60;
+export const BH_RING_FRACTION = 0.28;
+export const BH_JET_FRACTION = 0.12;
+export const BH_HORIZON_RADIUS = 0.24;
+export const BH_DISK_TILT_DEG = 14;
+/** Lateral keep-out about the view axis through the hole: nothing is lit in front of / behind the event horizon. */
+export const BH_SHADOW_RADIUS = 0.36;
+export const BH_PHOTON_RING_RADIUS = 0.42;
+export const BH_DISK_INNER_RADIUS = 0.46;
+export function blackHoleKind(u) {
+  if (u < BH_DISK_FRACTION) return "disk";
+  if (u < BH_DISK_FRACTION + BH_RING_FRACTION) return "ring";
+  return "jet";
+}
+/** True when a formation-space position (view-aligned: xy lateral, z along the view axis) is inside the void. */
+export function insideBlackHoleVoid([x, y, z]) {
+  return Math.hypot(x, y, z) < BH_HORIZON_RADIUS || Math.hypot(x, y) < BH_SHADOW_RADIUS;
+}
+
+/** Golden Cortex palette (ZUR-GH-010): 80% translucent cortical gold soma / 20% cyan-white axon tracts + firing waves. */
+export const GOLDEN_CORTEX_SOMA_FRACTION = 0.8;
+export const GOLDEN_CORTEX_SOMA_ALPHA = 0.26;
+export const GOLDEN_CORTEX_PULSE_THRESHOLD = 0.55;
+export const GOLDEN_CORTEX_PULSE_BOOST = 2.8;

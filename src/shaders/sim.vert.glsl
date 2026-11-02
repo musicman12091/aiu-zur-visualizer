@@ -342,6 +342,8 @@ vec3 tiltToFormation(vec3 p) {
 const float BRAIN_SCALE = 3.4;
 const float GALAXY_SCALE = 3.4;
 const float HOLE_SCALE = 3.2;
+const float FORMATION_TETHER_MIN = 4.2;
+const float FORMATION_CURL_CAP = 0.18;
 const float WORMHOLE_SCALE = 2.6;
 
 // 80% cortical soma / 20% interior white-matter axon tracts (render.vert.glsl mirrors this split for the gold tint).
@@ -425,39 +427,74 @@ vec3 livingGalaxyTarget(float seed, uint uid) {
   return pos * GALAXY_SCALE;
 }
 
+// ZUR-GH-010 Gargantua (formation index 8 == FORMATION_TYPES["supermassive-blackhole"]).
+// Split 60% 14-degree-tilted spiral accretion disk / 28% full 360-degree Einstein photon ring / 12% polar jets.
+// Everything is built in the camera-facing basis so the void stays centred on screen at every orbit angle.
+const float BH_DISK_FRAC = 0.60;
+const float BH_RING_FRAC = 0.28;                 // cumulative edge at BH_DISK_FRAC + BH_RING_FRAC = 0.88; jets take 0.12
+const float BH_HORIZON = 0.24;                   // spherical event horizon void radius (normalised, x HOLE_SCALE in world)
+const float BH_SHADOW = 0.36;                    // lateral shadow cylinder: lensed void seen from the camera
+const float BH_PHOTON_RING = 0.42;
+const float BH_DISK_INNER = 0.46;
+const float BH_TILT = 0.2443461;                 // 14 degrees
+
+void blackHoleBasis(out vec3 right, out vec3 up, out vec3 toward) {
+  right = length(u_billboardRight) > 0.5 ? normalize(u_billboardRight) : vec3(1.0, 0.0, 0.0);
+  up = length(u_billboardUp) > 0.5 ? normalize(u_billboardUp) : vec3(0.0, 1.0, 0.0);
+  toward = normalize(cross(right, up));
+}
+
 vec3 blackHoleTarget(float seed, uint uid) {
   vec3 h = hash3(uid ^ 0x3c6ef372u);
   float kind = hashf(uid ^ 0x4cf5ad43u);
+  vec3 right; vec3 up; vec3 toward;
+  blackHoleBasis(right, up, toward);
   vec3 pos;
-  if (kind < 0.65) {
-    // thin accretion disk with Keplerian rotation (Doppler beaming is applied in render.vert.glsl)
-    float rd = 0.30 + 1.0 * pow(h.x, 1.3);
-    float ang = h.y * TAU + u_time * 0.18 / pow(rd + 0.15, 1.5);
-    pos = vec3(cos(ang) * rd, (h.z - 0.5) * 0.045 * rd, sin(ang) * rd);
-    float c = cos(0.30);
-    float s = sin(0.30);
-    pos = vec3(pos.x, pos.y * c - pos.z * s, pos.y * s + pos.z * c);
-  } else if (kind < 0.85) {
-    // photon ring / lensed far side of the disk bent over and under the horizon, facing the camera
-    vec3 right = length(u_billboardRight) > 0.5 ? normalize(u_billboardRight) : vec3(1.0, 0.0, 0.0);
-    vec3 up = length(u_billboardUp) > 0.5 ? normalize(u_billboardUp) : vec3(0.0, 1.0, 0.0);
-    float rDisk = 0.26 + 0.7 * h.x * h.x;
+  if (kind < BH_DISK_FRAC) {
+    // spiral accretion disk: three log-spiral arms, Keplerian shear (Doppler beaming lives in render.vert.glsl)
+    float rd = BH_DISK_INNER + 0.85 * pow(h.x, 1.25);
+    int arm = int(uid % 3u);
+    float spiral = log(rd / BH_DISK_INNER) * 2.4;
+    float ang = spiral + float(arm) * 2.0943951 + (h.y - 0.5) * 0.5 + u_time * 0.20 / pow(rd + 0.15, 1.5);
+    vec3 planeUp = up * cos(BH_TILT) + toward * sin(BH_TILT);
+    vec3 normal = toward * cos(BH_TILT) - up * sin(BH_TILT);
+    pos = right * cos(ang) * rd + planeUp * sin(ang) * rd + normal * (h.z - 0.5) * 0.05 * rd;
+  } else if (kind < BH_DISK_FRAC + BH_RING_FRAC) {
+    // Einstein photon ring: gravitationally lensed light wrapped through the full 360 degrees around the hole
     float phi = h.y * TAU;
-    float yLensed = sign(sin(phi) + 1e-4) * sqrt(max(0.0, rDisk - 0.22));
-    float ring = step(0.7, h.z);                       // 30% hug the thin photon ring
-    vec2 flat2 = mix(vec2(cos(phi) * rDisk * 0.85, yLensed), vec2(cos(phi), sin(phi)) * 0.27, ring);
-    pos = right * flat2.x + up * flat2.y;
+    float rr = BH_PHOTON_RING + (h.x - 0.5) * 0.03;
+    pos = right * cos(phi) * rr + up * sin(phi) * rr + toward * (h.z - 0.5) * 0.03;
   } else {
-    // twin polar jets along +Y / -Y, driven by u_sub and u_onset
+    // collimated twin polar jets along the screen-vertical axis, driven by u_sub and u_onset
     float dir = h.z < 0.5 ? 1.0 : -1.0;
     float s = fract(h.x + u_time * (0.30 + 0.5 * u_sub + 0.8 * u_onset));
     float width = (0.015 + 0.09 * s) * (0.4 + 0.6 * h.y);
     float ang = hashf(uid ^ 0x1f83d9abu) * TAU;
-    pos = vec3(cos(ang) * width, dir * (0.25 + s * 1.15), sin(ang) * width);
+    pos = up * dir * (0.46 + s * 1.15) + right * cos(ang) * width + toward * sin(ang) * width;
+  }
+  if (length(pos) < BH_HORIZON) pos *= BH_HORIZON / max(length(pos), 1e-4);
+  return pos * HOLE_SCALE;
+}
+
+/// Hard exclusion: no agent may rest inside the event horizon sphere or the camera-facing shadow cylinder.
+vec3 blackHoleExclude(vec3 pos) {
+  vec3 right; vec3 up; vec3 toward;
+  blackHoleBasis(right, up, toward);
+  float rr = BH_HORIZON * HOLE_SCALE;
+  float rs = BH_SHADOW * HOLE_SCALE;
+  float lx = dot(pos, right);
+  float ly = dot(pos, up);
+  float lz = dot(pos, toward);
+  float lat = length(vec2(lx, ly));
+  if (lat < rs) {
+    vec2 dir2 = lat > 1e-4 ? vec2(lx, ly) / lat : vec2(1.0, 0.0);
+    lx = dir2.x * rs * 1.08;
+    ly = dir2.y * rs * 1.08;
+    pos = right * lx + up * ly + toward * lz;
   }
   float len = length(pos);
-  if (len < 0.22) pos *= 0.22 / max(len, 1e-4); // event horizon void: nothing inside r < 0.22
-  return pos * HOLE_SCALE;
+  if (len < rr) pos *= rr * 1.05 / max(len, 1e-4);
+  return pos;
 }
 
 vec3 wormholeTarget(float seed, uint uid) {
@@ -624,6 +661,8 @@ void main() {
   float phase = a_vel.w;
   // ZUR-GH-009: blood pin flag (aux.w == 2.6) rides in the phase channel as phase + 2.6; split it off here.
   bool bloodActive = u_particleStyle == 1 || u_kineticMode == 1;
+  // ZUR-GH-010: 40% of the swarm ((gl_VertexID % 5) < 2) bypasses the formation tether, rushes at the front glass and runs down it.
+  bool bloodRoute = bloodActive && (gl_VertexID % 5) < 2;
   float pinFlag = phase >= 2.0 ? 2.6 : 0.0;
   phase -= pinFlag;
   float dt = u_dt;
@@ -770,15 +809,26 @@ void main() {
     float kick = u_formationType == 5 ? 1.0 : 1.0 + 0.28 * u_reactivityGain * (u_sub * 0.65 + u_bass * 0.35);
     vec3 target = (formationTarget(pos, seed, phase, uid) + oscillationOffset(pos, seed, phase)) * kick;
     float pull = u_formationType == 0 ? 1.5 : (u_formationType == 5 ? 16.0 : 7.0);
+    // ZUR-GH-010 formation confinement lock (Stage 5 formations, u_formation >= 6): tether never below 4.2 and the
+    // turbulent curl displacement is capped at 0.18 * formationRadius so the shape cannot dissolve.
+    float formationRadius = max(length(target), 1.0);
+    if (u_formationType >= 6) pull = max(pull, FORMATION_TETHER_MIN);
     // Camera-facing tunnel / rings / logo: formation dominates curl so glyphs stay crisp.
     if (u_formationType == 1 || u_formationType == 2) F *= 0.15;
     if (u_formationType == 5) F *= 0.05; // damp random curl jitter for readable text
     if (u_formationType == 4) F *= 0.25;
-    if (u_formationType >= 6) F *= 0.25; // volumetric targets dominate the flow field
+    if (u_formationType >= 6) {
+      F *= 0.25; // volumetric targets dominate the flow field
+      float curlMax = FORMATION_CURL_CAP * formationRadius * pull;
+      float fl = length(F);
+      if (fl > curlMax) F *= curlMax / fl;
+    }
     float damp = u_formationType == 0 ? 0.0 : (u_formationType == 5 ? 5.5 : 2.6);
     // Splatter run lets the stream flow: the formation spring only keeps a loose hold.
     float hold = u_kineticMode == 1 ? 0.2 : 1.0;
+    if (bloodRoute) hold = 0.0;
     F += ((target - pos) * pull - vel * damp) * hold;
+    if (bloodRoute) F.z += 7.0 * (1.0 + u_onset);
     if (u_formationType == 1) F += tiltToWorld(vec3(0.0, 0.0, 1.8 + 3.0 * u_rms + 2.0 * u_bass));
     if (u_formationType == 9) F.y += 1.2 + 7.0 * u_bass + 10.0 * u_onset; // streams accelerate through the throat
     // ZUR-GH-007: glyph agents must be able to come to rest on their targets. The murmuration / fish
@@ -820,9 +870,29 @@ void main() {
     if (s > hi) vel *= hi / s;
   }
 
+  // ZUR-GH-010 black hole: nothing may sit inside the event horizon or the camera-facing shadow cylinder.
+  if (u_pulseLayout < 0 && u_formationType == 8) pos = blackHoleExclude(pos);
+
   // Blood-drop wall splat + respawn (constants are in normalised +/-1.25 units; world = normalised * WORLD_SCALE).
+  // ZUR-GH-010: the ticket's pin flag "oVelocityAux.w = 2.8" maps onto this sim's only auxiliary channel, the phase
+  // channel (v_vel.w = phase + 2.6, outAuxW below); render.vert.glsl treats a_vel.w >= 2.0 as pinned. The streak speed
+  // keeps the ticket's 2.8 ceiling in vel.y instead.
   float outAuxW = 0.0;
-  if (bloodActive) {
+  if (bloodRoute) {
+    if (pos.z >= 0.78 * WORLD_SCALE) {
+      pos.z = 0.79 * WORLD_SCALE;
+      vel.z = 0.0;
+      vel.x *= 0.85;
+      outAuxW = 2.6;
+      vel.y = -clamp(0.55 + 1.55 * fract(seed * 13.1) + 1.2 * u_bass, 0.55, 2.8);
+    }
+    if (pos.y < -1.18 * WORLD_SCALE) {
+      vec3 hr = hash3(uid ^ hash32(uint(u_time * 60.0) + 13u));
+      pos = vec3((hr.x * 2.0 - 1.0) * 0.9 * WORLD_SCALE, (0.3 + 0.7 * hr.y) * WORLD_SCALE, -0.65 * WORLD_SCALE);
+      vel = vec3(0.0, 0.0, 1.35 + 1.8 * u_onset);
+      outAuxW = 0.0;
+    }
+  } else if (bloodActive) {
     if (pos.z >= 0.78 * WORLD_SCALE) {
       pos.z = 0.79 * WORLD_SCALE;
       vel.z = 0.0;
@@ -830,7 +900,7 @@ void main() {
       outAuxW = 2.6;
       vel.y -= (1.8 + 2.4 * u_bass) * dt;
     }
-    if (pos.y < -1.25 * WORLD_SCALE) {
+    if (pos.y < -1.18 * WORLD_SCALE) {
       vec3 formationPos = (u_formationType != 0 && u_pulseLayout < 0) ? formationTarget(pos, seed, phase, uid) : pos;
       pos = formationPos * 0.25;
       pos.z = -0.65 * WORLD_SCALE;
