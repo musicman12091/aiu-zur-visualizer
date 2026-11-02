@@ -772,7 +772,7 @@ test("Stage 2 preset schema, Mode A/B scene retention and ?preset= URL state", (
 
 test("HUD exposes Stage 2 controls and the service worker caches Stage 2 assets", () => {
   const hud = read("src/controls/ControlHUD.js");
-  for (const id of ["sel-scene", "sel-flow", "sel-shape", "rng-size", "sel-kaleido", "chk-kaleido-spin", "sel-count"]) {
+  for (const id of ["sel-flow", "rng-size", "sel-kaleido", "chk-kaleido-spin", "sel-count"]) {
     assert.match(hud, new RegExp(`"${id}"`), id);
   }
   const sw = read("sw.js");
@@ -1017,7 +1017,7 @@ test("Stage 3 shaders and HUD bind every frozen uniform/key", () => {
     "sel-trail-type", "rng-trail-length", "sel-formation", "sel-oscillation", "rng-osc-amount", "rng-osc-speed",
     "sel-pulse-layout", "chk-density",
   ]) assert.match(hud, new RegExp(`"${id}"`), id);
-  assert.match(hud, /3D Audio Pulse Field — Stage 3/);
+  assert.match(read("src/controls/hudTabs.js"), /3D Audio Pulse Field/);
   const sw = read("sw.js");
   for (const file of ["sim.vert.glsl", "sim.frag.glsl", "render.vert.glsl", "render.frag.glsl", "post.vert.glsl", "trail.frag.glsl", "kaleido.frag.glsl"]) {
     assert.match(sw, new RegExp(file.replace(".", "\\.")), file);
@@ -1079,9 +1079,10 @@ function hexSaturation(hex) {
 const frag32 = () => stripComments(read("src/shaders/render.frag.glsl"));
 const sim32 = () => stripComments(read("src/shaders/sim.vert.glsl"));
 
-test("ZUR-GH-009 storage key and schema are zur_state_v5_0 / 5.0 (v4 key kept as legacy)", () => {
-  assert.equal(STORAGE_KEY, "zur_state_v5_0");
-  assert.equal(STORAGE_SCHEMA, 5.0);
+test("ZUR-GH-010 storage key and schema are zur_state_v5_1 / 5.1 (v5.0 + v4 keys kept as legacy)", () => {
+  assert.equal(STORAGE_KEY, "zur_state_v5_1");
+  assert.equal(STORAGE_SCHEMA, 5.1);
+  assert.ok(LEGACY_STORAGE_KEYS.includes("zur_state_v5_0"));
   assert.ok(LEGACY_STORAGE_KEYS.includes("zur_state_v4_0"));
   assert.deepEqual({ ...V3_2_UPGRADE_DEFAULTS }, { paletteId: "neon-tunnel", particleCountTier: "64k", particleSize: 1.35, trailLength: 0.28, trailType: "comet" });
   assert.match(read("src/app/main.js"), /serializeStoredState\(/);
@@ -1151,7 +1152,7 @@ test("Stage 3.2 neon palettes: every stop HSV saturation >= 0.85 and never white
 });
 
 test("Stage 3.2 crowdNorm formula: JS mirror and render.frag", () => {
-  assert.match(frag32(), /float crowdNorm = 1\.0 \/ \(1\.0 \+ 0\.32 \* u_particleSize \* u_particleSize \* sqrt\(max\(u_activeCount, 64\.0\) \/ 1024\.0\)\);/);
+  assert.match(frag32(), /float crowdNorm = clamp\(pow\(65536\.0 \/ max\(float\(u_activeCount\), 65536\.0\), 0\.58\), 0\.28, 1\.0\);/);
   assert.match(frag32(), /uniform float u_particleSize;/);
   assert.match(frag32(), /uniform float u_activeCount;/);
   assert.equal(crowdNorm(1, 1024), 1 / 1.32);
@@ -1243,17 +1244,17 @@ test("Stage 3.2 viewport offset: +0.38 only for open portrait HUD, smooth glide 
 
 test("Stage 3.2 HUD: Scene, Palette, Hue shift on top; Hide HUD button; pulse layout gated", () => {
   const hud = read("src/controls/ControlHUD.js");
-  assert.ok(hud.indexOf('"sel-scene"') < hud.indexOf('"sel-palette"') && hud.indexOf('"sel-palette"') < hud.indexOf('"rng-hue"'), "Scene > Palette > Hue order");
+  assert.ok(!hud.includes('"sel-scene"') && hud.indexOf('"sel-palette"') > 0 && hud.indexOf('"sel-palette"') < hud.indexOf('"rng-hue"'), "single Palette row precedes Hue; scene is chosen by the tab bar");
   assert.match(hud, /btn-hide-hud/);
   assert.match(hud, /Hide HUD \/ Fullscreen/);
-  assert.match(hud, /pulseLayout\.wrap\.hidden = [^;]*PULSE_SCENE_ID/);
+  assert.match(read("src/controls/hudTabs.js"), /"pulse-field-3d": \[\s*\["pulseLayout", "Pulse Field Layout"\]/);
   assert.match(read("src/app/main.js"), /canvas\.addEventListener\("click"[\s\S]*?toggleHidden/);
   assert.match(read("index.html"), /\.hud-hide\s*\{[^}]*position:\s*sticky/);
 });
 
-test("Stage 5 sw.js cache is v7, claims clients and precaches new shaders", () => {
+test("Stage 5.1 sw.js cache is v8, claims clients and precaches new shaders", () => {
   const sw = read("sw.js");
-  assert.match(sw, /const CACHE = "zur-shell-v7"/);
+  assert.match(sw, /const CACHE = "zur-shell-v8"/);
   assert.match(sw, /self\.skipWaiting\(\)/);
   assert.match(sw, /self\.clients\.claim\(\)/);
   assert.match(sw, /\.(html|js|glsl)/);
@@ -1467,8 +1468,7 @@ test("HUD exposes the VJ Autopilot pill and custom logo text", () => {
   const hud = read("src/controls/ControlHUD.js");
   assert.match(hud, /⚡ VJ Autopilot \(Drop Detector\)/);
   assert.match(hud, /btn-vj-autopilot/);
-  assert.match(hud, /txt-attractor/);
-  for (const name of ["AI: UNDERGROUND", "MON DAAIN", "TENTH GATE", "ZUR"]) assert.ok(hud.includes(name));
+  for (const name of ["AI: UNDERGROUND", "MON DAAIN", "TENTH GATE", "ZUR"]) assert.ok(read("src/app/AppState.js").includes(name));
   assert.match(hud, /cameraMode/);
   assert.match(hud, /chromaticAberration/);
   assert.match(hud, /godRays/);
@@ -1548,9 +1548,8 @@ test("Spectral canyon draws neon wireframe ridges with an idle baseline wave", (
 test("HUD hides 3D swarm on spectral-canyon and prompts Mic/oscillator while CAPTURE IDLE", () => {
   const hud = read("src/controls/ControlHUD.js");
   const html = read("index.html");
-  assert.match(hud, /swarmHudScenes/);
-  assert.match(hud, /spectral-canyon/);
-  assert.match(hud, /stage2\.hidden/);
+  assert.match(read("src/controls/hudTabs.js"), /"spectral-canyon-3d": \[/);
+  assert.match(hud, /this\.visual\.hidden = onRig/);
   assert.match(hud, /audio-prompt/);
   assert.match(hud, /btn-mic-prompt/);
   assert.match(hud, /btn-oscillator-prompt/);
@@ -1699,12 +1698,9 @@ test("ZUR-GH-007 billboard basis faces the active camera from every orbit angle"
 test("ZUR-GH-007 HUD places the Logo / Attractor Text selector directly under Formation", () => {
   const hud = read("src/controls/ControlHUD.js");
   assert.deepEqual([...LOGO_TEXT_PRESETS], ["AI: UNDERGROUND", "MON DAAIN", "TENTH GATE", "ZUR"]);
-  assert.match(hud, /"sel-attractor-preset",\s*"Logo \/ Attractor Text"/);
-  assert.match(hud, /\["custom", "Custom…"\]/);
-  assert.match(hud, /this\.formation\.wrap, this\.attractorPreset\.wrap, this\.attractorText\.wrap/);
-  assert.match(hud, /this\.attractorPreset\.wrap\.hidden = !logoActive;/);
-  assert.match(hud, /const logoActive = particles\.formationType === "logo-attractor";/);
-  assert.match(hud, /txt-attractor/);
+  // ZUR-GH-010: the selector lives in the Logo / Text Attractor sub-mode (formation is locked to logo-attractor there).
+  assert.match(hud, /logoText: \["sel-attractor-preset"/);
+  assert.match(read("src/controls/hudTabs.js"), /"logo-text": \[\s*\["logoText", "Logo Text"\]/);
 });
 
 test("ZUR-GH-007 canyon scrolls z at u_time * 2.5 with waterfall + multi-band ridges", () => {
@@ -1799,7 +1795,7 @@ test("ZUR-GH-008 caps keepFactor at 0.90 for >= 16k agents and bounds steady-sta
   assert.match(frag, /uniform float u_trailEnergyNorm;/);
   assert.match(frag, /float sizeNorm = u_particleSize > 1\.5 \? 1\.0 \/ pow\(max\(u_particleSize, 1\.0\), 0\.65\) : 1\.0;/);
   assert.match(frag, /\* sqrt\(crowdNorm\) \* energyNorm, 1\.0\)/, "dart radiance scaled by u_trailEnergyNorm");
-  assert.match(frag, /float capsuleAlpha = 0\.40 \* crowdNorm \* energyNorm;/, "premultiplied capsule radiance + alpha scaled");
+  assert.match(frag, /float capsuleAlpha = 0\.40 \* crowdNorm \* energyNorm \*/, "premultiplied capsule radiance + alpha scaled");
   const kaleido = stripComments(read("src/shaders/kaleido.frag.glsl"));
   assert.match(kaleido, /uniform vec3 u_paletteHue;/);
   assert.match(kaleido, /const float CHROMA_FLOOR_PEAK = 0\.65;/);
@@ -1898,10 +1894,10 @@ const g009 = {
   ps: () => read("src/render/ParticleSystem3D.js"),
 };
 
-test("ZUR-GH-009 sw.js cache is zur-shell-v7 and storage key zur_state_v5_0 with v4 migration", () => {
-  assert.match(read("sw.js"), /const CACHE = "zur-shell-v7"/);
-  assert.equal(STORAGE_KEY, "zur_state_v5_0");
-  assert.equal(LEGACY_STORAGE_KEYS[0], "zur_state_v4_0");
+test("ZUR-GH-010 sw.js cache is zur-shell-v8 and storage key zur_state_v5_1 with v4 migration", () => {
+  assert.match(read("sw.js"), /const CACHE = "zur-shell-v8"/);
+  assert.equal(STORAGE_KEY, "zur_state_v5_1");
+  assert.equal(LEGACY_STORAGE_KEYS[1], "zur_state_v4_0");
   const old = structuredClone(MODE_A_PRESET);
   old.particles = { ...old.particles, particleCountTier: "16k", particleStyle: "orb" };
   const loaded = loadStoredState(mockStorage({ zur_state_v4_0: JSON.stringify({ storageSchema: 4.0, preset: old }) }));
@@ -2002,12 +1998,12 @@ test("ZUR-GH-009 particle style shading: blood-drop teardrop, synapse-spark, sta
 });
 
 test("ZUR-GH-009 colorPalette options + u_colorPalette in render.frag, core.frag and kaleido", () => {
-  assert.deepEqual([...pm009.COLOR_PALETTES], ["true-neon", "full-spectrum", "white-static", "blood-red"]);
+  assert.deepEqual([...pm009.COLOR_PALETTES], ["true-neon", "full-spectrum", "white-static", "blood-red", "golden-cortex"]);
   assert.equal(DEFAULT_PARTICLES.colorPalette, "true-neon");
   assert.match(g009.frag(), /uniform int u_colorPalette;/);
   assert.match(g009.core(), /uniform int u_colorPalette;/);
   assert.match(stripComments(read("src/shaders/kaleido.frag.glsl")), /uniform int u_colorPalette;/);
-  assert.match(g009.frag(), /hsv2rgb\(vec3\(fract\(v_seed \* 0\.618 \+ u_time \* 0\.12 \+ u_spectralCentroid \* 0\.5\), 0\.95, 1\.0\)\)/);
+  assert.match(g009.frag(), /hsv2rgb\(vec3\(v_hue, 0\.95, 1\.0\)\)/);
   assert.match(g009.frag(), /step\(0\.35, fract\(sin\(dot\(gl_FragCoord\.xy, vec2\(12\.9898, 78\.233\)\) \+ u_time \* 43\.0\) \* 43758\.5453\)\) \* u_treble/);
   assert.match(g009.frag(), /\* u_trailEnergyNorm|energyNorm/);
   assert.match(g009.ps(), /gl\.uniform1i\(R\.u_colorPalette, paletteIndex\)/);
@@ -2031,7 +2027,7 @@ test("ZUR-GH-009 four new formations in state and sim.vert (ids appended after l
   assert.match(sim, /0\.12 \+ 0\.58 \* abs\(cos\(phi\)\) \* sin\(theta\)/);
   assert.match(sim, /0\.08 \* exp\(0\.32 \* /);
   assert.match(sim, /1\.35 \/ pow\(r \+ 0\.12, 1\.15\)/);
-  assert.match(sim, /sqrt\(max\(0\.0, rDisk - 0\.22\)\)/);
+  assert.match(sim, /float spiral = log\(rd \/ BH_DISK_INNER\)/);
   assert.match(sim, /sqrt\(0\.18 \* 0\.18 \+ z \* z \* 1\.4\)/);
 });
 
@@ -2043,7 +2039,7 @@ test("ZUR-GH-009 neural-brain v_neuralPulse is a dedicated varying (out in rende
   assert.ok(Math.abs(pm009.neuralPulse(0.5, 0, 0.5, 0.3, 0.3) - pm009.neuralPulse(0.5, 0, 0.5, 0.3, 0.3)) < 1e-12);
 });
 
-test("ZUR-GH-009 blood-drop pin (0.79) and respawn (-1.25 / -0.65) in sim.vert (Audit Fix 3)", () => {
+test("ZUR-GH-009 blood-drop pin (0.79) and respawn (-1.18 / -0.65) in sim.vert (Audit Fix 3)", () => {
   const sim = g009.sim();
   assert.match(sim, /u_particleStyle == 1 \|\| u_kineticMode == 1/);
   assert.match(sim, /\(1\.1 \+ 2\.2 \* u_onset\)/);
@@ -2052,7 +2048,7 @@ test("ZUR-GH-009 blood-drop pin (0.79) and respawn (-1.25 / -0.65) in sim.vert (
   assert.match(sim, /vel\.x \*= 0\.85/);
   assert.match(sim, /outAuxW = 2\.6/);
   assert.match(sim, /\(1\.8 \+ 2\.4 \* u_bass\)/);
-  assert.match(sim, /-1\.25/);
+  assert.match(sim, /-1\.18/);
   assert.match(sim, /-0\.65/);
   assert.match(sim, /formationPos \* 0\.25/);
   assert.match(sim, /1\.35 \+ 1\.8 \* u_onset/);
@@ -2069,7 +2065,8 @@ test("ZUR-GH-009 kineticMode options, default off, u_kineticMode in sim.vert, HU
   for (let mode = 2; mode <= 5; mode += 1) assert.match(sim, new RegExp(`u_kineticMode == ${mode}`));
   const hud = g009.hud();
   assert.ok(hud.indexOf('"sel-kinetic-mode"') > 0 && hud.indexOf('"sel-kinetic-mode"') < hud.indexOf('"sel-oscillation"'));
-  assert.match(hud, /this\.kinetic\.wrap, this\.oscillation\.wrap/);
+  const layout = read("src/controls/hudTabs.js");
+  assert.ok(layout.indexOf('["kinetic", "Kinetic Mode"]') < layout.indexOf('["oscillation", "Oscillation"]'));
 });
 
 test("ZUR-GH-009 Reactivity Punch: gain 0.5..5.0 default 2.5, noise gate default 0.015 (0..0.100)", () => {
@@ -2101,7 +2098,7 @@ test("ZUR-GH-009 reactivity applies at oscillationAmount 0: radial kick, onset i
 test("ZUR-GH-009 HUD has no Visual Preset / Audio Profile rows and ships the new controls", () => {
   const hud = g009.hud();
   assert.doesNotMatch(hud, /Visual Preset|Audio Profile|presetId|audioProfile/);
-  for (const id of ["sel-particle-style", "sel-color-palette", "sel-kinetic-mode", "rng-camera-zoom", "rng-reactivity"]) {
+  for (const id of ["sel-particle-style", "sel-palette", "sel-kinetic-mode", "rng-camera-zoom", "rng-reactivity"]) {
     assert.match(hud, new RegExp(`"${id}"`));
   }
 });

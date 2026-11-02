@@ -187,6 +187,22 @@
       0%, 100% { box-shadow: 0 0 8px rgba(45, 226, 197, 0.35); }
       50% { box-shadow: 0 0 18px rgba(45, 226, 197, 0.85); }
     }
+    /* ZUR-GH-010: dark native dropdowns so option labels are always legible. */
+    .control-hud select, .control-hud option { color-scheme: dark; background-color: #121624; color: #f0f4ff; }
+    .hud-tabs {
+      position: sticky; top: -12px; z-index: 3; display: flex; gap: 6px; margin: 8px -4px 0; padding: 8px 4px;
+      overflow-x: auto; overflow-y: hidden; white-space: nowrap; -webkit-overflow-scrolling: touch;
+      touch-action: pan-x pan-y; background: var(--panel); border-bottom: 1px solid var(--line); scrollbar-width: thin;
+    }
+    .hud-tab, .hud-subpill {
+      flex: 0 0 auto; padding: 8px 12px; border: 1px solid var(--line); border-radius: 999px;
+      background: rgba(18, 22, 36, 0.8); color: #f0f4ff; font: inherit; font-size: 13px; cursor: pointer; touch-action: manipulation;
+    }
+    .hud-tab.is-active, .hud-subpill.is-active { background: linear-gradient(120deg, #8a4b32, var(--teal)); font-weight: 700; }
+    .hud-subpills { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+    .hud-subpills[hidden], .hud-visual[hidden], .hud-rig[hidden], .field[hidden], .check[hidden] { display: none; }
+    .rig-section { margin: 10px 0 0; padding: 4px 10px 10px; border: 1px solid var(--line); border-radius: 12px; }
+    .rig-section legend { padding: 0 6px; font-size: 12px; letter-spacing: 0.05em; text-transform: uppercase; }
     .hud-error { min-height: 1.2em; color: #ffb4a8; font-size: 13px; }
     .hint { color: var(--muted); font-size: 12px; }
     @media (max-width: 720px) {

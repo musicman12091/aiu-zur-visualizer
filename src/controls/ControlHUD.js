@@ -1,65 +1,52 @@
 import { PALETTE_IDS, PALETTES } from "./palettes.js";
 import { QUALITY_TIERS } from "../render/RenderHost.js";
 import {
-  COUNT_TIERS,
-  COUNT_TIER_LABELS,
   CAMERA_ZOOM_RANGE,
   CAMERA_ZOOM_STEP,
-  COLOR_PALETTES,
-  COLOR_PALETTE_LABELS,
-  FORMATION_LABELS,
-  KINETIC_LABELS,
-  KINETIC_MODES,
   NOISE_GATE_RANGE,
-  PARTICLE_STYLES,
-  PARTICLE_STYLE_LABELS,
-  REACTIVITY_GAIN_RANGE,
-  DEFAULT_PARTICLES,
-  FLOW_LABELS,
-  FLOW_MODES,
-  FORMATION_TYPES,
-  KALEIDO_SEGMENTS,
-  LOGO_TEXT_PRESETS,
   OSCILLATION_AMOUNT_RANGE,
   OSCILLATION_SPEED_RANGE,
-  OSCILLATION_TYPES,
   PARTICLE_SCENE_IDS,
-  SCENE_IDS,
   PARTICLE_SIZE_RANGE,
-  PULSE_LAYOUTS,
-  PULSE_SCENE_ID,
+  REACTIVITY_GAIN_RANGE,
   TRAIL_LENGTH_RANGE,
-  TRAIL_TYPES,
 } from "../render/particleMath.js";
+import { PARTICLE_SIZE_HUD_MAX, enforceTabConstraints, flattenPreset, switchPresetTab } from "../app/AppState.js";
+import {
+  CONTROL_LAYOUT,
+  HUD_TABS,
+  SHADER_SCENES,
+  SHADER_SCENE_LABELS,
+  SWARM_MODES,
+  SWARM_MODE_LABELS,
+  TAB_LABELS,
+  fillSelect,
+  layoutKey,
+  optionsFor,
+  paletteTarget,
+} from "./hudTabs.js";
 
 const METERS = [
   ["sub", "Sub"],
   ["bass", "Bass"],
-  ["lowMid", "Low mid"],
-  ["highMid", "High mid"],
+  ["lowMid", "Low Mid"],
+  ["highMid", "High Mid"],
   ["treble", "Treble"],
   ["rms", "RMS"],
   ["onset", "Onset"],
 ];
 
-const PULSE_SCENE_LABEL = "3D Audio Pulse Field — Stage 3";
-const LABELS = {
-  trail: { comet: "Comet", electric: "Electric", strobe: "Strobe", ribbon: "Ribbon", none: "None" },
-  formation: FORMATION_LABELS,
-  scene: {
-    "particle-swarm-3d": "3D Particle Swarm",
-    "pulse-field-3d": PULSE_SCENE_LABEL,
-    "megastructure-3d": "3D Fractal & Swarm Megastructure — Stage 4",
-    "spectral-canyon-3d": "Spectral Canyon 3D — Stage 4",
-    "aurora-ribbons": "Aurora Ribbons (Stage 1)",
-  },
-  oscillation: { off: "Off", wave: "Wave", helix: "Helix", bounce: "Bounce", pulse: "Pulse" },
-  layout: { "band-clouds": "Band Clouds", "geodesic-sphere": "Geodesic Sphere", "wave-grid": "Wave Grid" },
+const SELECT_CONTROLS = {
+  formation: ["sel-formation", "particles", "formationType"],
+  flow: ["sel-flow", "particles", "flowMode"],
+  style: ["sel-particle-style", "particles", "particleStyle"],
+  kinetic: ["sel-kinetic-mode", "particles", "kineticMode"],
+  oscillation: ["sel-oscillation", "particles", "oscillationType"],
+  count: ["sel-count", "particles", "particleCountTier"],
+  trailType: ["sel-trail-type", "particles", "trailType"],
+  pulseLayout: ["sel-pulse-layout", "particles", "pulseLayout"],
+  logoText: ["sel-attractor-preset", "particles", "attractorText"],
 };
-
-function labelPairs(ids, labels) {
-  return ids.map((id) => [id, labels[id]]);
-}
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -74,6 +61,7 @@ export class ControlHUD {
     this.state = state;
     this.handlers = {};
     this.meters = {};
+    this.controls = {};
     this.frameTick = 0;
     this._build();
     this.state.subscribe(() => this.sync());
@@ -89,7 +77,7 @@ export class ControlHUD {
 
   _build() {
     this.root.replaceChildren();
-    const panel = el("aside", "hud");
+    const panel = el("aside", "hud control-hud");
     panel.id = "hud";
 
     this.hideButton = el("button", "hud-hide", "▼ Hide HUD / Fullscreen");
@@ -114,14 +102,6 @@ export class ControlHUD {
       particles: this._pill("status-particles", "Swarm"),
     };
     const pills = el("div", "pills");
-    this.autopilot = el("button", "pill", "⚡ VJ Autopilot (Drop Detector)");
-    this.autopilot.type = "button";
-    this.autopilot.id = "btn-vj-autopilot";
-    this.autopilot.setAttribute("aria-pressed", "false");
-    this.autopilot.addEventListener("click", () => {
-      this.handlers.autopilot?.(!this.state.preset.visual.vjAutopilot);
-    });
-    pills.append(this.autopilot);
     pills.append(this.pills.wakeLock, this.pills.capture, this.pills.webgl, this.pills.fps, this.pills.particles);
     header.append(pills);
     panel.append(header);
@@ -129,34 +109,7 @@ export class ControlHUD {
     this.body = el("div", "hud-body");
     this.body.id = "hud-body";
 
-    // Scene, Palette and Hue shift stay together at the very top of the HUD.
-    this.scene = this._select(
-      "sel-scene",
-      "Scene",
-      SCENE_IDS.map((id) => [id, LABELS.scene[id]]),
-      (value) => this.handlers.scene?.(value),
-    );
-    this.palette = this._select(
-      "sel-palette",
-      "Palette",
-      PALETTE_IDS.map((id) => [id, id]),
-      (value) => {
-        this._commit((draft) => {
-          draft.visual.paletteId = value;
-        });
-      },
-    );
-    this.hue = this._range("rng-hue", "Hue shift", -1, 1, 0.01, (value) => {
-      this._commit((draft) => {
-        draft.visual.hueShift = value;
-      });
-    });
-    const topControls = el("div", "top-controls");
-    topControls.id = "top-controls";
-    topControls.append(this.scene.wrap, this.palette.wrap, this.hue.wrap);
-    this.body.append(topControls);
-
-    // Prominent Mic / Test oscillator when CAPTURE IDLE — sits under status pills, above the fold.
+    // Capture prompt + status stay outside the tabs.
     this.audioPrompt = el("div", "row audio-prompt is-idle");
     this.audioPrompt.id = "audio-prompt";
     this.audioPrompt.setAttribute("role", "group");
@@ -174,7 +127,122 @@ export class ControlHUD {
     this.title = el("p", "preset-name", "");
     this.body.append(this.title);
 
-    const meterBlock = el("div", "meters");
+    this.error = el("p", "hud-error");
+    this.error.id = "hud-error";
+    this.error.setAttribute("role", "status");
+    this.body.append(this.error);
+
+    // Sticky, horizontally scrollable tab bar.
+    this.tabBar = el("div", "hud-tabs");
+    this.tabBar.id = "hud-tabs";
+    this.tabBar.setAttribute("role", "tablist");
+    this.tabButtons = {};
+    for (const tab of HUD_TABS) {
+      const button = el("button", "hud-tab", TAB_LABELS[tab]);
+      button.type = "button";
+      button.id = `tab-${tab}`;
+      button.dataset.hudTab = tab;
+      button.setAttribute("role", "tab");
+      button.addEventListener("click", () => this._switch(tab));
+      this.tabButtons[tab] = button;
+      this.tabBar.append(button);
+    }
+    this.body.append(this.tabBar);
+
+    this.swarmPills = this._pillGroup("swarm-pills", "swarmMode", SWARM_MODES, SWARM_MODE_LABELS, (mode) => {
+      this._switch("blood-swarm", { swarmMode: mode });
+    });
+    this.shaderPills = this._pillGroup("shader-pills", "shaderScene", SHADER_SCENES, SHADER_SCENE_LABELS, (scene) => {
+      this._switch("canyon-pulse", { shaderScene: scene });
+    });
+    this.body.append(this.swarmPills.group, this.shaderPills.group);
+
+    // Visual controls: every row is built once; the layout of the active tab decides which are visible.
+    const visual = el("div", "hud-visual");
+    visual.id = "hud-visual-controls";
+    this.visual = visual;
+    this._buildVisualControls();
+    this.body.append(visual);
+
+    this.rig = el("div", "hud-rig");
+    this.rig.id = "hud-audio-rig";
+    this._buildRig();
+    this.body.append(this.rig);
+
+    this.hint = el("p", "hint", "H hides the panel. 1 / 2 load Mode A / B. T starts the silent test oscillator. P cycles visual tabs, F cycles flow mode, K cycles kaleidoscope.");
+    this.body.append(this.hint);
+    panel.append(this.body);
+    this.root.append(panel);
+    this.panel = panel;
+  }
+
+  _buildVisualControls() {
+    const add = (name, control) => {
+      control.wrap.id = `row-${name}`;
+      control.wrap.dataset.control = name;
+      control.wrap.hidden = true;
+      control.labelEl = control.wrap.querySelector(".field-label") || null;
+      this.controls[name] = control;
+      this.visual.append(control.wrap);
+    };
+    const particles = (partial) => this.handlers.particles?.(partial);
+
+    for (const [name, [id, , key]] of Object.entries(SELECT_CONTROLS)) {
+      const label = name;
+      add(name, this._select(id, label, [], (value) => particles({ [key]: value })));
+    }
+    add("palette", this._select("sel-palette", "Palette", [], (value) => {
+      if (this._paletteTarget === "scene") this._commit((draft) => { draft.visual.paletteId = value; });
+      else particles({ colorPalette: value });
+    }));
+    add("cameraMode", this._select("sel-camera-mode", "Camera Mode", optionsFor("cameraMode", "deep-space"), (value) => {
+      this._commit((draft) => { draft.visual.cameraMode = value; });
+    }));
+    add("kaleido", this._select("sel-kaleido", "Kaleidoscope Mirrors", optionsFor("kaleido", "deep-space"), (value) => {
+      particles({ kaleidoSegments: Number(value) });
+    }));
+    add("kaleidoSpin", this._checkbox("chk-kaleido-spin", "Beat Spin", (checked) => particles({ kaleidoSpin: checked })));
+    add("zoom", this._range("rng-camera-zoom", "Camera Zoom", CAMERA_ZOOM_RANGE[0], CAMERA_ZOOM_RANGE[1], CAMERA_ZOOM_STEP, (value) => {
+      particles({ cameraZoom: value });
+    }));
+    add("reactivity", this._range("rng-reactivity", "Reactivity Punch", REACTIVITY_GAIN_RANGE[0], REACTIVITY_GAIN_RANGE[1], 0.1, (value) => {
+      particles({ reactivityGain: value });
+    }));
+    add("size", this._range("rng-size", "Particle Size", PARTICLE_SIZE_RANGE[0], PARTICLE_SIZE_HUD_MAX, 0.05, (value) => {
+      particles({ particleSize: value });
+    }));
+    add("trailLength", this._range("rng-trail-length", "Trail Length", TRAIL_LENGTH_RANGE[0], TRAIL_LENGTH_RANGE[1], 0.01, (value) => {
+      particles({ trailLength: value });
+    }));
+    add("oscAmount", this._range("rng-osc-amount", "Oscillation Amount", OSCILLATION_AMOUNT_RANGE[0], OSCILLATION_AMOUNT_RANGE[1], 0.05, (value) => {
+      particles({ oscillationAmount: value });
+    }));
+    add("oscSpeed", this._range("rng-osc-speed", "Oscillation Speed", OSCILLATION_SPEED_RANGE[0], OSCILLATION_SPEED_RANGE[1], 0.05, (value) => {
+      particles({ oscillationSpeed: value });
+    }));
+    add("hueShift", this._range("rng-hue", "Hue Shift", -1, 1, 0.01, (value) => {
+      this._commit((draft) => { draft.visual.hueShift = value; });
+    }));
+    add("chromatic", this._range("rng-chromatic-aberration", "Chromatic Aberration", 0, 1, 0.01, (value) => {
+      this._commit((draft) => { draft.visual.chromaticAberration = value; });
+    }));
+    add("godRays", this._range("rng-god-rays", "God Rays", 0, 1, 0.01, (value) => {
+      this._commit((draft) => { draft.visual.godRays = value; });
+    }));
+  }
+
+  _buildRig() {
+    const rig = this.rig;
+    const section = (title) => {
+      const node = el("fieldset", "rig-section");
+      node.append(el("legend", "field-label", title));
+      rig.append(node);
+      return node;
+    };
+
+    const meterBlock = section("Live 5-Band");
+    meterBlock.classList.add("meters");
+    meterBlock.id = "rig-meters";
     meterBlock.setAttribute("aria-label", "Audio meters");
     for (const [key, label] of METERS) {
       const row = el("div", "meter");
@@ -190,143 +258,14 @@ export class ControlHUD {
       this.meters[key] = fill;
       meterBlock.append(row);
     }
-    this.body.append(meterBlock);
 
-    this.error = el("p", "hud-error");
-    this.error.id = "hud-error";
-    this.error.setAttribute("role", "status");
-    this.body.append(this.error);
-
-    const modes = el("div", "row");
-    modes.append(this._button("btn-mode-a", "Mode A 720p30", () => this.handlers.modeA?.()));
-    modes.append(this._button("btn-mode-b", "Mode B 720p60", () => this.handlers.modeB?.()));
-    this.body.append(modes);
-
-    // Stage 2 — scene + 3D particle swarm controls.
-    const stage2 = el("fieldset", "stage2");
-    stage2.id = "stage2-controls";
-    this.stage2 = stage2;
-    stage2.append(el("legend", "field-label", "Stage 3 · 3D swarm"));
-    this.flow = this._select("sel-flow", "Flow mode", FLOW_MODES.map((id) => [id, FLOW_LABELS[id]]), (value) => {
-      this.handlers.particles?.({ flowMode: value });
-    });
-    this.shape = this._select("sel-shape", "3D shape", [
-      ["dart", "3D Fish/Bird Dart"],
-      ["capsule", "Velocity Capsule"],
-    ], (value) => this.handlers.particles?.({ shape: value }));
-    this.particleStyle = this._select(
-      "sel-particle-style",
-      "Particle style",
-      PARTICLE_STYLES.map((id) => [id, PARTICLE_STYLE_LABELS[id]]),
-      (value) => this.handlers.particles?.({ particleStyle: value }),
-    );
-    this.colorPalette = this._select(
-      "sel-color-palette",
-      "Color palette",
-      COLOR_PALETTES.map((id) => [id, COLOR_PALETTE_LABELS[id]]),
-      (value) => this.handlers.particles?.({ colorPalette: value }),
-    );
-    this.cameraZoom = this._range("rng-camera-zoom", "Camera Zoom", CAMERA_ZOOM_RANGE[0], CAMERA_ZOOM_RANGE[1], CAMERA_ZOOM_STEP, (value) => {
-      this.handlers.particles?.({ cameraZoom: value });
-    });
-    this.reactivity = this._range("rng-reactivity", "Reactivity Punch", REACTIVITY_GAIN_RANGE[0], REACTIVITY_GAIN_RANGE[1], 0.1, (value) => {
-      this.handlers.particles?.({ reactivityGain: value });
-    });
-    this.size = this._range("rng-size", "Particle size", PARTICLE_SIZE_RANGE[0], PARTICLE_SIZE_RANGE[1], 0.05, (value) => {
-      this.handlers.particles?.({ particleSize: value });
-    });
-    this.kaleido = this._select(
-      "sel-kaleido",
-      "Kaleidoscope segments",
-      KALEIDO_SEGMENTS.map((n) => [String(n), n === 0 ? "Off" : `${n} mirrors`]),
-      (value) => this.handlers.particles?.({ kaleidoSegments: Number(value) }),
-    );
-    this.spin = this._checkbox("chk-kaleido-spin", "Kaleidoscope spin (beat-synced)", (checked) => {
-      this.handlers.particles?.({ kaleidoSpin: checked });
-    });
-    this.count = this._select(
-      "sel-count",
-      "Particle count tier",
-      COUNT_TIERS.map((tier) => [tier, COUNT_TIER_LABELS[tier] || tier]),
-      (value) => this.handlers.particles?.({ particleCountTier: value }),
-    );
-    this.density = this._checkbox("chk-density", "Density auto-scale", (checked) => {
-      this.handlers.particles?.({ densityAutoScale: checked });
-    });
-    this.trailType = this._select("sel-trail-type", "Trail type", labelPairs(TRAIL_TYPES, LABELS.trail), (value) => {
-      this.handlers.particles?.({ trailType: value });
-    });
-    this.trailLength = this._range("rng-trail-length", "Trail length", TRAIL_LENGTH_RANGE[0], TRAIL_LENGTH_RANGE[1], 0.01, (value) => {
-      this.handlers.particles?.({ trailLength: value });
-    });
-    this.formation = this._select("sel-formation", "Formation", labelPairs(FORMATION_TYPES, LABELS.formation), (value) => {
-      this.handlers.particles?.({ formationType: value });
-    });
-    this.kinetic = this._select(
-      "sel-kinetic-mode",
-      "Kinetic Mode",
-      KINETIC_MODES.map((id) => [id, KINETIC_LABELS[id]]),
-      (value) => this.handlers.particles?.({ kineticMode: value }),
-    );
-    this.oscillation = this._select("sel-oscillation", "Oscillation", labelPairs(OSCILLATION_TYPES, LABELS.oscillation), (value) => {
-      this.handlers.particles?.({ oscillationType: value });
-    });
-    this.oscAmount = this._range("rng-osc-amount", "Oscillation amount", OSCILLATION_AMOUNT_RANGE[0], OSCILLATION_AMOUNT_RANGE[1], 0.05, (value) => {
-      this.handlers.particles?.({ oscillationAmount: value });
-    });
-    this.oscSpeed = this._range("rng-osc-speed", "Oscillation speed", OSCILLATION_SPEED_RANGE[0], OSCILLATION_SPEED_RANGE[1], 0.05, (value) => {
-      this.handlers.particles?.({ oscillationSpeed: value });
-    });
-    this.pulseLayout = this._select("sel-pulse-layout", "Pulse field layout", labelPairs(PULSE_LAYOUTS, LABELS.layout), (value) => {
-      this.handlers.particles?.({ pulseLayout: value });
-    });
-    // ZUR-GH-007: Logo / Attractor Text preset selector + custom input, shown directly under Formation
-    // whenever Logo Attractor is active ("AI: UNDERGROUND", "MON DAAIN", "TENTH GATE", "ZUR", custom).
-    this.attractorPreset = this._select(
-      "sel-attractor-preset",
-      "Logo / Attractor Text",
-      [...LOGO_TEXT_PRESETS.map((name) => [name, name]), ["custom", "Custom…"]],
-      (value) => {
-        if (value === "custom") {
-          this.attractorText.wrap.hidden = false;
-          this.attractorText.input.focus?.();
-          return;
-        }
-        this.attractorText.input.value = value;
-        this.handlers.particles?.({ attractorText: value });
-      },
-    );
-    this.attractorText = this._text("txt-attractor", "Custom attractor text", [
-      "AI: UNDERGROUND", "MON DAAIN", "TENTH GATE", "ZUR",
-    ], (value) => this.handlers.particles?.({ attractorText: value }));
-    this.cameraMode = this._select("sel-camera-mode", "Camera mode", [
-      ["static", "Static"],
-      ["orbit-3d", "Orbit 3D"],
-      ["tunnel-fly", "Tunnel Fly"],
-      ["beat-bank", "Beat Bank"],
-    ], (value) => this._commit((draft) => { draft.visual.cameraMode = value; }));
-    this.chromaticAberration = this._range("rng-chromatic-aberration", "Chromatic aberration", 0, 1, 0.01, (value) => {
-      this._commit((draft) => { draft.visual.chromaticAberration = value; });
-    });
-    this.godRays = this._range("rng-god-rays", "God rays", 0, 1, 0.01, (value) => {
-      this._commit((draft) => { draft.visual.godRays = value; });
-    });
-    stage2.append(
-      this.flow.wrap, this.shape.wrap, this.particleStyle.wrap, this.colorPalette.wrap, this.cameraZoom.wrap, this.reactivity.wrap, this.size.wrap, this.kaleido.wrap, this.spin.label, this.count.wrap,
-      this.density.label, this.trailType.wrap, this.trailLength.wrap,
-      this.formation.wrap, this.attractorPreset.wrap, this.attractorText.wrap, // logo text sits right under Formation
-      this.kinetic.wrap, this.oscillation.wrap, this.oscAmount.wrap, this.oscSpeed.wrap, this.pulseLayout.wrap,
-      this.cameraMode.wrap, this.chromaticAberration.wrap, this.godRays.wrap,
-    );
-    this.body.append(stage2);
-
+    const capture = section("Capture");
     const captureRow = el("div", "row");
     captureRow.append(this._button("btn-tab", "Tab capture", () => this.handlers.tab?.()));
     captureRow.append(this._button("btn-mic", "Mic / call speaker", () => this.handlers.mic?.()));
     captureRow.append(this._button("btn-oscillator", "Test oscillator", () => this.handlers.oscillator?.()));
     captureRow.append(this._button("btn-stop", "Stop", () => this.handlers.stop?.()));
-    this.body.append(captureRow);
-
+    capture.append(captureRow);
     this.suppress = this._checkbox("chk-suppress", "Suppress local playback", (checked) => {
       const result = this.state.updatePreset((draft) => {
         draft.audio.suppressLocalAudio = checked;
@@ -334,8 +273,7 @@ export class ControlHUD {
       if (!result.ok) this.setError(result.errors[0]);
       else this.handlers.suppressLocalAudio?.(checked);
     });
-    this.body.append(this.suppress.label);
-
+    capture.append(this.suppress.wrap);
     this.systemAudio = this._select("sel-system-audio", "System audio", [
       ["exclude", "Tab only (exclude system)"],
       ["include", "Include system audio"],
@@ -344,46 +282,34 @@ export class ControlHUD {
         draft.audio.includeSystemAudio = value === "include";
       });
     });
-    this.body.append(this.systemAudio.wrap);
+    capture.append(this.systemAudio.wrap);
+    this.device = this._select("sel-device", "Mic Device", [["", "Default microphone"]], () => {});
+    capture.append(this.device.wrap);
 
-    this.device = this._select("sel-device", "Mic device", [["", "Default microphone"]], () => {});
-    this.body.append(this.device.wrap);
-
-    this.preamp = this._range("rng-preamp", "Pre-amp", 1, 25, 0.1, (value) => {
-      this._commit((draft) => {
-        draft.audio.preAmpGain = value;
-      });
+    const presets = section("Presets & Gain");
+    const modes = el("div", "row");
+    modes.append(this._button("btn-mode-a", "Mode A 720p30", () => this.handlers.modeA?.()));
+    modes.append(this._button("btn-mode-b", "Mode B 720p60", () => this.handlers.modeB?.()));
+    presets.append(modes);
+    this.preamp = this._range("rng-preamp", "Pre-Amp Gain", 1, 25, 0.1, (value) => {
+      this._commit((draft) => { draft.audio.preAmpGain = value; });
     });
-    this.body.append(this.preamp.wrap);
-
-    this.gate = this._range("rng-gate", "Noise gate", NOISE_GATE_RANGE[0], NOISE_GATE_RANGE[1], 0.001, (value) => {
-      this._commit((draft) => {
-        draft.audio.noiseGateThreshold = value;
-      });
+    this.gate = this._range("rng-gate", "Noise Gate", NOISE_GATE_RANGE[0], NOISE_GATE_RANGE[1], 0.001, (value) => {
+      this._commit((draft) => { draft.audio.noiseGateThreshold = value; });
     });
-    this.body.append(this.gate.wrap);
-
-    this.gain = this._range("rng-gain", "Visual gain", 0.1, 5, 0.1, (value) => {
-      this._commit((draft) => {
-        draft.visual.gain = value;
-      });
+    this.gain = this._range("rng-gain", "Visual Gain", 0.1, 5, 0.1, (value) => {
+      this._commit((draft) => { draft.visual.gain = value; });
     });
-    this.body.append(this.gain.wrap);
-
-    this.fft = this._select("sel-fft", "FFT size", [
+    this.fft = this._select("sel-fft", "FFT Size", [
       ["1024", "1024"],
       ["2048", "2048"],
       ["4096", "4096"],
     ], (value) => {
-      this._commit((draft) => {
-        draft.audio.fftSize = Number(value);
-      });
+      this._commit((draft) => { draft.audio.fftSize = Number(value); });
     });
-    this.body.append(this.fft.wrap);
-
     this.tier = this._select(
       "sel-tier",
-      "Quality tier",
+      "Quality Tier",
       QUALITY_TIERS.map((tier) => [tier.id, `${tier.label} · ${tier.width}×${tier.height}@${tier.fps}`]),
       (value) => {
         const tier = QUALITY_TIERS.find((item) => item.id === value);
@@ -397,11 +323,24 @@ export class ControlHUD {
         });
       },
     );
-    this.body.append(this.tier.wrap);
+    this.density = this._checkbox("chk-density", "Density auto-scale", (checked) => {
+      this.handlers.particles?.({ densityAutoScale: checked });
+    });
+    presets.append(this.preamp.wrap, this.gate.wrap, this.gain.wrap, this.fft.wrap, this.tier.wrap, this.density.wrap);
+
+    const auto = section("VJ Autopilot");
+    this.autopilot = el("button", "pill", "⚡ VJ Autopilot (Drop Detector)");
+    this.autopilot.type = "button";
+    this.autopilot.id = "btn-vj-autopilot";
+    this.autopilot.setAttribute("aria-pressed", "false");
+    this.autopilot.addEventListener("click", () => {
+      this.handlers.autopilot?.(!this.state.preset.visual.vjAutopilot);
+    });
+    auto.append(this.autopilot);
 
     this.diagnostics = el("pre", "diagnostics");
     this.diagnostics.id = "diagnostics";
-    this.body.append(this.diagnostics);
+    rig.append(this.diagnostics);
 
     const presetRow = el("div", "row");
     presetRow.append(this._button("btn-export", "Export preset", () => this.handlers.exportPreset?.()));
@@ -419,20 +358,36 @@ export class ControlHUD {
     });
     fileLabel.append(this.file);
     presetRow.append(fileLabel);
-    this.body.append(presetRow);
-
+    rig.append(presetRow);
     this.json = document.createElement("textarea");
     this.json.id = "preset-json";
     this.json.rows = 6;
     this.json.spellcheck = false;
-    this.body.append(this.json);
-    this.body.append(this._button("btn-import", "Apply JSON", () => this.handlers.importPreset?.(this.json.value)));
+    rig.append(this.json);
+    rig.append(this._button("btn-import", "Apply JSON", () => this.handlers.importPreset?.(this.json.value)));
+  }
 
-    this.hint = el("p", "hint", "H hides the panel. 1 / 2 load Mode A / B. T starts the silent test oscillator. P cycles scene, F cycles flow mode, K cycles kaleidoscope.");
-    this.body.append(this.hint);
-    panel.append(this.body);
-    this.root.append(panel);
-    this.panel = panel;
+  _pillGroup(id, dataKey, ids, labels, onPick) {
+    const group = el("div", "hud-subpills");
+    group.id = id;
+    group.hidden = true;
+    const buttons = {};
+    for (const value of ids) {
+      const button = el("button", "hud-subpill", labels[value]);
+      button.type = "button";
+      button.dataset[dataKey === "swarmMode" ? "swarmMode" : "shaderScene"] = value;
+      button.addEventListener("click", () => onPick(value));
+      buttons[value] = button;
+      group.append(button);
+    }
+    return { group, buttons };
+  }
+
+  _switch(hudTab, options) {
+    const result = this.state.replacePreset(switchPresetTab(this.state.preset, hudTab, options));
+    if (!result.ok) this.setError(result.errors[0]);
+    else this.setError("");
+    return result;
   }
 
   _pill(id, label) {
@@ -456,8 +411,8 @@ export class ControlHUD {
     input.type = "checkbox";
     input.id = id;
     input.addEventListener("change", () => onChange(input.checked));
-    wrap.append(input, document.createTextNode(label));
-    return { label: wrap, input };
+    wrap.append(input, el("span", "field-label", label));
+    return { wrap, label: wrap, input };
   }
 
   _select(id, label, options, onChange) {
@@ -465,12 +420,7 @@ export class ControlHUD {
     const span = el("span", "field-label", label);
     const select = document.createElement("select");
     select.id = id;
-    for (const [value, text] of options) {
-      const option = document.createElement("option");
-      option.value = value;
-      option.textContent = text;
-      select.append(option);
-    }
+    fillSelect(select, options);
     select.addEventListener("change", () => onChange(select.value));
     wrap.append(span, select);
     return { wrap, select };
@@ -494,26 +444,6 @@ export class ControlHUD {
     });
     wrap.append(head, input);
     return { wrap, input, value };
-  }
-
-  _text(id, label, options, onChange) {
-    const wrap = el("label", "field");
-    const span = el("span", "field-label", label);
-    const input = document.createElement("input");
-    input.type = "text";
-    input.id = id;
-    input.maxLength = 64;
-    const list = document.createElement("datalist");
-    list.id = `${id}-choices`;
-    for (const value of options) {
-      const option = document.createElement("option");
-      option.value = value;
-      list.append(option);
-    }
-    input.setAttribute("list", list.id);
-    input.addEventListener("change", () => onChange(input.value.slice(0, 64)));
-    wrap.append(span, input, list);
-    return { wrap, input };
   }
 
   _commit(mutate) {
@@ -546,18 +476,14 @@ export class ControlHUD {
   setDevices(devices) {
     const select = this.device.select;
     const current = select.value;
-    select.replaceChildren();
-    const fallback = document.createElement("option");
-    fallback.value = "";
-    fallback.textContent = "Default microphone";
-    select.append(fallback);
+    const options = [{ value: "", label: "Default microphone" }];
+    let index = 1;
     for (const device of devices) {
       if (device.kind !== "audioinput") continue;
-      const option = document.createElement("option");
-      option.value = device.deviceId;
-      option.textContent = device.label || `Microphone ${select.length}`;
-      select.append(option);
+      options.push({ value: device.deviceId, label: device.label || `Microphone ${index}` });
+      index += 1;
     }
+    fillSelect(select, options);
     select.value = [...select.options].some((option) => option.value === current) ? current : "";
   }
 
@@ -608,78 +534,113 @@ export class ControlHUD {
     this.json.value = this.state.exportPreset();
   }
 
+  _setSlider(control, value, text) {
+    control.input.value = String(value);
+    control.value.textContent = text;
+  }
+
   sync() {
     const preset = this.state.preset;
     const audio = preset.audio;
     const visual = preset.visual;
+    const flat = enforceTabConstraints(flattenPreset(preset));
+    const key = layoutKey(flat);
+    const layout = CONTROL_LAYOUT[key] || [];
+    const onRig = flat.hudTab === "audio-rig";
+    this._paletteTarget = paletteTarget(key);
     this.title.textContent = preset.name || preset.sceneId;
+
+    for (const tab of HUD_TABS) {
+      const active = tab === flat.hudTab;
+      this.tabButtons[tab].setAttribute("aria-selected", String(active));
+      this.tabButtons[tab].classList.toggle("is-active", active);
+    }
+    const swarmShown = flat.hudTab === "blood-swarm" || (onRig && flat.visualTab === "blood-swarm");
+    const shaderShown = flat.hudTab === "canyon-pulse" || (onRig && flat.visualTab === "canyon-pulse");
+    this.swarmPills.group.hidden = !(flat.hudTab === "blood-swarm");
+    this.shaderPills.group.hidden = !(flat.hudTab === "canyon-pulse");
+    for (const mode of SWARM_MODES) this.swarmPills.buttons[mode].classList.toggle("is-active", swarmShown && mode === flat.swarmMode);
+    for (const scene of SHADER_SCENES) this.shaderPills.buttons[scene].classList.toggle("is-active", shaderShown && scene === flat.shaderScene);
+    this.visual.hidden = onRig;
+    this.rig.hidden = !onRig;
+    this.visual.dataset.layout = key;
+    this.rig.dataset.tab = flat.hudTab;
+
+    // Visibility + order + per-tab labels / options.
+    const shown = new Set();
+    for (const [name, label, extras] of layout) {
+      const control = this.controls[name];
+      if (!control) continue;
+      shown.add(name);
+      control.wrap.hidden = onRig ? true : false;
+      if (control.labelEl) control.labelEl.textContent = label;
+      if (control.select) {
+        const current = this._valueFor(name, flat);
+        fillSelect(control.select, optionsFor(name, key));
+        control.select.value = current;
+      }
+      if (extras && control.input) {
+        control.input.min = String(extras.min ?? control.input.min);
+        control.input.max = String(extras.max ?? control.input.max);
+      }
+      this.visual.append(control.wrap);
+    }
+    for (const [name, control] of Object.entries(this.controls)) {
+      if (!shown.has(name)) control.wrap.hidden = true;
+    }
+    const trailLayout = layout.find(([name]) => name === "trailLength");
+    if (!trailLayout?.[2] && this.controls.trailLength) {
+      this.controls.trailLength.input.min = String(TRAIL_LENGTH_RANGE[0]);
+      this.controls.trailLength.input.max = String(TRAIL_LENGTH_RANGE[1]);
+    }
+
+    this._setSlider(this.controls.zoom, flat.cameraZoom, `${Number(flat.cameraZoom).toFixed(2)}×`);
+    this._setSlider(this.controls.reactivity, flat.reactivityGain, Number(flat.reactivityGain).toFixed(1));
+    this._setSlider(this.controls.size, flat.particleSize, `${Number(flat.particleSize).toFixed(2)}×`);
+    this._setSlider(this.controls.trailLength, flat.trailLength, Number(flat.trailLength).toFixed(2));
+    this._setSlider(this.controls.oscAmount, flat.oscillationAmount, Number(flat.oscillationAmount).toFixed(2));
+    this._setSlider(this.controls.oscSpeed, flat.oscillationSpeed, `${Number(flat.oscillationSpeed).toFixed(2)}×`);
+    this._setSlider(this.controls.hueShift, flat.hueShift, Number(flat.hueShift).toFixed(2));
+    this._setSlider(this.controls.chromatic, flat.chromaticAberration, Number(flat.chromaticAberration).toFixed(2));
+    this._setSlider(this.controls.godRays, flat.godRays, Number(flat.godRays).toFixed(2));
+    this.controls.kaleidoSpin.input.checked = flat.kaleidoSpin;
+
     this.suppress.input.checked = audio.suppressLocalAudio;
     this.systemAudio.select.value = audio.includeSystemAudio ? "include" : "exclude";
-    this.preamp.input.value = String(audio.preAmpGain);
-    this.preamp.value.textContent = `${Number(audio.preAmpGain).toFixed(1)}×`;
-    this.gate.input.value = String(audio.noiseGateThreshold ?? 0.015);
-    this.gate.value.textContent = Number(audio.noiseGateThreshold ?? 0.015).toFixed(3);
-    this.gain.input.value = String(visual.gain ?? 1);
-    this.gain.value.textContent = Number(visual.gain ?? 1).toFixed(1);
+    this._setSlider(this.preamp, audio.preAmpGain, `${Number(audio.preAmpGain).toFixed(1)}×`);
+    const gate = audio.noiseGateThreshold ?? 0.015;
+    this._setSlider(this.gate, gate, Number(gate).toFixed(3));
+    this._setSlider(this.gain, visual.gain ?? 1, Number(visual.gain ?? 1).toFixed(1));
     this.fft.select.value = String(audio.fftSize || 2048);
     this.tier.select.value = visual.qualityTier || "safe";
-    this.palette.select.value = PALETTES[visual.paletteId] ? visual.paletteId : PALETTE_IDS[0];
-    this.hue.input.value = String(visual.hueShift || 0);
-    this.hue.value.textContent = Number(visual.hueShift || 0).toFixed(2);
-    const particles = { ...DEFAULT_PARTICLES, ...(preset.particles || {}) };
-    this.scene.select.value = SCENE_IDS.includes(preset.sceneId) ? preset.sceneId : "aurora-ribbons";
-    this.flow.select.value = particles.flowMode;
-    this.shape.select.value = particles.shape;
-    this.particleStyle.select.value = particles.particleStyle;
-    this.colorPalette.select.value = particles.colorPalette;
-    this.cameraZoom.input.value = String(particles.cameraZoom);
-    this.cameraZoom.value.textContent = `${Number(particles.cameraZoom).toFixed(2)}×`;
-    this.reactivity.input.value = String(particles.reactivityGain);
-    this.reactivity.value.textContent = Number(particles.reactivityGain).toFixed(1);
-    this.kinetic.select.value = particles.kineticMode;
-    this.size.input.value = String(particles.particleSize);
-    this.size.value.textContent = `${Number(particles.particleSize).toFixed(2)}×`;
-    this.kaleido.select.value = String(particles.kaleidoSegments);
-    this.spin.input.checked = particles.kaleidoSpin;
-    this.count.select.value = particles.particleCountTier;
-    this.density.input.checked = particles.densityAutoScale;
-    this.trailType.select.value = particles.trailType;
-    this.trailLength.input.value = String(particles.trailLength);
-    this.trailLength.value.textContent = Number(particles.trailLength).toFixed(2);
-    this.formation.select.value = particles.formationType;
-    this.oscillation.select.value = particles.oscillationType;
-    this.oscAmount.input.value = String(particles.oscillationAmount);
-    this.oscAmount.value.textContent = Number(particles.oscillationAmount).toFixed(2);
-    this.oscSpeed.input.value = String(particles.oscillationSpeed);
-    this.oscSpeed.value.textContent = `${Number(particles.oscillationSpeed).toFixed(2)}×`;
-    this.pulseLayout.select.value = particles.pulseLayout;
-    this.pulseLayout.wrap.hidden = preset.sceneId !== PULSE_SCENE_ID;
-    const logoActive = particles.formationType === "logo-attractor";
-    const presetText = LOGO_TEXT_PRESETS.includes(particles.attractorText);
-    if (this.attractorPreset.select.value !== "custom" || presetText) {
-      this.attractorPreset.select.value = presetText ? particles.attractorText : "custom";
-    }
-    this.attractorPreset.wrap.hidden = !logoActive;
-    if (document.activeElement !== this.attractorText.input) this.attractorText.input.value = particles.attractorText;
-    this.attractorText.wrap.hidden = !logoActive || this.attractorPreset.select.value !== "custom";
-    // 3D SWARM controls only for particle swarm / megastructure / pulse (hidden on spectral-canyon & aurora).
-    const swarmHudScenes = new Set(["particle-swarm-3d", "megastructure-3d", "pulse-field-3d"]);
-    if (this.stage2) this.stage2.hidden = !swarmHudScenes.has(preset.sceneId);
+    this.density.input.checked = flat.densityAutoScale;
+
     const captureIdle = (this.state.status.capture || "idle") === "idle";
-    if (this.audioPrompt) {
-      this.audioPrompt.classList.toggle("is-idle", captureIdle);
-      this.audioPrompt.hidden = !captureIdle;
-    }
-    this.cameraMode.select.value = visual.cameraMode || "orbit-3d";
-    this.chromaticAberration.input.value = String(visual.chromaticAberration ?? 0.30);
-    this.chromaticAberration.value.textContent = Number(visual.chromaticAberration ?? 0.30).toFixed(2);
-    this.godRays.input.value = String(visual.godRays ?? 0.35);
-    this.godRays.value.textContent = Number(visual.godRays ?? 0.35).toFixed(2);
+    this.audioPrompt.classList.toggle("is-idle", captureIdle);
+    this.audioPrompt.hidden = !captureIdle;
     this.autopilot.setAttribute("aria-pressed", String(Boolean(visual.vjAutopilot)));
     this.autopilot.dataset.state = visual.vjAutopilot ? "active" : "off";
     this._setPill(this.pills.wakeLock, this.state.status.wakeLock, `Wake ${this.state.status.wakeLock}`);
     this._setPill(this.pills.capture, this.state.status.capture, `Capture ${this.state.status.capture}`);
     this._setPill(this.pills.webgl, this.state.status.webgl, this.state.status.webgl === "webgl2" ? "WebGL2" : `WebGL ${this.state.status.webgl}`);
+  }
+
+  _valueFor(name, flat) {
+    switch (name) {
+      case "formation": return flat.formation;
+      case "flow": return flat.flowMode;
+      case "style": return flat.particleStyle;
+      case "kinetic": return flat.kineticMode;
+      case "oscillation": return flat.oscillationType;
+      case "count": return flat.particleCountTier;
+      case "trailType": return flat.trailType;
+      case "pulseLayout": return flat.pulseLayout;
+      case "logoText": return flat.attractorText;
+      case "cameraMode": return flat.cameraMode;
+      case "kaleido": return String(flat.kaleidoSegments);
+      case "palette": return this._paletteTarget === "scene" ? (PALETTES[flat.paletteId] ? flat.paletteId : PALETTE_IDS[0]) : flat.colorPalette;
+      default: return "";
+    }
   }
 
   _setPill(node, state, text) {

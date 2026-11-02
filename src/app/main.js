@@ -7,6 +7,8 @@ import {
   applyModeKeepingScene,
   loadStoredState,
   serializeStoredState,
+  upgradeToV51,
+  VISUAL_HUD_TABS,
   validatePreset,
 } from "./AppState.js";
 import { FeatureExtractor } from "../audio/FeatureExtractor.js";
@@ -29,8 +31,7 @@ import { SpectralCanyon3D } from "../render/SpectralCanyon3D.js";
 import { TransitionController } from "../render/TransitionController.js";
 import { ControlHUD } from "../controls/ControlHUD.js";
 import { ParticleSystem3D, loadParticleShaders } from "../render/ParticleSystem3D.js";
-import { VJAutopilot, VJ_PHASES } from "./VJAutopilot.js";
-import { NEON_PALETTE_IDS } from "../controls/palettes.js";
+import { VJAutopilot, VJ_PHASES, autopilotPreset } from "./VJAutopilot.js";
 import {
   FLOW_MODES,
   KALEIDO_SEGMENTS,
@@ -60,8 +61,9 @@ function loadInitialPreset() {
   if (decoded) {
     if (decoded.sceneId) base.sceneId = decoded.sceneId;
     base.particles = normalizeParticles({ ...base.particles, ...decoded.particles });
+    delete base.hud;
   }
-  const result = validatePreset(base);
+  const result = validatePreset(decoded ? upgradeToV51(base) : base);
   return result.ok ? result.preset : STAGE2_DEFAULT_PRESET;
 }
 
@@ -192,14 +194,8 @@ host = new RenderHost({
     const result = vjAutopilot.update(deltaSeconds, state.preset.visual.vjAutopilot);
     if (result.changed) {
       const phaseIndex = VJ_PHASES.indexOf(result.phase);
-      state.updatePreset((draft) => {
-        draft.visual.paletteId = NEON_PALETTE_IDS[phaseIndex % NEON_PALETTE_IDS.length];
-        draft.particles = normalizeParticles({
-          ...draft.particles,
-          formationType: ["neon-tunnel", "fractal-core", "logo-attractor"][phaseIndex],
-          kaleidoSegments: [0, 8, 12][phaseIndex],
-        });
-      });
+      // Tab-scoped: only values allowed by the active HUD tab (autopilotPreset runs enforceTabConstraints).
+      state.replacePreset(autopilotPreset(state.preset, phaseIndex));
       if (result.shockwave) host.particleSystem?.triggerShockwave(frame.rms || 0);
     }
   },
@@ -299,7 +295,9 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "t" || event.key === "T") hud.handlers.oscillator?.();
   if (event.key === "Escape") hud.toggle(true);
   if (event.key === "p" || event.key === "P") {
-    hud.handlers.scene?.(SCENE_IDS[(SCENE_IDS.indexOf(state.preset.sceneId) + 1) % SCENE_IDS.length]);
+    const tabs = VISUAL_HUD_TABS;
+    const current = state.preset.hud?.visualTab || state.preset.hud?.hudTab;
+    hud._switch(tabs[(tabs.indexOf(current) + 1) % tabs.length]);
   }
   if (event.key === "f" || event.key === "F") {
     const current = FLOW_MODES.indexOf(state.preset.particles?.flowMode);

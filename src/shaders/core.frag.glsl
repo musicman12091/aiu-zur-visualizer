@@ -14,7 +14,7 @@ uniform int u_steps;
 // render.vert.glsl (gl_Position.y += u_viewportYOffset * w), so N-fold mirrors fold AROUND the core.
 uniform float u_viewportYOffset;
 uniform float u_cameraZoom;   // ZUR-GH-009: pinch / wheel zoom 0.35..3.50 (scales the raymarch FOV)
-uniform int u_colorPalette;   // ZUR-GH-009: 0 true-neon, 1 full-spectrum, 2 white-static, 3 blood-red
+uniform int u_colorPalette;   // ZUR-GH-009: 0 true-neon, 1 full-spectrum, 2 white-static, 3 blood-red, 4 golden-cortex
 uniform float u_spectralCentroid;
 
 out vec4 fragColor;
@@ -79,8 +79,12 @@ void main() {
   int index = int(floor(band * 4.0));
   vec3 color = mix(u_palette[index], u_palette[index + 1], fract(band * 4.0));
   if (u_colorPalette == 1) {
-    vec3 k = abs(fract(vec3(band + u_spectralCentroid * 0.5 + u_time * 0.12) + vec3(1.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0);
+    vec3 k = abs(fract(vec3(band + length(point) * 0.9) + vec3(1.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0);
     color = mix(vec3(1.0), clamp(k - 1.0, 0.0, 1.0), 0.95);
+  } else if (u_colorPalette == 4) {
+    // golden-cortex: gold #FFD700 -> #FF9900 shell with cyan-white axon seams
+    color = mix(vec3(1.0, 0.6795, 0.0), vec3(1.0, 0.3185, 0.0), band);
+    color = mix(color, vec3(0.0, 1.0, 1.0), smoothstep(0.82, 0.95, fract(band * 3.0)) * 0.5);
   } else if (u_colorPalette == 2) {
     color = mix(vec3(1.0), vec3(0.6867, 0.8388, 1.0), rim) * 0.7;
   } else if (u_colorPalette == 3) {
