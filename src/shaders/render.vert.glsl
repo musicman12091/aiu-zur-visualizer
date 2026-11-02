@@ -24,6 +24,7 @@ uniform vec3 u_palette[5];
 uniform float u_time;
 uniform float u_high;
 uniform float u_rms;
+uniform int u_colorPalette;     // ZUR-GH-011: shared with render.frag.glsl (4 = golden-cortex thalamic baseline)
 uniform float u_intensity;
 uniform int u_trailType;        // 0 comet, 1 electric, 2 strobe, 3 ribbon, 4 none
 uniform float u_trailLength;    // 0..1
@@ -150,6 +151,12 @@ void main() {
   // ZUR-GH-009: synapse firing wave travelling outward through the agent positions.
   float wave = sin(length(a_pos.xyz) * 14.0 - u_time * 9.0 - u_onset * 5.0);
   v_neuralPulse = smoothstep(0.72, 0.98, wave) * clamp(0.45 + u_treble * 0.9 + u_onset * 1.1, 0.0, 1.5);
+  if (u_colorPalette == 4) {
+    // ZUR-GH-011: baseline thalamic rhythm. A slow (~0.6 Hz) radial sweep peaks at 0.78 (> the 0.55 firing threshold),
+    // so the golden cortex keeps firing cyan-white even at u_rms == 0; audio still adds the faster beat-driven wave.
+    float thalamic = sin(length(a_pos.xyz) * 6.0 - u_time * 3.8 + seed * 1.7);
+    v_neuralPulse = max(v_neuralPulse, smoothstep(0.55, 0.95, thalamic) * 0.78);
+  }
 
   vec4 clipCenter = u_viewProj * vec4(center, 1.0);
   float w = max(clipCenter.w, 0.05);

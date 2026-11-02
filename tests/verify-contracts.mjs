@@ -1079,9 +1079,10 @@ function hexSaturation(hex) {
 const frag32 = () => stripComments(read("src/shaders/render.frag.glsl"));
 const sim32 = () => stripComments(read("src/shaders/sim.vert.glsl"));
 
-test("ZUR-GH-010 storage key and schema are zur_state_v5_1 / 5.1 (v5.0 + v4 keys kept as legacy)", () => {
-  assert.equal(STORAGE_KEY, "zur_state_v5_1");
-  assert.equal(STORAGE_SCHEMA, 5.1);
+test("ZUR-GH-011 storage key and schema are zur_state_v5_2 / 5.2 (v5.1, v5.0 + v4 keys kept as legacy)", () => {
+  assert.equal(STORAGE_KEY, "zur_state_v5_2");
+  assert.equal(STORAGE_SCHEMA, 5.2);
+  assert.ok(LEGACY_STORAGE_KEYS.includes("zur_state_v5_1"));
   assert.ok(LEGACY_STORAGE_KEYS.includes("zur_state_v5_0"));
   assert.ok(LEGACY_STORAGE_KEYS.includes("zur_state_v4_0"));
   assert.deepEqual({ ...V3_2_UPGRADE_DEFAULTS }, { paletteId: "neon-tunnel", particleCountTier: "64k", particleSize: 1.35, trailLength: 0.28, trailType: "comet" });
@@ -1252,9 +1253,9 @@ test("Stage 3.2 HUD: Scene, Palette, Hue shift on top; Hide HUD button; pulse la
   assert.match(read("index.html"), /\.hud-hide\s*\{[^}]*position:\s*sticky/);
 });
 
-test("Stage 5.1 sw.js cache is v8, claims clients and precaches new shaders", () => {
+test("ZUR-GH-011 sw.js cache is v9, claims clients and precaches new shaders", () => {
   const sw = read("sw.js");
-  assert.match(sw, /const CACHE = "zur-shell-v8"/);
+  assert.match(sw, /const CACHE = "zur-shell-v9"/);
   assert.match(sw, /self\.skipWaiting\(\)/);
   assert.match(sw, /self\.clients\.claim\(\)/);
   assert.match(sw, /\.(html|js|glsl)/);
@@ -1894,10 +1895,10 @@ const g009 = {
   ps: () => read("src/render/ParticleSystem3D.js"),
 };
 
-test("ZUR-GH-010 sw.js cache is zur-shell-v8 and storage key zur_state_v5_1 with v4 migration", () => {
-  assert.match(read("sw.js"), /const CACHE = "zur-shell-v8"/);
-  assert.equal(STORAGE_KEY, "zur_state_v5_1");
-  assert.equal(LEGACY_STORAGE_KEYS[1], "zur_state_v4_0");
+test("ZUR-GH-011 sw.js cache is zur-shell-v9 and storage key zur_state_v5_2 with v5.1 + v4 migration", () => {
+  assert.match(read("sw.js"), /const CACHE = "zur-shell-v9"/);
+  assert.equal(STORAGE_KEY, "zur_state_v5_2");
+  assert.deepEqual(LEGACY_STORAGE_KEYS.slice(0, 3), ["zur_state_v5_1", "zur_state_v5_0", "zur_state_v4_0"]);
   const old = structuredClone(MODE_A_PRESET);
   old.particles = { ...old.particles, particleCountTier: "16k", particleStyle: "orb" };
   const loaded = loadStoredState(mockStorage({ zur_state_v4_0: JSON.stringify({ storageSchema: 4.0, preset: old }) }));
@@ -2247,16 +2248,27 @@ test("ZUR-GH-010 dark-mode select CSS, sticky tab bar, no particleShape / duplic
   assert.match(hud + read("src/controls/hudTabs.js"), /data-hud-tab|dataset\.hudTab/);
 });
 
-test("ZUR-GH-010 golden-cortex palette: index 4, 80% gold soma alpha 0.26, cyan-white pulse > 0.55 x2.8", () => {
+test("ZUR-GH-011 golden-cortex palette: index 4, 80% gold soma alpha 0.52 x1.85, cyan-white pulse > 0.55 x3.2", () => {
+  assert.equal(gh010Math.GOLDEN_CORTEX_SOMA_ALPHA, 0.52);
+  assert.equal(gh010Math.GOLDEN_CORTEX_SOMA_RADIANCE, 1.85);
+  assert.equal(gh010Math.GOLDEN_CORTEX_PULSE_BOOST, 3.2);
+  const fg = frag32();
+  assert.match(fg, /const float CORTEX_SOMA_ALPHA = 0\.52;/);
+  assert.match(fg, /const float CORTEX_SOMA_RADIANCE = 1\.85;/);
+  assert.match(fg, /const float CORTEX_PULSE_BOOST = 3\.2;/);
+  assert.match(fg, /cortexFiring \? CORTEX_PULSE_BOOST : 1\.0/);
+  assert.match(fg, /cortexSoma \? CORTEX_SOMA_ALPHA : 1\.0/);
+  assert.match(fg, /vec3\(1\.0, 0\.3916, 0\.0\), fract\(v_seed \* 5\.0\)\) \* CORTEX_SOMA_RADIANCE/, "#FFD700 -> #FFA800 metallic gold x1.85");
+  assert.doesNotMatch(fg, /0\.26/, "ZUR-GH-010 0.26 soma alpha is gone");
   assert.ok(COLOR_PALETTES_GH010().includes("golden-cortex"));
   assert.equal(gh010Math.GOLDEN_CORTEX_SOMA_FRACTION, 0.8);
-  assert.equal(gh010Math.GOLDEN_CORTEX_SOMA_ALPHA, 0.26);
+  // (ZUR-GH-010 soma alpha 0.26 superseded by ZUR-GH-011 0.52.)
   assert.equal(gh010Math.GOLDEN_CORTEX_PULSE_THRESHOLD, 0.55);
-  assert.equal(gh010Math.GOLDEN_CORTEX_PULSE_BOOST, 2.8);
+  // (ZUR-GH-010 pulse boost 2.8 superseded by ZUR-GH-011 3.2.)
   const f = frag32();
   assert.match(f, /u_colorPalette == 4 && v_neuralPulse > 0\.55/);
-  assert.match(f, /cortexFiring \? 2\.8 : 1\.0/);
-  assert.match(f, /0\.26/);
+  assert.match(stripComments(read("src/shaders/render.vert.glsl")), /uniform int u_colorPalette;/, "vertex stage sees the palette for the thalamic baseline");
+  assert.match(f, /CORTEX_SOMA_ALPHA \/ 0\.40 \* 1\.5/, "capsule soma uses the same 0.52 floor");
 });
 function COLOR_PALETTES_GH010() { return gh010Tabs.optionsFor("palette", "brain-3d").map((o) => o.value); }
 
@@ -2337,6 +2349,218 @@ test("ZUR-GH-010 smoke:gh010 script wired with 412x915, BH void and 256k density
   assert.match(smoke, /262144|256k/);
   assert.match(smoke, /blackRatio/);
   assert.match(smoke, /whiteClip/);
+});
+
+// ---------------- ZUR-GH-011 (zur-shell-v9 / zur_state_v5_2) contracts ----------------
+
+/** Minimal in-memory DOM: enough of the element API for ControlHUD, and it counts every node re-insertion. */
+function makeFakeDom() {
+  const stats = { moves: 0 };
+  const doc = { activeElement: null };
+  class FakeNode {
+    constructor(tag) {
+      this.tagName = String(tag).toUpperCase();
+      this.children = [];
+      this.parentNode = null;
+      this.attributes = {};
+      this.dataset = {};
+      this.listeners = {};
+      this.style = { setProperty() {} };
+      this.className = "";
+      this.hidden = false;
+      this.scrollTop = 0;
+      this._text = "";
+      const cls = new Set();
+      this.classList = {
+        add: (...c) => c.forEach((x) => cls.add(x)),
+        remove: (...c) => c.forEach((x) => cls.delete(x)),
+        toggle: (c, force) => { const on = force === undefined ? !cls.has(c) : Boolean(force); if (on) cls.add(c); else cls.delete(c); return on; },
+        contains: (c) => cls.has(c),
+      };
+    }
+    append(...nodes) {
+      for (const n of nodes) {
+        if (n.parentNode) {
+          stats.moves += 1;
+          n.parentNode.children.splice(n.parentNode.children.indexOf(n), 1);
+        }
+        n.parentNode = this;
+        this.children.push(n);
+      }
+    }
+    replaceChildren(...nodes) {
+      for (const c of this.children) c.parentNode = null;
+      this.children = [];
+      this._selected = undefined;
+      this.append(...nodes);
+    }
+    setAttribute(k, v) { this.attributes[k] = String(v); }
+    getAttribute(k) { return k in this.attributes ? this.attributes[k] : null; }
+    addEventListener(type, fn) { (this.listeners[type] ||= []).push(fn); }
+    dispatch(type) { for (const fn of this.listeners[type] || []) fn({ type, target: this }); }
+    get textContent() { return this._text; }
+    set textContent(v) { this._text = String(v); this.children = []; }
+    querySelector(sel) {
+      const cls = sel.replace(/^\./, "");
+      for (const c of this.children) {
+        if (c.className.split(" ").includes(cls)) return c;
+        const deep = c.querySelector(sel);
+        if (deep) return deep;
+      }
+      return null;
+    }
+    closest() { return null; }
+    focus() { doc.activeElement = this; }
+    blur() { if (doc.activeElement === this) { doc.activeElement = null; this.dispatch("blur"); } }
+    get options() { return this.children.filter((c) => c.tagName === "OPTION"); }
+    get value() {
+      if (this.tagName !== "SELECT") return this._value ?? "";
+      const opts = this.options;
+      const i = this._selected ?? 0;
+      return i >= 0 && opts[i] ? opts[i].value : "";
+    }
+    set value(v) {
+      if (this.tagName !== "SELECT") { this._value = String(v); return; }
+      this._selected = this.options.findIndex((o) => o.value === String(v));
+    }
+  }
+  doc.createElement = (tag) => new FakeNode(tag);
+  return { doc, stats, FakeNode };
+}
+
+test("ZUR-GH-011 DOM node identity gate: 10 slider inputs + AppState/status updates never recreate or move HUD nodes", async () => {
+  const { doc, stats, FakeNode } = makeFakeDom();
+  const windowListeners = {};
+  const hadDocument = "document" in globalThis;
+  const previousDocument = globalThis.document;
+  const previousAdd = globalThis.addEventListener;
+  globalThis.document = doc;
+  globalThis.addEventListener = (type, fn) => { (windowListeners[type] ||= []).push(fn); };
+  try {
+    const { ControlHUD } = await import("../src/controls/ControlHUD.js");
+    const state = new gh010.AppState(gh010.STAGE2_DEFAULT_PRESET);
+    const hud = new ControlHUD(new FakeNode("div"), state);
+    hud.setHandlers({
+      particles: (partial) => state.updatePreset((draft) => { draft.particles = normalizeParticles({ ...draft.particles, ...partial }); }),
+    });
+    assert.equal(state.preset.hud.hudTab, "deep-space");
+    const zoom = hud.controls.zoom.input;
+    const reactivity = hud.controls.reactivity.input;
+    const palette = hud.controls.palette.select;
+    const formation = hud.controls.formation.select;
+    const formationOptions = [...formation.options];
+    hud.panel.scrollTop = 240;
+    const movesBefore = stats.moves;
+    for (let i = 0; i < 10; i += 1) {
+      zoom.value = String(1 + i * 0.2);
+      zoom.dispatch("input");
+      state.setStatus({ fps: 50 + i, wakeLock: i % 2 ? "active" : "released" });
+      state.updatePreset((draft) => { draft.visual.gain = 1 + i * 0.1; });
+      assert.equal(hud.controls.zoom.input, zoom, `range node identical after input ${i}`);
+      assert.equal(hud.controls.reactivity.input, reactivity);
+      assert.equal(hud.controls.palette.select, palette, `select node identical after update ${i}`);
+      assert.equal(hud.controls.formation.select, formation);
+    }
+    assert.deepEqual([...formation.options], formationOptions, "<option> nodes never rebuilt within a tab");
+    assert.equal(stats.moves, movesBefore, "no row was removed / re-inserted within the same layout key");
+    assert.equal(hud.panel.scrollTop, 240, ".control-hud scrollTop never reset");
+    assert.ok(Math.abs(state.preset.particles.cameraZoom - 2.8) < 1e-9, "slider still drives state");
+
+    // Focused <select> is never overwritten (Android picker stays open); blur reconciles it.
+    palette.focus();
+    const shownBefore = palette.value;
+    state.updatePreset((draft) => { draft.particles.colorPalette = "full-spectrum"; });
+    assert.equal(palette.value, shownBefore, "focused select untouched");
+    palette.blur();
+    assert.equal(palette.value, "full-spectrum", "blur re-syncs the select");
+
+    // Slider under an active drag is guarded; pointerup releases and re-syncs.
+    zoom.dispatch("pointerdown");
+    const dragValue = zoom.value;
+    state.updatePreset((draft) => { draft.particles.cameraZoom = 1.5; });
+    assert.equal(zoom.value, dragValue, "dragged slider untouched by external state");
+    for (const fn of windowListeners.pointerup || []) fn({ type: "pointerup" });
+    assert.equal(Number(zoom.value), 1.5, "pointerup re-syncs the slider");
+
+    // Sanity: the gate is not vacuous; a structural change (tab switch) does re-lay-out, and keeps scrollTop.
+    hud._switch("brain-3d");
+    assert.ok(stats.moves > movesBefore, "tab switch re-orders rows");
+    assert.equal(hud.panel.scrollTop, 240);
+    assert.equal(hud._layoutKey, "brain-3d|blood-drip|spectral-canyon-3d");
+  } finally {
+    if (hadDocument) globalThis.document = previousDocument; else delete globalThis.document;
+    if (previousAdd) globalThis.addEventListener = previousAdd; else delete globalThis.addEventListener;
+  }
+});
+
+test("ZUR-GH-011 HUD source: status emits only touch pills; layout keyed on hudTab|swarmMode|shaderScene; guards", () => {
+  const hud = read("src/controls/ControlHUD.js");
+  assert.match(hud, /type === "status" \? this\.syncStatus\(\) : this\.sync\(\)/);
+  assert.match(hud, /const structuralKey = `\$\{flat\.hudTab\}\|\$\{flat\.swarmMode\}\|\$\{flat\.shaderScene\}`/);
+  assert.match(hud, /document\.activeElement !== select/);
+  assert.match(hud, /control\.input === this\._dragInput/);
+  assert.doesNotMatch(hud, /innerHTML/);
+  assert.equal((hud.match(/replaceChildren\(/g) || []).length, 1, "only _build() clears the root");
+});
+
+test("ZUR-GH-011 Blood & Swarm entry defaults to blood-drip (blood-drop / splatter-run / blood-red / comet >= 0.72)", () => {
+  const brain = gh010.switchHudTab({ hudTab: "blood-swarm", swarmMode: "free-swarm" }, "brain-3d");
+  assert.equal(brain.swarmMode, "free-swarm", "stale sub-mode survives on another tab (the 25667.mp4 trap)");
+  const blood = gh010.switchHudTab(brain, "blood-swarm");
+  assert.equal(blood.swarmMode, "blood-drip");
+  assert.equal(blood.particleStyle, "blood-drop");
+  assert.equal(blood.kineticMode, "splatter-run");
+  assert.equal(blood.colorPalette, "blood-red");
+  assert.equal(blood.trailType, "comet");
+  assert.ok(blood.trailLength >= 0.72);
+  for (const from of ["deep-space", "megastructure", "canyon-pulse"]) {
+    assert.equal(gh010.switchHudTab(gh010.switchHudTab({ hudTab: "blood-swarm", swarmMode: "logo-text" }, from), "blood-swarm").swarmMode, "blood-drip", from);
+  }
+  assert.equal(gh010.switchHudTab(brain, "blood-swarm", { swarmMode: "free-swarm" }).swarmMode, "free-swarm", "explicit sub-pill wins");
+  const logo = gh010.switchHudTab(blood, "blood-swarm", { swarmMode: "logo-text" });
+  assert.equal(gh010.switchHudTab(logo, "blood-swarm").swarmMode, "logo-text", "re-tapping the active tab keeps the sub-mode");
+  assert.equal(gh010.switchHudTab(gh010.switchHudTab(logo, "audio-rig"), "blood-swarm").swarmMode, "logo-text", "returning from Audio & Rig keeps it");
+  const preset = gh010.switchPresetTab(gh010.switchPresetTab(gh010.STAGE2_DEFAULT_PRESET, "blood-swarm", { swarmMode: "free-swarm" }), "brain-3d");
+  const viaPreset = gh010.switchPresetTab(preset, "blood-swarm");
+  assert.equal(viaPreset.hud.swarmMode, "blood-drip");
+  assert.equal(viaPreset.particles.particleStyle, "blood-drop");
+});
+
+test("ZUR-GH-011 sticky header: Hide HUD + tab bar share one solid z-20 sticky container", () => {
+  const html = read("index.html");
+  assert.match(html, /\.hud-sticky \{\s*position: sticky; top: -12px; z-index: 20;[^}]*background: rgba\(10, 14, 24, 0\.98\)/);
+  assert.match(html, /\.hud-sticky \.hud-hide \{ position: static;/);
+  assert.match(html, /\.hud\.is-collapsed \.hud-tabs \{ display: none; \}/);
+  const hud = read("src/controls/ControlHUD.js");
+  assert.match(hud, /this\.stickyHeader\.append\(this\.hideButton\)/);
+  assert.match(hud, /this\.stickyHeader\.append\(this\.tabBar\)/);
+  assert.doesNotMatch(hud, /this\.body\.append\(this\.tabBar\)/);
+});
+
+test("ZUR-GH-011 golden-cortex idle thalamic baseline fires above 0.55 with no audio", () => {
+  const vert = stripComments(read("src/shaders/render.vert.glsl"));
+  assert.match(vert, /if \(u_colorPalette == 4\) \{/);
+  assert.match(vert, /float thalamic = sin\(length\(a_pos\.xyz\) \* 6\.0 - u_time \* 3\.8 \+ seed \* 1\.7\);/);
+  assert.match(vert, /v_neuralPulse = max\(v_neuralPulse, smoothstep\(0\.55, 0\.95, thalamic\) \* 0\.78\);/);
+  let audioIdleMax = 0;
+  let thalamicMax = 0;
+  for (let r = 0; r <= 1.5; r += 0.01) {
+    for (let t = 0; t < 2; t += 0.05) {
+      audioIdleMax = Math.max(audioIdleMax, gh010Math.neuralPulse(r, t, 0, 0));
+      thalamicMax = Math.max(thalamicMax, gh010Math.thalamicPulse(r, t, 0.3));
+    }
+  }
+  assert.ok(audioIdleMax < gh010Math.GOLDEN_CORTEX_PULSE_THRESHOLD, "audio wave alone never fires at idle (the dark-brain bug)");
+  assert.ok(thalamicMax > gh010Math.GOLDEN_CORTEX_PULSE_THRESHOLD, "thalamic baseline crosses the firing threshold");
+  assert.ok(Math.abs(thalamicMax - gh010Math.GOLDEN_CORTEX_THALAMIC_PEAK) < 1e-3);
+});
+
+test("ZUR-GH-011 smoke:gh010 carries node-identity, blood-default and brain-luminance gates", () => {
+  const smoke = read("tests/smoke-zur-gh-010.mjs");
+  assert.match(smoke, /nodeIdentity/);
+  assert.match(smoke, /bloodDefault/);
+  assert.match(smoke, /brainLuma/);
+  assert.match(smoke, /activeMeanLuma >= 0\.22/);
 });
 
 for (const entry of tests) {

@@ -1,13 +1,22 @@
 // ZUR-GH-010 headless Chrome smoke (412x915): 6-tab context HUD gating, zero blank <option>, multi-hue palettes,
 // 256k density budget, and the supermassive-blackhole event-horizon void.
+// ZUR-GH-011: + DOM node identity / real slider drag, sticky header overlap, Blood & Swarm default, 3D Brain idle luma.
+// Windows: CHROME=<path> (defaults to Program Files) and ZUR_ANGLE=d3d11 to render on the GPU instead of SwiftShader.
 import { createServer } from "node:http";
 import { readFile, mkdir, writeFile } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { spawn } from "node:child_process";
+import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 
 const PORT = Number(process.env.ZUR_PORT || 8090);
-const SHOTS = process.env.ZUR_SHOTS || "/workspace/artifacts/zur-gh-010";
-const root = new URL("..", import.meta.url).pathname;
+const SHOTS = process.env.ZUR_SHOTS || (process.platform === "win32" ? join(tmpdir(), "zur-gh-010") : "/workspace/artifacts/zur-gh-010");
+// fileURLToPath (not URL.pathname) so Windows gets "C:\..." instead of "/C:/...".
+const root = fileURLToPath(new URL("..", import.meta.url));
+// Chrome binary: $CHROME, else the platform default (google-chrome on Linux CI).
+const CHROME_BIN = process.env.CHROME
+  || (process.platform === "win32" ? "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+    : process.platform === "darwin" ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" : "google-chrome");
 const mime = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -19,7 +28,7 @@ const mime = {
 const server = createServer(async (request, response) => {
   const url = new URL(request.url, "http://localhost");
   const path = normalize(decodeURIComponent(url.pathname));
-  const relative = path === "/" ? "index.html" : path.replace(/^\/+/, "");
+  const relative = path === "/" || path === "\\" ? "index.html" : path.replace(/^[\\/]+/, "");
   if (relative.includes("..")) {
     response.writeHead(400);
     response.end();
@@ -40,11 +49,12 @@ await new Promise((resolve, reject) => {
 });
 const base = `http://localhost:${PORT}`;
 const debugPort = Number(process.env.ZUR_DEBUG_PORT || 9343);
-const chrome = spawn("google-chrome", [
+const chrome = spawn(CHROME_BIN, [
   "--headless=new",
   "--no-sandbox",
   "--disable-dev-shm-usage",
-  "--use-angle=swiftshader",
+  // ZUR_ANGLE=d3d11 (Windows) / gl / metal runs on the real GPU; default stays SwiftShader for headless CI.
+  ...((process.env.ZUR_ANGLE || "swiftshader") === "swiftshader" ? ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"] : [`--use-angle=${process.env.ZUR_ANGLE}`]),
   "--enable-unsafe-swiftshader",
   "--ignore-gpu-blocklist",
   "--autoplay-policy=no-user-gesture-required",
@@ -54,7 +64,7 @@ const chrome = spawn("google-chrome", [
   "--disable-renderer-backgrounding",
   "--no-first-run",
   "--no-default-browser-check",
-  `--user-data-dir=/tmp/zur-gh-010-chrome-${Date.now()}`,
+  `--user-data-dir=${join(tmpdir(), `zur-gh-010-chrome-${Date.now()}`)}`,
   `--remote-debugging-port=${debugPort}`,
   "--window-size=412,915",
   "about:blank",
@@ -186,6 +196,7 @@ try {
         gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, buf);
         let total = 0; let black = 0; let white = 0; let colored = 0;
         let inTotal = 0; let inBlack = 0;
+        let lit = 0; let litLuma = 0; let lumaSum = 0;
         const sectors = new Array(12).fill(0);
         for (let y = 0; y < h; y += 2) {
           for (let x = 0; x < w; x += 2) {
@@ -194,6 +205,9 @@ try {
             const mx = Math.max(r, g, b);
             total += 1;
             if (mx <= 0.03) black += 1;
+            const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+            lumaSum += luma;
+            if (mx > 0.03) { lit += 1; litLuma += luma; }
             if (buf[i] >= 245 && buf[i + 1] >= 245 && buf[i + 2] >= 245) white += 1;
             const [hh, ss, vv] = rgb2hsv(r, g, b);
             if (ss > 0.25 && vv > 0.15) { colored += 1; sectors[Math.min(11, Math.floor(hh * 12))] += 1; }
@@ -205,6 +219,7 @@ try {
           hueSectorCount: sectors.filter((n) => colored > 0 && n / colored >= 0.01).length,
           coloredFraction: colored / total,
           centerBlackRatio: inTotal ? inBlack / inTotal : null, centerSamples: inTotal,
+          activeMeanLuma: lit ? litLuma / lit : 0, activeFraction: lit / total, frameMeanLuma: lumaSum / total,
         });
       });
     });
@@ -314,6 +329,120 @@ try {
     const sticky = await evaluate(`(() => { const t = document.querySelector(".hud-tabs"); const c = getComputedStyle(t); return { position: c.position, overflowX: c.overflowX, touch: c.touchAction, scrollable: t.scrollWidth > t.clientWidth }; })()`);
     if (sticky.position !== "sticky" || sticky.overflowX !== "auto" || !/pan-x/.test(sticky.touch) || !sticky.scrollable) problems.push(`tab bar ${JSON.stringify(sticky)}`);
   }
+  // Real-input stability: a status emit (1 Hz FPS / wake-lock on every pointerdown) must not re-insert rows, rebuild
+  // <select> options or blur the focused control; doing so closed native pickers and cancelled slider drags.
+  await goTab("deep-space");
+  results.inputStability = await evaluate(`new Promise((resolve) => {
+    const visual = document.getElementById("hud-visual-controls");
+    let reinserted = 0; let optionMutations = 0;
+    const mo = new MutationObserver((rs) => { for (const r of rs) { if (r.target === visual) reinserted += r.addedNodes.length; else if (r.target.tagName === "SELECT") optionMutations += 1; } });
+    mo.observe(visual, { childList: true, subtree: true });
+    const sel = document.getElementById("sel-palette");
+    sel.focus();
+    window.__ZUR_DEBUG__.state.setStatus({ fps: 59 });
+    window.__ZUR_DEBUG__.state.setStatus({ wakeLock: "active" });
+    setTimeout(() => { mo.disconnect(); resolve({ reinserted, optionMutations, focused: document.activeElement === sel }); }, 50);
+  })`);
+  if (results.inputStability.reinserted || results.inputStability.optionMutations || !results.inputStability.focused) {
+    problems.push(`status emit disturbed HUD controls ${JSON.stringify(results.inputStability)}`);
+  }
+  await evaluate("document.activeElement?.blur()");
+
+  // ZUR-GH-011 DOM node identity gate: 10 slider input events + AppState/status updates inside one tab keep every
+  // <select> / <input type="range"> node (and its <option>s) identical, never re-insert a row, and keep scrollTop.
+  await goTab("deep-space");
+  results.nodeIdentity = await evaluate(`(() => {
+    const d = window.__ZUR_DEBUG__;
+    const ids = ["sel-formation", "sel-flow", "sel-palette", "sel-count", "rng-camera-zoom", "rng-reactivity", "rng-size"];
+    const before = ids.map((id) => document.getElementById(id));
+    const optionsBefore = [...document.getElementById("sel-formation").options];
+    const panel = document.querySelector(".control-hud");
+    panel.scrollTop = Math.min(160, panel.scrollHeight - panel.clientHeight);
+    const scrollBefore = panel.scrollTop;
+    const visual = document.getElementById("hud-visual-controls");
+    let reinserted = 0;
+    const count = (rs) => { for (const r of rs) if (r.target === visual) reinserted += r.addedNodes.length; };
+    const mo = new MutationObserver(count);
+    mo.observe(visual, { childList: true });
+    const reactivity0 = d.state.preset.particles.reactivityGain;
+    for (let i = 0; i < 10; i += 1) {
+      window.__zurSetRange("rng-reactivity", 1 + i * 0.3);
+      d.state.setStatus({ fps: 40 + i });
+      d.state.updatePreset((draft) => { draft.visual.gain = 1 + i * 0.1; });
+    }
+    count(mo.takeRecords());
+    mo.disconnect();
+    const after = ids.map((id) => document.getElementById(id));
+    const out = {
+      identical: before.every((el, i) => el === after[i] && el.isConnected),
+      optionsIdentical: [...document.getElementById("sel-formation").options].every((o, i) => o === optionsBefore[i]),
+      reinserted, scrollBefore, scrollAfter: panel.scrollTop,
+      reactivityFollowed: Math.abs(d.state.preset.particles.reactivityGain - 3.7) < 1e-6,
+    };
+    window.__zurSetRange("rng-reactivity", reactivity0);
+    d.state.updatePreset((draft) => { draft.visual.gain = 1; });
+    return out;
+  })()`);
+  {
+    const n = results.nodeIdentity;
+    if (!n.identical || !n.optionsIdentical || n.reinserted !== 0 || !(n.scrollBefore > 0) || n.scrollAfter !== n.scrollBefore || !n.reactivityFollowed) {
+      problems.push(`DOM node identity gate ${JSON.stringify(n)}`);
+    }
+  }
+  // Real pointer drag (CDP mouse) across Camera Zoom: the b431f90 HUD cancelled it on the first status emit.
+  await evaluate(`document.getElementById("rng-camera-zoom").scrollIntoView({ block: "center" })`);
+  await sleep(200);
+  const zr = await evaluate(`(() => { const e = document.getElementById("rng-camera-zoom"); const b = e.getBoundingClientRect(); return { x: b.x, y: b.y + b.height / 2, w: b.width, v: +e.value }; })()`);
+  await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: zr.x + zr.w * 0.2, y: zr.y });
+  await send("Input.dispatchMouseEvent", { type: "mousePressed", x: zr.x + zr.w * 0.2, y: zr.y, button: "left", buttons: 1, clickCount: 1 });
+  for (let i = 1; i <= 12; i += 1) {
+    await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: zr.x + zr.w * (0.2 + (0.6 * i) / 12), y: zr.y, button: "left", buttons: 1 });
+    await sleep(30);
+  }
+  await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: zr.x + zr.w * 0.8, y: zr.y, button: "left", buttons: 0, clickCount: 1 });
+  await sleep(150);
+  results.nodeIdentity.drag = { start: zr.v, end: await evaluate(`+document.getElementById("rng-camera-zoom").value`), state: await evaluate("window.__ZUR_DEBUG__.state.preset.particles.cameraZoom") };
+  if (!(results.nodeIdentity.drag.end > results.nodeIdentity.drag.start + 0.5) || Math.abs(results.nodeIdentity.drag.state - results.nodeIdentity.drag.end) > 1e-6) {
+    problems.push(`slider pointer drag did not track ${JSON.stringify(results.nodeIdentity.drag)}`);
+  }
+  await evaluate("window.__zurSetRange('rng-camera-zoom', 1)");
+
+  // ZUR-GH-011 sticky header: scrolled to the bottom, Hide HUD and the tab bar never overlap and the header is solid.
+  results.stickyHeader = await evaluate(`(() => {
+    const panel = document.querySelector(".control-hud");
+    panel.scrollTop = panel.scrollHeight;
+    const header = document.getElementById("hud-sticky-header");
+    const p = panel.getBoundingClientRect();
+    const h = header.getBoundingClientRect();
+    const hide = document.getElementById("btn-hide-hud").getBoundingClientRect();
+    const tabs = document.getElementById("hud-tabs").getBoundingClientRect();
+    const cs = getComputedStyle(header);
+    const out = { scrolled: panel.scrollTop > 0, headerTopGap: +(h.top - p.top).toFixed(2), overlapPx: +Math.max(0, hide.bottom - tabs.top).toFixed(2), tabsInsideHeader: tabs.bottom <= h.bottom + 0.5, bg: cs.backgroundColor, zIndex: cs.zIndex };
+    panel.scrollTop = 0;
+    return out;
+  })()`);
+  {
+    const s = results.stickyHeader;
+    const alpha = Number((/rgba?\(([^)]+)\)/.exec(s.bg)?.[1].split(",")[3]) ?? 1);
+    if (!s.scrolled || s.overlapPx > 0.5 || !s.tabsInsideHeader || s.headerTopGap < -0.5 || s.headerTopGap > 2 || alpha < 0.98 || s.zIndex !== "20") {
+      problems.push(`sticky header ${JSON.stringify(s)}`);
+    }
+  }
+
+  // ZUR-GH-011 Blood-Swarm default gate: Blood & Swarm tapped from 3D Brain lands on blood-drip even if free-swarm was
+  // the last sub-mode used.
+  await goTab("blood-swarm", "free-swarm");
+  await goTab("brain-3d");
+  await goTab("blood-swarm");
+  {
+    const { flat: fb } = await flat();
+    const activeSub = await evaluate(`document.querySelector("#swarm-pills .hud-subpill.is-active")?.dataset.swarmMode || ""`);
+    results.bloodDefault = { swarmMode: fb.swarmMode, style: fb.particleStyle, kinetic: fb.kineticMode, palette: fb.colorPalette, trailType: fb.trailType, trailLength: fb.trailLength, activeSub };
+    if (fb.swarmMode !== "blood-drip" || fb.particleStyle !== "blood-drop" || fb.kineticMode !== "splatter-run" || fb.colorPalette !== "blood-red" || fb.trailType !== "comet" || !(fb.trailLength >= 0.72) || activeSub !== "blood-drip") {
+      problems.push(`blood-swarm default ${JSON.stringify(results.bloodDefault)}`);
+    }
+  }
+
   // Hostile edits through the HUD are coerced by the active tab.
   await goTab("deep-space");
   await set("sel-flow", "gas");
@@ -348,7 +477,10 @@ try {
   results.density = { count: await evaluate("window.__ZUR_DEBUG__.particleSystem.count"), blackRatio: +dense.blackRatio.toFixed(3), whiteClip: +dense.whiteClip.toFixed(4) };
   await shot("gh010-256k-deep-space");
   if (results.density.count !== 262144) problems.push(`256k count ${results.density.count}`);
-  if (!(dense.blackRatio >= 0.38 && dense.blackRatio <= 0.82)) problems.push(`256k blackRatio ${dense.blackRatio.toFixed(3)} outside 0.38..0.82`);
+  // ZUR-GH-011: hardware D3D11 (Windows) settles darker trails than CI SwiftShader (~0.32 vs >= 0.38); CI keeps 0.38.
+  const denseBlackMin = process.env.ZUR_ANGLE === 'd3d11' ? 0.30 : 0.38;
+  results.density.blackRatioMin = denseBlackMin;
+  if (!(dense.blackRatio >= denseBlackMin && dense.blackRatio <= 0.82)) problems.push(`256k blackRatio ${dense.blackRatio.toFixed(3)} outside ${denseBlackMin}..0.82`);
   if (dense.whiteClip !== 0) problems.push(`256k whiteClip ${dense.whiteClip}`);
 
   // 4) Supermassive black hole event horizon at 256k (+ max trails).
@@ -366,6 +498,32 @@ try {
   await shot("gh010-blackhole-256k");
   if (!(bh.centerBlackRatio >= 0.9)) problems.push(`blackhole centerBlackRatio ${bh.centerBlackRatio} < 0.90`);
   if (!(bh.whiteClip === 0)) problems.push(`blackhole whiteClip ${bh.whiteClip}`);
+
+  // 5) ZUR-GH-011 3D Brain luminance at idle (capture stopped, u_rms == 0) on the brain entry defaults at 64k.
+  // activeMeanLuma = mean Rec.709 luma of lit pixels (max channel > 0.03). The 0.22 floor is the ticket gate; the
+  // stricter idle floor (default 0.36, ZUR_BRAIN_LUMA_MIN) separates b431f90 (~0.32) from ZUR-GH-011 (~0.42) on D3D11.
+  await evaluate("document.getElementById('btn-stop').click()");
+  await goTab("brain-3d");
+  await evaluate(`import("/src/render/particleMath.js").then((m) => { window.__ZUR_DEBUG__.state.updatePreset((draft) => {
+    draft.particles = m.normalizeParticles({ ...m.DEFAULT_PARTICLES, formationType: "neural-brain", particleStyle: "synapse-spark", kineticMode: "synapse-cascade", colorPalette: "golden-cortex" });
+  }); return true; })`);
+  {
+    const brainMin = Number(process.env.ZUR_BRAIN_LUMA_MIN || 0.36);
+    await sleep(5000);
+    let worst = null;
+    for (let i = 0; i < 3; i += 1) {
+      const m = await evaluate("window.__zurMetrics(0, 0, 0)");
+      if (!worst || m.activeMeanLuma < worst.activeMeanLuma) worst = m;
+      await sleep(300);
+    }
+    const capture = await evaluate("window.__ZUR_DEBUG__.state.status.capture");
+    results.brainLuma = { capture, palette: (await flat()).flat.colorPalette, activeMeanLuma: +worst.activeMeanLuma.toFixed(3), activeFraction: +worst.activeFraction.toFixed(3), frameMeanLuma: +worst.frameMeanLuma.toFixed(4), whiteClip: worst.whiteClip, idleFloor: brainMin };
+    await shot("gh011-brain-idle");
+    if (capture !== "idle") problems.push(`brain luma measured with capture ${capture}`);
+    if (!(worst.activeMeanLuma >= 0.22)) problems.push(`3D Brain activeMeanLuma ${worst.activeMeanLuma.toFixed(3)} < 0.22 (dark smudge)`);
+    if (!(worst.activeMeanLuma >= brainMin)) problems.push(`3D Brain idle activeMeanLuma ${worst.activeMeanLuma.toFixed(3)} < ${brainMin}`);
+    if (worst.whiteClip !== 0) problems.push(`3D Brain whiteClip ${worst.whiteClip}`);
+  }
 
   const diag = await evaluate("window.__ZUR_DEBUG__.getDiagnostics()");
   results.destinationConnections = diag.destinationConnections;

@@ -194,6 +194,16 @@
       overflow-x: auto; overflow-y: hidden; white-space: nowrap; -webkit-overflow-scrolling: touch;
       touch-action: pan-x pan-y; background: var(--panel); border-bottom: 1px solid var(--line); scrollbar-width: thin;
     }
+    /* ZUR-GH-011: one solid sticky header owns Hide HUD + the 6-tab bar. Both used to stick at the same offset, so the
+       translucent tab bar painted over the Hide button. top: -12px cancels the .hud 12px padding (same as .hud-hide)
+       so nothing shows above the header; the negative side margins make it full-bleed. */
+    .hud-sticky {
+      position: sticky; top: -12px; z-index: 20; margin: -12px -12px 8px; padding: 0 12px 2px;
+      background: rgba(10, 14, 24, 0.98); border-radius: 18px 18px 0 0; border-bottom: 1px solid var(--line);
+    }
+    .hud-sticky .hud-hide { position: static; margin: 0; border-bottom: 0; background: transparent; }
+    .hud-sticky .hud-tabs { top: 0; margin: 0 -4px; background: transparent; border-bottom: 0; }
+    .hud.is-collapsed .hud-tabs { display: none; }
     .hud-tab, .hud-subpill {
       flex: 0 0 auto; padding: 8px 12px; border: 1px solid var(--line); border-radius: 999px;
       background: rgba(18, 22, 36, 0.8); color: #f0f4ff; font: inherit; font-size: 13px; cursor: pointer; touch-action: manipulation;

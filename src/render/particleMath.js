@@ -834,7 +834,23 @@ export function insideBlackHoleVoid([x, y, z]) {
 }
 
 /** Golden Cortex palette (ZUR-GH-010): 80% translucent cortical gold soma / 20% cyan-white axon tracts + firing waves. */
+/** ZUR-GH-011: resting soma alpha floor (was 0.26), applied before the density norm so idle brains are not muddy. */
+export const GOLDEN_CORTEX_SOMA_ALPHA = 0.52;
+/** ZUR-GH-011: metallic gold soma radiance (#FFD700 -> #FFA800). */
+export const GOLDEN_CORTEX_SOMA_RADIANCE = 1.85;
+/** ZUR-GH-011: electric cyan-white (#00FFFF -> #FFFFFF) axon flash boost (was 2.8). */
+export const GOLDEN_CORTEX_PULSE_BOOST = 3.2;
+/** ZUR-GH-011: peak of the idle thalamic rhythm; above GOLDEN_CORTEX_PULSE_THRESHOLD so the cortex fires at u_rms == 0. */
+export const GOLDEN_CORTEX_THALAMIC_PEAK = 0.78;
+
+/** render.vert.glsl thalamic baseline mirror: slow radial sweep that keeps golden-cortex firing with no audio. */
+export function thalamicPulse(radius, time, seed) {
+  const sweep = Math.sin(radius * 6 - time * 3.8 + seed * 1.7);
+  const t = Math.min(1, Math.max(0, (sweep - 0.55) / (0.95 - 0.55)));
+  return t * t * (3 - 2 * t) * GOLDEN_CORTEX_THALAMIC_PEAK;
+}
+
 export const GOLDEN_CORTEX_SOMA_FRACTION = 0.8;
-export const GOLDEN_CORTEX_SOMA_ALPHA = 0.26;
+/** Golden Cortex split + firing threshold (ZUR-GH-010, unchanged by ZUR-GH-011). */
 export const GOLDEN_CORTEX_PULSE_THRESHOLD = 0.55;
-export const GOLDEN_CORTEX_PULSE_BOOST = 2.8;
+// GOLDEN_CORTEX_PULSE_BOOST / GOLDEN_CORTEX_SOMA_ALPHA above supersede the ZUR-GH-010 2.8 / 0.26 values.

@@ -64,7 +64,17 @@ export class ControlHUD {
     this.controls = {};
     this.frameTick = 0;
     this._build();
-    this.state.subscribe(() => this.sync());
+    // Status emits (FPS once a second, wake-lock on every pointerdown, capture) only touch the header pills and the
+    // capture prompt. Rebuilding the visual controls on them detached the select / slider the user was touching.
+    this.state.subscribe((type) => (type === "status" ? this.syncStatus() : this.sync()));
+    // ZUR-GH-011: end of a slider drag (anywhere, incl. a cancelled touch) releases the guard and re-syncs once.
+    const endDrag = () => {
+      if (!this._dragInput) return;
+      this._dragInput = null;
+      this.sync();
+    };
+    globalThis.addEventListener?.("pointerup", endDrag, true);
+    globalThis.addEventListener?.("pointercancel", endDrag, true);
     this.root.addEventListener("pointerdown", (event) => {
       if (!event.target.closest("#btn-vj-autopilot")) this.handlers.manualTouch?.();
     }, { passive: true });
@@ -84,7 +94,11 @@ export class ControlHUD {
     this.hideButton.type = "button";
     this.hideButton.id = "btn-hide-hud";
     this.hideButton.addEventListener("click", () => this.setHidden(true));
-    panel.append(this.hideButton);
+    // ZUR-GH-011: Hide HUD + the 6-tab bar share one solid sticky header, so they can never overlap while scrolling.
+    this.stickyHeader = el("div", "hud-sticky");
+    this.stickyHeader.id = "hud-sticky-header";
+    this.stickyHeader.append(this.hideButton);
+    panel.append(this.stickyHeader);
 
     const header = el("div", "hud-header");
     this.toggleButton = el("button", "hud-toggle", "ZUR");
@@ -147,7 +161,7 @@ export class ControlHUD {
       this.tabButtons[tab] = button;
       this.tabBar.append(button);
     }
-    this.body.append(this.tabBar);
+    this.stickyHeader.append(this.tabBar);
 
     this.swarmPills = this._pillGroup("swarm-pills", "swarmMode", SWARM_MODES, SWARM_MODE_LABELS, (mode) => {
       this._switch("blood-swarm", { swarmMode: mode });
@@ -422,6 +436,8 @@ export class ControlHUD {
     select.id = id;
     fillSelect(select, options);
     select.addEventListener("change", () => onChange(select.value));
+    // ZUR-GH-011: values skipped while the picker was open (focus guard) are reconciled once it closes.
+    select.addEventListener("blur", () => this.sync());
     wrap.append(span, select);
     return { wrap, select };
   }
@@ -438,6 +454,8 @@ export class ControlHUD {
     input.min = String(min);
     input.max = String(max);
     input.step = String(step);
+    // ZUR-GH-011: guard this slider against state echoes while the finger / mouse is down on it.
+    input.addEventListener("pointerdown", () => { this._dragInput = input; });
     input.addEventListener("input", () => {
       value.textContent = input.value;
       onInput(Number(input.value));
@@ -535,8 +553,56 @@ export class ControlHUD {
   }
 
   _setSlider(control, value, text) {
-    control.input.value = String(value);
-    control.value.textContent = text;
+    // ZUR-GH-011: a slider under an active pointer drag is never overwritten from state (its own input events already
+    // drive state); the pointer-release handler re-syncs it once.
+    if (control.input === this._dragInput) return;
+    // Only write when the value really changed so an in-progress drag is never fought by its own echo.
+    if (Number(control.input.value) !== Number(value)) control.input.value = String(value);
+    if (control.value.textContent !== text) control.value.textContent = text;
+  }
+
+  /**
+   * ZUR-GH-010 fix: idempotent DOM writes. Rows are only re-ordered when the layout key changes, a <select> is only
+   * rebuilt when its option list changes, and values are only assigned when they differ. Moving or rebuilding the
+   * focused control (as every sync() used to do) blurs it, closes the native picker and cancels slider drags.
+   */
+  _applyLayout(key, layout) {
+    if (this._layoutKey === key) return;
+    this._layoutKey = key;
+    for (const [name, label, extras] of layout) {
+      const control = this.controls[name];
+      if (!control) continue;
+      if (control.labelEl && control.labelEl.textContent !== label) control.labelEl.textContent = label;
+      if (control.input && control.input.type === "range") {
+        const fallback = name === "trailLength" ? TRAIL_LENGTH_RANGE : null;
+        const min = String(extras?.min ?? (fallback ? fallback[0] : control.input.min));
+        const max = String(extras?.max ?? (fallback ? fallback[1] : control.input.max));
+        if (control.input.min !== min) control.input.min = min;
+        if (control.input.max !== max) control.input.max = max;
+      }
+      this.visual.append(control.wrap);
+    }
+  }
+
+  _syncSelect(control, options, value) {
+    const signature = JSON.stringify(options);
+    if (control.optionsSignature !== signature && document.activeElement !== control.select) {
+      fillSelect(control.select, options);
+      control.optionsSignature = signature;
+    }
+    this._setSelectValue(control.select, value);
+  }
+
+  /**
+   * ZUR-GH-011: never assign into a focused <select> (on Android Chrome that closes the open native picker); the blur
+   * handler re-syncs it once the picker is dismissed.
+   */
+  _setSelectValue(select, value) {
+    if (select.value !== value && document.activeElement !== select) select.value = value;
+  }
+
+  _setHidden(node, hidden) {
+    if (node.hidden !== hidden) node.hidden = hidden;
   }
 
   sync() {
@@ -552,46 +618,38 @@ export class ControlHUD {
 
     for (const tab of HUD_TABS) {
       const active = tab === flat.hudTab;
-      this.tabButtons[tab].setAttribute("aria-selected", String(active));
+      if (this.tabButtons[tab].getAttribute("aria-selected") !== String(active)) this.tabButtons[tab].setAttribute("aria-selected", String(active));
       this.tabButtons[tab].classList.toggle("is-active", active);
     }
     const swarmShown = flat.hudTab === "blood-swarm" || (onRig && flat.visualTab === "blood-swarm");
     const shaderShown = flat.hudTab === "canyon-pulse" || (onRig && flat.visualTab === "canyon-pulse");
-    this.swarmPills.group.hidden = !(flat.hudTab === "blood-swarm");
-    this.shaderPills.group.hidden = !(flat.hudTab === "canyon-pulse");
+    this._setHidden(this.swarmPills.group, !(flat.hudTab === "blood-swarm"));
+    this._setHidden(this.shaderPills.group, !(flat.hudTab === "canyon-pulse"));
     for (const mode of SWARM_MODES) this.swarmPills.buttons[mode].classList.toggle("is-active", swarmShown && mode === flat.swarmMode);
     for (const scene of SHADER_SCENES) this.shaderPills.buttons[scene].classList.toggle("is-active", shaderShown && scene === flat.shaderScene);
-    this.visual.hidden = onRig;
-    this.rig.hidden = !onRig;
-    this.visual.dataset.layout = key;
-    this.rig.dataset.tab = flat.hudTab;
+    if (this.visual.hidden !== onRig) this.visual.hidden = onRig;
+    this._setHidden(this.rig, !onRig);
+    if (this.visual.dataset.layout !== key) this.visual.dataset.layout = key;
+    if (this.rig.dataset.tab !== flat.hudTab) this.rig.dataset.tab = flat.hudTab;
 
-    // Visibility + order + per-tab labels / options.
+    // Order, labels and slider bounds change only with the layout key; visibility, options and values are diffed.
+    // ZUR-GH-011: the control list is only re-laid-out when the structural key (tab | swarm sub-mode | shader scene)
+    // changes; every other update patches the existing <select> / range / button nodes in place and keeps scrollTop.
+    const structuralKey = `${flat.hudTab}|${flat.swarmMode}|${flat.shaderScene}`;
+    const previousLayout = this._layoutKey;
+    const scrollTop = this.panel ? this.panel.scrollTop : 0;
+    this._applyLayout(structuralKey, layout);
+    if (previousLayout !== this._layoutKey && this.panel && this.panel.scrollTop !== scrollTop) this.panel.scrollTop = scrollTop;
     const shown = new Set();
-    for (const [name, label, extras] of layout) {
+    for (const [name] of layout) {
       const control = this.controls[name];
       if (!control) continue;
       shown.add(name);
-      control.wrap.hidden = onRig ? true : false;
-      if (control.labelEl) control.labelEl.textContent = label;
-      if (control.select) {
-        const current = this._valueFor(name, flat);
-        fillSelect(control.select, optionsFor(name, key));
-        control.select.value = current;
-      }
-      if (extras && control.input) {
-        control.input.min = String(extras.min ?? control.input.min);
-        control.input.max = String(extras.max ?? control.input.max);
-      }
-      this.visual.append(control.wrap);
+      this._setHidden(control.wrap, onRig);
+      if (control.select) this._syncSelect(control, optionsFor(name, key), this._valueFor(name, flat));
     }
     for (const [name, control] of Object.entries(this.controls)) {
-      if (!shown.has(name)) control.wrap.hidden = true;
-    }
-    const trailLayout = layout.find(([name]) => name === "trailLength");
-    if (!trailLayout?.[2] && this.controls.trailLength) {
-      this.controls.trailLength.input.min = String(TRAIL_LENGTH_RANGE[0]);
-      this.controls.trailLength.input.max = String(TRAIL_LENGTH_RANGE[1]);
+      if (!shown.has(name)) this._setHidden(control.wrap, true);
     }
 
     this._setSlider(this.controls.zoom, flat.cameraZoom, `${Number(flat.cameraZoom).toFixed(2)}×`);
@@ -603,23 +661,30 @@ export class ControlHUD {
     this._setSlider(this.controls.hueShift, flat.hueShift, Number(flat.hueShift).toFixed(2));
     this._setSlider(this.controls.chromatic, flat.chromaticAberration, Number(flat.chromaticAberration).toFixed(2));
     this._setSlider(this.controls.godRays, flat.godRays, Number(flat.godRays).toFixed(2));
-    this.controls.kaleidoSpin.input.checked = flat.kaleidoSpin;
+    if (this.controls.kaleidoSpin.input.checked !== flat.kaleidoSpin) this.controls.kaleidoSpin.input.checked = flat.kaleidoSpin;
 
-    this.suppress.input.checked = audio.suppressLocalAudio;
-    this.systemAudio.select.value = audio.includeSystemAudio ? "include" : "exclude";
+    if (this.suppress.input.checked !== audio.suppressLocalAudio) this.suppress.input.checked = audio.suppressLocalAudio;
+    const systemAudio = audio.includeSystemAudio ? "include" : "exclude";
+    this._setSelectValue(this.systemAudio.select, systemAudio);
     this._setSlider(this.preamp, audio.preAmpGain, `${Number(audio.preAmpGain).toFixed(1)}×`);
     const gate = audio.noiseGateThreshold ?? 0.015;
     this._setSlider(this.gate, gate, Number(gate).toFixed(3));
     this._setSlider(this.gain, visual.gain ?? 1, Number(visual.gain ?? 1).toFixed(1));
-    this.fft.select.value = String(audio.fftSize || 2048);
-    this.tier.select.value = visual.qualityTier || "safe";
-    this.density.input.checked = flat.densityAutoScale;
-
-    const captureIdle = (this.state.status.capture || "idle") === "idle";
-    this.audioPrompt.classList.toggle("is-idle", captureIdle);
-    this.audioPrompt.hidden = !captureIdle;
+    const fft = String(audio.fftSize || 2048);
+    this._setSelectValue(this.fft.select, fft);
+    const tier = visual.qualityTier || "safe";
+    this._setSelectValue(this.tier.select, tier);
+    if (this.density.input.checked !== flat.densityAutoScale) this.density.input.checked = flat.densityAutoScale;
     this.autopilot.setAttribute("aria-pressed", String(Boolean(visual.vjAutopilot)));
     this.autopilot.dataset.state = visual.vjAutopilot ? "active" : "off";
+    this.syncStatus();
+  }
+
+  /** Header pills + capture prompt only; safe to run on every status emit. */
+  syncStatus() {
+    const captureIdle = (this.state.status.capture || "idle") === "idle";
+    this.audioPrompt.classList.toggle("is-idle", captureIdle);
+    this._setHidden(this.audioPrompt, !captureIdle);
     this._setPill(this.pills.wakeLock, this.state.status.wakeLock, `Wake ${this.state.status.wakeLock}`);
     this._setPill(this.pills.capture, this.state.status.capture, `Capture ${this.state.status.capture}`);
     this._setPill(this.pills.webgl, this.state.status.webgl, this.state.status.webgl === "webgl2" ? "WebGL2" : `WebGL ${this.state.status.webgl}`);
@@ -644,7 +709,7 @@ export class ControlHUD {
   }
 
   _setPill(node, state, text) {
-    node.dataset.state = state || "off";
-    node.textContent = text;
+    if (node.dataset.state !== (state || "off")) node.dataset.state = state || "off";
+    if (node.textContent !== text) node.textContent = text;
   }
 }

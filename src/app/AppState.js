@@ -374,11 +374,23 @@ export function layoutKeyFor(flat) {
   return tab;
 }
 
+/**
+ * ZUR-GH-011: entering Blood & Swarm from another tab always lands on Blood Splatter & Wall-Run (blood-drip); only an
+ * explicit sub-pill tap picks logo-text / free-swarm. Coming back from Audio & Rig to the tab it was driving keeps the
+ * sub-mode that was live, and re-tapping the active tab keeps the current sub-mode.
+ */
+function entrySwarmMode(prev, tab) {
+  if (tab !== "blood-swarm") return prev.swarmMode;
+  if (prev.hudTab === "blood-swarm") return prev.swarmMode;
+  if (prev.hudTab === "audio-rig" && prev.visualTab === "blood-swarm") return prev.swarmMode;
+  return "blood-drip";
+}
+
 /** Pure tab switch: applies the entry defaults of the new tab / sub-mode, then constrains. */
 export function switchHudTab(state, hudTab, { swarmMode, shaderScene } = {}) {
   const prev = enforceTabConstraints(state);
   const tab = pick(hudTab, HUD_TABS, prev.hudTab);
-  const mode = swarmMode ? pick(swarmMode, SWARM_MODES, prev.swarmMode) : prev.swarmMode;
+  const mode = swarmMode ? pick(swarmMode, SWARM_MODES, prev.swarmMode) : entrySwarmMode(prev, tab);
   const scene = shaderScene ? pick(shaderScene, SHADER_SCENES, prev.shaderScene) : prev.shaderScene;
   const next = { ...prev, hudTab: tab, swarmMode: mode, shaderScene: scene };
   const changed = tab !== prev.hudTab || (tab === "blood-swarm" && mode !== prev.swarmMode);
@@ -490,12 +502,12 @@ function isObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-/** Stage 5.1 persisted state: `{ storageSchema, preset }` under this key. Older keys are migrated on load. */
-export const STORAGE_KEY = "zur_state_v5_1";
-export const STORAGE_SCHEMA = 5.1;
+/** Stage 5.2 persisted state (ZUR-GH-011): `{ storageSchema, preset }` under this key. Older keys are migrated on load. */
+export const STORAGE_KEY = "zur_state_v5_2";
+export const STORAGE_SCHEMA = 5.2;
 export const V4_NEON_FLAG = "zur_v4_neon_forced";
 export const LEGACY_STORAGE_KEYS = Object.freeze([
-  "zur_state_v5_0", "zur_state_v4_0", "zur_state_v3_2", "zur_state_v3", "zur_state_v2", "zur_state_v1", "zur.preset.v2", "zur.preset.v1",
+  "zur_state_v5_1", "zur_state_v5_0", "zur_state_v4_0", "zur_state_v3_2", "zur_state_v3", "zur_state_v2", "zur_state_v1", "zur.preset.v2", "zur.preset.v1",
 ]);
 /** Forced on any cached state older than v3.2 or still on copper-teal (grey-prone, small, dim). */
 export const V3_2_UPGRADE_DEFAULTS = Object.freeze({

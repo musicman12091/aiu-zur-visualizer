@@ -57,11 +57,15 @@ function loadStoredPreset() {
 function loadInitialPreset() {
   const base = JSON.parse(JSON.stringify(loadStoredPreset()));
   base.particles = normalizeParticles(base.particles);
-  const decoded = decodePresetParam(new URLSearchParams(location.search).get("preset"));
+  const param = new URLSearchParams(location.search).get("preset");
+  const decoded = decodePresetParam(param);
+  // persist() rewrites ?preset= on every change, so a plain reload carries our own stored state: keep its HUD tab
+  // (incl. audio-rig / swarm sub-mode). Only a foreign or shared link re-infers the tab from its scene + particles.
+  const ownUrl = Boolean(param) && param === encodePresetParam(base.sceneId, base.particles);
   if (decoded) {
     if (decoded.sceneId) base.sceneId = decoded.sceneId;
     base.particles = normalizeParticles({ ...base.particles, ...decoded.particles });
-    delete base.hud;
+    if (!ownUrl) delete base.hud;
   }
   const result = validatePreset(decoded ? upgradeToV51(base) : base);
   return result.ok ? result.preset : STAGE2_DEFAULT_PRESET;

@@ -42,6 +42,11 @@ uniform float u_spectralCentroid;
 out vec4 fragColor;
 
 const float RADIANCE_BUDGET = 1.6;
+// ZUR-GH-011 golden-cortex: resting soma alpha floor (was 0.26, applied before the density norm), metallic gold soma
+// radiance, and the cyan-white axon flash boost (was 2.8). Mirrored in particleMath.js GOLDEN_CORTEX_*.
+const float CORTEX_SOMA_ALPHA = 0.52;
+const float CORTEX_SOMA_RADIANCE = 1.85;
+const float CORTEX_PULSE_BOOST = 3.2;
 
 // Hex constants below are converted to linear light (the rest of the pipeline is linear before the tone map).
 vec3 hsv2rgb(vec3 c) {
@@ -58,12 +63,13 @@ vec3 palettePick(float rim) {
     return hsv2rgb(vec3(v_hue, 0.95, 1.0));
   }
   if (u_colorPalette == 4) {
-    // golden-cortex: 80% translucent cortical soma Cortical Gold #FFD700 -> #FF9900; 20% white-matter axon tracts and
-    // firing waves (v_neuralPulse > 0.55) in Electric Cyan-White #00FFFF -> #FFFFFF with a 2.8x radiance boost
-    // (the boost is routed through the trail-energy / crowd guards in main(), whiteClip stays 0).
+    // golden-cortex: 80% cortical soma in vivid metallic gold #FFD700 -> #FFA800 (x1.85 radiance, ZUR-GH-011); 20%
+    // white-matter axon tracts and firing waves (v_neuralPulse > 0.55) in Electric Cyan-White #00FFFF -> #FFFFFF with a 3.2x
+    // radiance boost (the boost is routed through the trail-energy / crowd guards in main(), whiteClip stays 0).
     if (v_neuralPulse > 0.55) return mix(vec3(0.0, 1.0, 1.0), vec3(1.0), clamp(v_neuralPulse - 0.55, 0.0, 1.0) * 1.2);
     if (v_axon > 0.5) return mix(vec3(0.0, 1.0, 1.0), vec3(0.6867, 0.8388, 1.0), 0.45 + 0.4 * fract(v_seed * 3.1));
-    return mix(vec3(1.0, 0.6795, 0.0), vec3(1.0, 0.3185, 0.0), fract(v_seed * 5.0));
+    // #FFD700 = (1.0, 0.6795, 0.0) linear, #FFA800 = (1.0, 0.3916, 0.0) linear.
+    return mix(vec3(1.0, 0.6795, 0.0), vec3(1.0, 0.3916, 0.0), fract(v_seed * 5.0)) * CORTEX_SOMA_RADIANCE;
   }
   if (u_colorPalette == 2) {
     // white-static: #FFFFFF core, #D8ECFF rim; flicker is a mild gate so it never clips
@@ -92,10 +98,10 @@ void main() {
   // ZUR-GH-010 density alpha: 64k keeps full radiance, 96k..256k fall off sub-linearly (never below 0.28).
   float crowdNorm = clamp(pow(65536.0 / max(float(u_activeCount), 65536.0), 0.58), 0.28, 1.0);
   crowdNorm *= RADIANCE_BUDGET / (1.0 + 0.32 * u_particleSize * u_particleSize);
-  // golden-cortex firing waves get the 2.8x boost, soma stays translucent (alpha 0.26)
+  // golden-cortex firing waves get the 3.2x boost (ZUR-GH-011), soma rests at alpha 0.52 before the density norm
   bool cortexFiring = u_colorPalette == 4 && v_neuralPulse > 0.55;
   bool cortexSoma = u_colorPalette == 4 && v_axon < 0.5 && !cortexFiring;
-  float paletteBoost = cortexFiring ? 2.8 : 1.0;
+  float paletteBoost = cortexFiring ? CORTEX_PULSE_BOOST : 1.0;
   // ZUR-GH-008: steady-state trail energy normalisation + big-sprite core scaling (3.35x no longer blows out).
   float sizeNorm = u_particleSize > 1.5 ? 1.0 / pow(max(u_particleSize, 1.0), 0.65) : 1.0;
   float energyNorm = clamp(u_trailEnergyNorm, 0.18, 1.0);
@@ -142,7 +148,7 @@ void main() {
       vec3 flashC = vec3(0.7454, 1.0, 1.0);
       vec3 somaC = base;
       vec3 filC = firing ? flashC : somaC * 0.75;
-      float somaAlpha = cortexSoma ? 0.26 : 1.0;
+      float somaAlpha = cortexSoma ? CORTEX_SOMA_ALPHA : 1.0;
       outC = (somaC * soma * somaAlpha + filC * branch * (firing ? 1.6 : 0.8)) * lum * (cortexSoma ? 6.0 : 3.0);
       alpha = max(soma * somaAlpha, branch);
       if (alpha < 0.01) discard;
@@ -190,7 +196,7 @@ void main() {
   vec3 capsuleBase = palettePick(0.0) * v_tint;
   vec3 hot = mix(capsuleBase, vec3(1.0), 0.25) * core * sizeNorm;
   vec3 color = capsuleBase * halo * 1.1 + hot;
-  float capsuleAlpha = 0.40 * crowdNorm * energyNorm * (cortexSoma ? 0.26 / 0.40 * 1.5 : paletteBoost);
+  float capsuleAlpha = 0.40 * crowdNorm * energyNorm * (cortexSoma ? CORTEX_SOMA_ALPHA / 0.40 * 1.5 : paletteBoost);
   // Premultiplied: colour scales with the same bounded alpha so big sprites in 16k-64k crowds never stack to solid white.
   fragColor = vec4(color * u_radianceScale * 12.0 * capsuleAlpha, min(halo, 1.0) * capsuleAlpha);
 }
