@@ -162,3 +162,19 @@ Pages is enabled and serving Stage 3 from the `main` branch root (`/`). https://
 - smoke:gh010 PASS @ 412x915 (SwiftShader, two runs). Blank options 0 on all tabs and sub-modes. hueSectorCount 12 for full-spectrum, 12 for true-neon, 7 for golden-cortex. At 256k (262144): blackRatio 0.388 / 0.39, whiteClip 0. Black hole centre blackRatio 1.00, whiteClip 0. console, page and WebGL errors 0; destinationConnections 0. smoke:gh009 PASS (reactivity radiusDelta +0.48).
 - pages_url: https://musicman12091.github.io/aiu-zur-visualizer/ — HTTP 200, Pages build success; live `zur-shell-v8` and `zur_state_v5_1`.
 - residual: the 256k blackRatio sits right at the 0.38 floor. SwiftShader runs at about 1 FPS, so the Gargantua disk, ring and jets are not converged in the smoke and only the void is proven. The count pill can lag the tier change. A57 FPS at 256k still needs checking.
+
+## ZUR-GH-011 — Stage 5.2 Mobile Touch DOM Stability, Sticky Header, Blood-Drip Default & 3D Brain Idle Thalamic Pulse
+- status: pushed to `main` — COMPLETE (shipped via Google Antigravity Claude Opus 5.5 Thinking on Velocity PC; Ori `/workspace` fast-forwarded 2026-11-05)
+- commit_sha (main): `aa9c756d0c6fcd126afe3ee1b94cb37873a8826c`
+- previous: `90531d2` (docs) / `b431f90` (ZUR-GH-010)
+- Storage `zur_state_v5_2` (migrates `zur_state_v5_1`), sw.js `zur-shell-v9`
+- Fixes:
+  1. ControlHUD status ticks no longer rebuild `<select>` / range DOM; layout keyed on `hudTab|swarmMode|shaderScene`; focused select and active drag ranges preserved; scroll preserved
+  2. Sticky HUD header: Hide HUD + 6-tab bar in `.hud-sticky` (z-20 solid bg)
+  3. Blood & Swarm tab entry defaults to `blood-drip` (`blood-drop` / `splatter-run` / `blood-red` / comet trail >= 0.72); sub-mode preserved on re-tap / Audio & Rig return
+  4. `golden-cortex` idle thalamic pulse peaks at 0.78 (above 0.55 fire threshold); resting soma alpha ~0.52 with stronger firing boost
+  5. smoke:gh010 `blackRatio` floor: `ZUR_ANGLE=d3d11` → 0.30, else SwiftShader 0.38
+- contracts: `node tests/verify-contracts.mjs` → 150 passed (Ori re-verify 2026-11-05 America/Regina)
+- pages_url: https://musicman12091.github.io/aiu-zur-visualizer/ — HTTP 200; live `zur-shell-v9` and `zur_state_v5_2` (Last-Modified Mon, 02 Nov 2026 23:50:54 GMT)
+- next gate (user / A57): Termux grind of live `zur-shell-v9` recording into `ZUR_v52_Part*.mp4` + `ZUR_v52_Sheet_*.jpg`, then sign-off Stage 5.2 or scope ZUR-GH-012
+- No `@copilot` PR review. No Cursor Cloud Agent.
