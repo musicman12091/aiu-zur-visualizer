@@ -2563,6 +2563,56 @@ test("ZUR-GH-011 smoke:gh010 carries node-identity, blood-default and brain-lumi
   assert.match(smoke, /activeMeanLuma >= 0\.22/);
 });
 
+test("ZUR-GH-012 smoke passes Linux container flags only on linux", () => {
+  const smoke = read("tests/smoke-zur-gh-010.mjs");
+  assert.match(smoke, /process\.platform === "linux"/);
+  for (const flag of ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--enable-unsafe-swiftshader"]) {
+    assert.ok(smoke.includes(`"${flag}"`), flag);
+  }
+  assert.ok(smoke.includes('(process.env.ZUR_ANGLE || "swiftshader") === "swiftshader"'));
+  assert.match(smoke, /--use-angle=/);
+});
+
+test("ZUR-GH-012 smoke detects software renderer", () => {
+  const smoke = read("tests/smoke-zur-gh-010.mjs");
+  assert.match(smoke, /UNMASKED_RENDERER_WEBGL/);
+  assert.ok(smoke.includes("/SwiftShader|llvmpipe/i"));
+});
+
+test("ZUR-GH-012 software warmup scaling", () => {
+  const smoke = read("tests/smoke-zur-gh-010.mjs");
+  assert.match(smoke, /SW_WARMUP_FRAMES = Math\.min\(6, Math\.max\(4,[^\n]*ZUR_SW_WARMUP \|\| 5/);
+  assert.match(smoke, /HW_MIN_WARMUP_FRAMES = 30/);
+  for (const ms of ["4500", "7000", "5000"]) assert.match(smoke, new RegExp(`sleep\\(${ms}\\)|measure\\([^\\n]*, ${ms}[,)]`));
+});
+
+test("ZUR-GH-012 262144 gate kept", () => {
+  const smoke = read("tests/smoke-zur-gh-010.mjs");
+  for (const needle of ['sel-count", "256k"', "!== 262144", "262144 * 32", "u_activeCount", "densityCrowdNorm"]) {
+    assert.ok(smoke.includes(needle), needle);
+  }
+  assert.doesNotMatch(smoke, /if \(!software\)[^\n]*256k/);
+});
+
+test("ZUR-GH-012 hardware gates not weakened", () => {
+  const smoke = read("tests/smoke-zur-gh-010.mjs");
+  for (const needle of [
+    "process.env.ZUR_ANGLE === 'd3d11' ? 0.30 : 0.38", "centerBlackRatio >= 0.9", "activeMeanLuma >= 0.22",
+    "hueSectorCount >= 3", "ZUR_BRAIN_LUMA_MIN || 0.36", "consoleErrors.length", "pageErrors.length", "webglWarnings.length", "[T+",
+  ]) assert.ok(smoke.includes(needle), needle);
+  assert.match(smoke, /problems\.push\(`console\.error/);
+  assert.match(smoke, /problems\.push\(`pageerror/);
+  assert.match(smoke, /problems\.push\(`WebGL warnings/);
+});
+
+test("ZUR-GH-012 linux default renderer + software calibration", () => {
+  const smoke = read("tests/smoke-zur-gh-010.mjs");
+  for (const needle of [
+    'process.platform === "linux" && !process.env.ZUR_ANGLE', 'ZUR_LINUX_ANGLE || "gl"', "ZUR_SW_DENSE_BLACK_MIN || 0.35",
+    "ZUR_SW_BRAIN_LUMA_MIN || 0.36", "software ? SW_DENSE_BLACK_MIN : (process.env.ZUR_ANGLE === 'd3d11' ? 0.30 : 0.38)",
+  ]) assert.ok(smoke.includes(needle), needle);
+});
+
 for (const entry of tests) {
   try {
     await entry.fn();
