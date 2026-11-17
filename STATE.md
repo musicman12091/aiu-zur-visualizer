@@ -178,3 +178,18 @@ Pages is enabled and serving Stage 3 from the `main` branch root (`/`). https://
 - pages_url: https://musicman12091.github.io/aiu-zur-visualizer/ — HTTP 200; live `zur-shell-v9` and `zur_state_v5_2` (Last-Modified Mon, 02 Nov 2026 23:50:54 GMT)
 - next gate (user / A57): Termux grind of live `zur-shell-v9` recording into `ZUR_v52_Part*.mp4` + `ZUR_v52_Sheet_*.jpg`, then sign-off Stage 5.2 or scope ZUR-GH-012
 - No `@copilot` PR review. No Cursor Cloud Agent.
+
+## ZUR-GH-012-PREP — Linux software-renderer smoke (llvmpipe default, 256k VBO gate)
+- status: fast-forward merged to `main` — COMPLETE (Option A approved: Mesa llvmpipe is the Linux default). Merge commit `19dc8dc36351a7b3c96543c7461b401dc574d1ff` (branch `fix/zur-gh-012-swiftshader-smoke`; no PR). Codegen: Copilot CLI `claude-sonnet-5.5`. Ori re-verify 2026-11-17 America/Regina.
+- previous: `a8bab2c` (ZUR-GH-011 docs) / `aa9c756` (ZUR-GH-011)
+- scope: tests only (`tests/smoke-zur-gh-010.mjs`, `tests/verify-contracts.mjs`). App shell (`zur-shell-v9` / `zur_state_v5_2`) unchanged.
+- Smoke upgrades:
+  1. Unbuffered `[T+Xs]` phase logs (server listen, Chrome connect, `UNMASKED_RENDERER_WEBGL`, per-gate elapsed ms + metrics)
+  2. Linux container flags add `--disable-setuid-sandbox` (with `--no-sandbox`, `--disable-dev-shm-usage`, `--enable-unsafe-swiftshader`); Windows / `ZUR_ANGLE=d3d11` untouched
+  3. Linux default is Mesa llvmpipe (`ZUR_ANGLE=gl`); `ZUR_ANGLE=swiftshader` forces SwiftShader (~128s). Software path (`/SwiftShader|llvmpipe/i`) steps 5 deterministic frames per gate (vs 270–420 hardware frames)
+  4. 262,144 VBO / `crowdNorm` gate on both software and hardware paths (count 262144, two 8 MB TF buffers, shader `activeCount` 262144, `crowdNorm` 0.4475, 0 GL errors)
+  5. Chrome reaper for debug port 9343 plus busy-port refusal (timeout leftovers no longer pin CPU)
+  6. Software-only 256k `blackRatio` floor 0.35 (measured 0.379 on earlier SwiftShader / llvmpipe calibration runs). Hardware floors unchanged (`ZUR_ANGLE=d3d11` 0.30; prior SwiftShader 0.38). Error checks unchanged.
+- contracts: `node tests/verify-contracts.mjs` → 156/156 PASS (was 150)
+- smoke:gh010 PASS @ 412×915 in 19.9s (`timeout 90s`, exit 0) on Mesa llvmpipe (`ANGLE (Mesa, llvmpipe (LLVM 19.1.7 256 bits), OpenGL 4.5)`): 256k `blackRatio` 0.38 (floor 0.35), `whiteClip` 0, VBO 8388608 × 2, `crowdNorm` 0.4475, black-hole `blackRatio` 0.434 / centre 1.00, brain idle luma 0.422 (gate 0.36), console/page/WebGL errors 0, `destinationConnections` 0. Earlier calibration: `blackRatio` 0.379 / `brainLuma` 0.421.
+- No `@copilot` PR review. No Cursor Cloud Agent. Local branch `fix/zur-gh-012-swiftshader-smoke` deleted after push.
