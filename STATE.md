@@ -193,3 +193,23 @@ Pages is enabled and serving Stage 3 from the `main` branch root (`/`). https://
 - contracts: `node tests/verify-contracts.mjs` → 156/156 PASS (was 150)
 - smoke:gh010 PASS @ 412×915 in 19.9s (`timeout 90s`, exit 0) on Mesa llvmpipe (`ANGLE (Mesa, llvmpipe (LLVM 19.1.7 256 bits), OpenGL 4.5)`): 256k `blackRatio` 0.38 (floor 0.35), `whiteClip` 0, VBO 8388608 × 2, `crowdNorm` 0.4475, black-hole `blackRatio` 0.434 / centre 1.00, brain idle luma 0.422 (gate 0.36), console/page/WebGL errors 0, `destinationConnections` 0. Earlier calibration: `blackRatio` 0.379 / `brainLuma` 0.421.
 - No `@copilot` PR review. No Cursor Cloud Agent. Local branch `fix/zur-gh-012-swiftshader-smoke` deleted after push.
+
+## ZUR-GH-012 — Galaxy A57 live-video audit: 8 defects (zur-shell-v10 / zur_state_v5_3)
+- status: fast-forward merged to `main` — COMPLETE. Merge commit `d29d8fa` (branch `feat/zur-gh-012`; no PR). Codegen: Copilot CLI `claude-sonnet-5.5` (405.68 AI credits, 40 min); Option B blood-red brain edit by Ori by hand (0 credits). Ori verify 2026-11-17 America/Regina.
+- previous: `7adac1d` (ZUR-GH-012-PREP docs)
+- Storage `zur_state_v5_3` (migrates `zur_state_v5_2`, repairs hudTab/sceneId desync), sw.js `zur-shell-v10`
+- Fixes:
+  1. hudTab is the single source of truth: `sceneForHud()` derives sceneId on boot, restore (`upgradeToV53`) and Mode A/B. Mode B = deep-space / particle-swarm-3d / wormhole / 64k / size 1.0
+  2. Strictly 1 transform-feedback step per frame (`planSimStep`, simDt = min(dt, 1/30), `MAX_STEPS_PER_FRAME` 1). dart3d draws a 4-vertex dart SDF quad (`TRIANGLE_STRIP`) at >= 131072 agents
+  3. full-spectrum / true-neon hue from coherent spatial bands (`atan(y,x)` sectors + radial/Z bands, ±0.014 jitter)
+  4. Gargantua edge-on disk, `diskNormal = normalize(vec3(0.08, 0.96, -0.26))`, jets along the normal, camera-right Doppler beaming (60/28/12 split kept)
+  5. logo-attractor bypasses crowdNorm: min radius 2.6 px, alpha >= 0.88, 1.9x radiance
+  6. Blood glass runners 2.6x (#FF0A22 core, #FF8A96 specular, >= 3.2 px). 3D Brain 0.52 soma alpha / 0.78 thalamic pulse / 3.2x flash on all 5 palettes
+  7. Megastructure swarm r >= coreRadius + 0.62 at 0.35x alpha; Orbit 3D / Tunnel Fly move the raymarch eye. Spectral canyon sky / floor / fog clamped to obsidian (<= 0.03), hue only on emissive lines / sun
+  8. Mic raw -> `{audio:true}` -> silent 124 BPM kick+bass+synth Demo Beat (analyser only, destinationConnections 0) with HUD status label
+- Decision (Option B, approved): blood-red 3D Brain stays arterial crimson (#C8000A -> #FF0818 soma); white-scarlet #FF5566 only on v_neuralPulse > 0.65 (soma and dendrite flashes; no cyan, no pink blend). Smoke gate for blood-red brain: luma >= 0.12 AND meanR > 2.2 x meanG (pure red caps at 0.2126 Rec.709 luma). Other 4 palettes keep luma >= 0.25.
+- contracts: `node tests/verify-contracts.mjs` -> 169/169 PASS (was 156)
+- smoke:gh010 PASS @ 412x915 on Mesa llvmpipe, 43.4s (`timeout 90s`, exit 0), console/page/WebGL errors 0: tabSceneSync ok; simSteps 1 (64k + 256k), dartVerts 4 @ 256k; 256k meanSat full-spectrum 0.613 / true-neon 0.607 (>= 0.55); logo glyph luma 0.207 (>= 0.12); brain luma true-neon 0.295, full-spectrum 0.305, white-static 0.436, golden-cortex 0.41 (>= 0.25), blood-red 0.136 with meanR 0.49 / meanG 0.037; canyon blackRatio 0.669 @ hueShift -0.83 (>= 0.42); disk aspect 1.75–1.84 (>= 1.5); megastructure eye delta 0.384 / 0.397; mic fallback 2 attempts -> demo 124 BPM; v5_2 reload repaired; existing gates unchanged (256k blackRatio 0.375–0.378, VBO 8388608 x 2, crowdNorm 0.4475, BH centre 1.00).
+- smoke:gh009: stock script (hardcoded SwiftShader) times out at 300s on Linux; a temporary llvmpipe copy PASSED in 108s, 0 errors (not committed).
+- residual: new gates are unverified on a hardware GPU and on the A57 by eye; the shared `{audio:true}` retry runs after an await (outside the tap); Mode B detected by preset name; black-hole disk gate steps 80 frames (~8.5s); blood-red brain luma margin is thin (0.136 vs 0.12).
+- No `@copilot` PR review. No Cursor Cloud Agent. Local branch `feat/zur-gh-012` deleted after push.
