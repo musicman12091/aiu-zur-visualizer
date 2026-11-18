@@ -4,24 +4,29 @@ import {
   MODE_B_PRESET,
   STAGE2_DEFAULT_PRESET,
   STORAGE_KEY,
+  ENGINE_IDS,
+  applyEngine,
   applyModeKeepingScene,
-  enforcePresetConstraints,
+  applyQuickPreset,
+  engineForScene,
   loadStoredState,
   serializeStoredState,
-  upgradeToV51,
-  VISUAL_HUD_TABS,
   validatePreset,
 } from "./AppState.js";
-import { FeatureExtractor } from "../audio/FeatureExtractor.js";
+import { FeatureExtractor, autoGainEnabledFor } from "../audio/FeatureExtractor.js";
 import {
   getAudioContext,
   getDiagnostics,
   getMicState,
+  getTrackState,
+  playPauseTrack,
   readSnapshot,
   resumeContext,
   setFftSize,
+  setSpeakerMonitor,
   setSuppressLocalAudioPlayback,
   setVideoSink,
+  startFileTrack,
   startMicCapture,
   startTabCapture,
   startTestOscillator,
@@ -61,18 +66,14 @@ function loadInitialPreset() {
   base.particles = normalizeParticles(base.particles);
   const param = new URLSearchParams(location.search).get("preset");
   const decoded = decodePresetParam(param);
-  // persist() rewrites ?preset= on every change, so a plain reload carries our own stored state: keep its HUD tab
-  // (incl. audio-rig / swarm sub-mode). Only a foreign or shared link re-infers the tab from its scene + particles.
-  const ownUrl = Boolean(param) && param === encodePresetParam(base.sceneId, base.particles);
+  // ZUR-GH-013: no HUD tabs. A ?preset= link applies its scene + particle keys on top of the stored state as-is.
+  delete base.hud;
   if (decoded) {
     if (decoded.sceneId) base.sceneId = decoded.sceneId;
     base.particles = normalizeParticles({ ...base.particles, ...decoded.particles });
-    if (!ownUrl) delete base.hud;
   }
-  const result = validatePreset(decoded ? upgradeToV51(base) : base);
-  // ZUR-GH-012: hudTab is the single source of truth on boot; the scene (and HUD rows) are derived from it.
-  if (result.ok && result.preset.hud) return enforcePresetConstraints(result.preset);
-  return result.ok ? result.preset : STAGE2_DEFAULT_PRESET;
+  const result = validatePreset(base);
+  return result.ok ? result.preset : JSON.parse(JSON.stringify(STAGE2_DEFAULT_PRESET));
 }
 
 const state = new AppState(loadInitialPreset());
@@ -172,12 +173,15 @@ function watchCapture(pending, mode) {
     if (!result) return;
     // ZUR-GH-012: a locked Android mic falls back to the silent Demo Beat; say so instead of sitting at 0.0.
     const demo = result.micStage === "demo";
+    // ZUR-GH-013: 4 s rolling-peak auto-gain only on the shared Android mic stage.
+    extractor.setAutoGain(autoGainEnabledFor(mode === "microphone" ? "mic" : mode, result.micStage));
     state.setStatus({ capture: demo ? "demo-beat" : mode });
     hud.setMicStatus(mode === "microphone" ? getMicState().label : "");
     hud.setError("");
     publishDiagnostics();
     if (mode === "microphone") void refreshDevices();
   }).catch((error) => {
+    extractor.setAutoGain(false);
     state.setStatus({ capture: "error" });
     hud.setMicStatus("");
     hud.setError(error?.message || "Capture failed");
@@ -206,7 +210,7 @@ host = new RenderHost({
     const result = vjAutopilot.update(deltaSeconds, state.preset.visual.vjAutopilot);
     if (result.changed) {
       const phaseIndex = VJ_PHASES.indexOf(result.phase);
-      // Tab-scoped: only values allowed by the active HUD tab (autopilotPreset runs enforceTabConstraints).
+      // ZUR-GH-013: kaleido + palette only; the scene, formation and particleStyle are never changed.
       state.replacePreset(autopilotPreset(state.preset, phaseIndex));
       if (result.shockwave) host.particleSystem?.triggerShockwave(frame.rms || 0);
     }
@@ -230,6 +234,31 @@ hud.setHandlers({
     if (!result.ok) hud.setError(result.errors[0]);
   },
   particles: (partial) => updateParticles(partial),
+  quickPreset: (id) => {
+    const result = state.replacePreset(applyQuickPreset(state.preset, id));
+    if (!result.ok) hud.setError(result.errors[0]);
+  },
+  engine: (id) => {
+    const result = state.replacePreset(applyEngine(state.preset, id));
+    if (!result.ok) hud.setError(result.errors[0]);
+  },
+  trackFile: (file, speakerMonitor) => {
+    if (!file) return;
+    const pending = startFileTrack({ file, fftSize: state.preset.audio.fftSize || 2048, speakerMonitor });
+    void acquireWakeLock();
+    pending.then(() => hud.setTrackState(getTrackState())).catch(() => {});
+    watchCapture(pending, "file-track");
+  },
+  trackPlay: () => {
+    void playPauseTrack().then((track) => {
+      hud.setTrackState(track);
+      publishDiagnostics();
+    });
+  },
+  speakerMonitor: (enabled) => {
+    hud.setTrackState(setSpeakerMonitor(enabled));
+    publishDiagnostics();
+  },
   autopilot: (enabled) => {
     state.updatePreset((draft) => {
       draft.visual.vjAutopilot = Boolean(enabled);
@@ -261,6 +290,8 @@ hud.setHandlers({
   },
   stop: () => {
     void stopCapture().then(() => {
+      extractor.setAutoGain(false);
+      hud.setTrackState(getTrackState());
       state.setStatus({ capture: "idle" });
       hud.setMicStatus("");
       hud.setError("");
@@ -308,9 +339,8 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "t" || event.key === "T") hud.handlers.oscillator?.();
   if (event.key === "Escape") hud.toggle(true);
   if (event.key === "p" || event.key === "P") {
-    const tabs = VISUAL_HUD_TABS;
-    const current = state.preset.hud?.visualTab || state.preset.hud?.hudTab;
-    hud._switch(tabs[(tabs.indexOf(current) + 1) % tabs.length]);
+    const current = ENGINE_IDS.indexOf(engineForScene(state.preset.sceneId));
+    hud.handlers.engine?.(ENGINE_IDS[(current + 1) % ENGINE_IDS.length]);
   }
   if (event.key === "f" || event.key === "F") {
     const current = FLOW_MODES.indexOf(state.preset.particles?.flowMode);
@@ -375,6 +405,7 @@ async function boot() {
       particleSystem,
       getDiagnostics,
       getMicState,
+      getTrackState,
       readSnapshot,
       getAudioContext,
     };

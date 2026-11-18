@@ -1,5 +1,5 @@
 import { NEON_PALETTE_IDS } from "../controls/palettes.js";
-import { enforceTabConstraints, flattenPreset, applyFlatToPreset, TAB_RULES, layoutKeyFor } from "./AppState.js";
+import { COLOR_PALETTES, normalizeParticles } from "../render/particleMath.js";
 
 export const VJ_DWELL_SECONDS = 12;
 export const VJ_MANUAL_PAUSE_SECONDS = 45;
@@ -41,31 +41,17 @@ export class VJAutopilot {
 }
 
 const KALEIDO_BY_PHASE = [0, 8, 12];
-
-/**
- * Tab-scoped autopilot: picks only values the active tab allows (TAB_RULES) and runs the result through
- * enforceTabConstraints. The scene never changes; the Audio & Rig tab drives the last visual tab.
- */
-export function autopilotPlan(flatState, phaseIndex) {
-  const flat = enforceTabConstraints(flatState);
-  const rules = TAB_RULES[layoutKeyFor(flat)];
-  const next = { ...flat, kaleidoSegments: KALEIDO_BY_PHASE[phaseIndex % KALEIDO_BY_PHASE.length] };
-  const cycle = (list) => (list && list.length ? list[phaseIndex % list.length] : undefined);
-  if (rules) {
-    const formation = rules.formations && rules.formations.length > 1 ? cycle(rules.formations) : undefined;
-    if (formation) {
-      next.formation = formation;
-      next.formationType = formation;
-    }
-    const palettes = rules.palettes;
-    if (palettes && palettes.length > 1) next.colorPalette = cycle(palettes.filter((id) => id !== "golden-cortex"));
-  }
-  if (["spectral-canyon-3d", "aurora-ribbons"].includes(layoutKeyFor(flat))) {
-    next.paletteId = NEON_PALETTE_IDS[phaseIndex % NEON_PALETTE_IDS.length];
-  }
-  return enforceTabConstraints(next);
-}
+/** ZUR-GH-013: the autopilot cycles the kaleido fold and the palette only (never the scene, formation or particleStyle). */
+export const AUTOPILOT_PALETTES = Object.freeze(COLOR_PALETTES.filter((id) => id !== "golden-cortex"));
 
 export function autopilotPreset(preset, phaseIndex) {
-  return applyFlatToPreset(preset, autopilotPlan(flattenPreset(preset), phaseIndex));
+  const next = JSON.parse(JSON.stringify(preset));
+  const particles = normalizeParticles(next.particles);
+  particles.kaleidoSegments = KALEIDO_BY_PHASE[phaseIndex % KALEIDO_BY_PHASE.length];
+  particles.colorPalette = AUTOPILOT_PALETTES[phaseIndex % AUTOPILOT_PALETTES.length];
+  next.particles = particles;
+  if (["spectral-canyon-3d", "aurora-ribbons"].includes(next.sceneId)) {
+    next.visual = { ...next.visual, paletteId: NEON_PALETTE_IDS[phaseIndex % NEON_PALETTE_IDS.length] };
+  }
+  return next;
 }

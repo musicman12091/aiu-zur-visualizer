@@ -1,6 +1,8 @@
-import { clamp01 } from "../audio/FeatureExtractor.js";
+import { clamp01, frameCleanGate } from "../audio/FeatureExtractor.js";
 import { PALETTES, shiftPalette } from "../controls/palettes.js";
-import { PARTICLE_SCENE_IDS, PULSE_SCENE_ID, normalizeParticles, resolveFboSize, spectralCentroidFromBands } from "./particleMath.js";
+import {
+  PARTICLE_SCENE_IDS, PULSE_SCENE_ID, normalizeParticles, reactivityEmission, resolveFboSize, spectralCentroidFromBands,
+} from "./particleMath.js";
 import { TrailTransitionGuard, transitionSignature } from "./PostProcessPass.js";
 
 /** Four hardware tiers. Tier 1 matches Mode A; Tier 2 matches Mode B. */
@@ -223,6 +225,12 @@ export class RenderHost {
     const visual = preset.visual;
     const mid = clamp01((frame.lowMid + frame.highMid) * 0.5);
     const palette = shiftPalette(PALETTES[visual.paletteId] || PALETTES["copper-teal"], visual.hueShift || 0);
+    // ZUR-GH-013 true silence-to-peak gate shared by every engine (aurora / canyon / megastructure / particles).
+    const reactivityMode = preset.particles?.reactivityMode || "true-gate";
+    const gate = frameCleanGate(frame, preset.particles?.reactivityGain ?? 1);
+    const emission = reactivityEmission(reactivityMode, gate);
+    this.cleanGate = gate;
+    this.emission = emission;
     this.shaderHost.setFrame({
       time: Math.max(0, (now - this.sceneStartedAt) / 1000),
       delta: deltaSeconds,
@@ -239,6 +247,9 @@ export class RenderHost {
       cameraShake: visual.cameraShake,
       bloom: visual.bloom,
       palette,
+      isSilent: Boolean(frame.isSilent),
+      cleanGate: gate,
+      emission,
     });
     const scene = this.resolveScene(preset);
     this.trailTransition.observe(
@@ -258,7 +269,7 @@ export class RenderHost {
       );
       if (scene === "spectral-canyon-3d") {
         this.spectralCanyon.render(
-          frame, this.shaderHost.palette, this.canvas.width, this.canvas.height, this.viewportYOffset,
+          frame, this.shaderHost.palette, this.canvas.width, this.canvas.height, this.viewportYOffset, emission,
         );
       } else {
         const particles = preset.particles || this._defaultParticles || (this._defaultParticles = normalizeParticles(null));

@@ -256,9 +256,11 @@ try {
   const compact = (m) => ({ blackRatio: +m.blackRatio.toFixed(3), whiteClip: +m.whiteClip.toFixed(4), meanSat: +m.meanSat.toFixed(3), lit: +m.litFraction.toFixed(3) });
 
   // ZUR-GH-010: the scene / sub-mode is chosen with the context-gated tab bar (HUD select rows only hold the active tab's options).
+  // ZUR-GH-013 (v6.0): HUD tabs and Blood & Swarm are gone; every control is on one unlocked deck, so a "tab" just
+  // selects the 3D Particle Engine (logo-text additionally picks the logo formation). Minimal patch, gates unchanged.
   const goTab = async (id, sub = "") => {
-    await evaluate(`document.querySelector('[data-hud-tab="${id}"]').click()`);
-    if (sub) await evaluate(`document.querySelector('[data-swarm-mode="${sub}"], [data-shader-scene="${sub}"]').click()`);
+    await evaluate(`document.querySelector('[data-engine="particles"]').click()`);
+    if (sub === "logo-text") await set("sel-formation", "logo-attractor");
     await sleep(150);
   };
   await evaluate("document.getElementById('btn-oscillator').click()");
@@ -309,7 +311,7 @@ try {
   // 2) 256k stability: logo-attractor and neural-brain at 256k (VBOs + glyph targets sized for MAX_PARTICLES).
   for (const formation of ["logo-attractor", "neural-brain"]) {
     if (formation === "logo-attractor") await goTab("blood-swarm", "logo-text");
-    else await goTab("brain-3d");
+    else { await goTab("brain-3d"); await set("sel-formation", "neural-brain"); }
     await set("sel-count", "256k");
     const m = await measure(`256k ${formation}`, 6000);
     const st = await evaluate("window.__zurState(262144)");
@@ -321,12 +323,12 @@ try {
 
   // 3) Style / palette / formation scenarios at 64k.
   const scenarios = [
-    ["blood-splatter", { tab: ["blood-swarm", "blood-drip"], palette: "blood-red" }],
-    ["brain-synapse", { tab: ["brain-3d"], style: "synapse-spark", palette: "true-neon", kinetic: "off" }],
+    ["crimson-pulse", { tab: ["blood-swarm", "blood-drip"], style: "crisp-dot", palette: "crimson-pulse", kinetic: "off", formation: "wormhole" }],
+    ["brain-synapse", { tab: ["brain-3d"], style: "synapse-node", palette: "true-neon", kinetic: "off", formation: "neural-brain" }],
     ["living-galaxy", { tab: ["deep-space"], style: "dart3d", palette: "full-spectrum", kinetic: "off", formation: "living-galaxy" }],
     ["blackhole", { tab: ["deep-space"], style: "dart3d", palette: "true-neon", kinetic: "accretion-warp", formation: "supermassive-blackhole" }],
     ["wormhole-white", { tab: ["deep-space"], style: "star-streak", palette: "white-static", kinetic: "off", formation: "wormhole" }],
-    ["synapse-cascade", { tab: ["brain-3d"], style: "synapse-spark", palette: "true-neon", kinetic: "synapse-cascade" }],
+    ["synapse-cascade", { tab: ["brain-3d"], style: "synapse-node", palette: "true-neon", kinetic: "synapse-cascade", formation: "neural-brain" }],
     ["ribbon-curtain", { tab: ["deep-space"], style: "dart3d", palette: "true-neon", kinetic: "ribbon-curtain", formation: "neon-tunnel" }],
     ["shock-shatter", { tab: ["deep-space"], style: "star-streak", palette: "true-neon", kinetic: "shock-shatter", formation: "supernova-shell" }],
   ];

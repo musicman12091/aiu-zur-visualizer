@@ -36,6 +36,7 @@ precision highp sampler2D;
 uniform sampler2D u_frame;
 uniform vec2 u_resolution;
 uniform float u_bloom;
+uniform float u_emission;   // ZUR-GH-013 reactivity emission: 0.00 in true-gate silence (black), 0.06 ember-floor, 1 ambient-vj
 out vec4 fragColor;
 void main() {
   vec2 uv = gl_FragCoord.xy / u_resolution;
@@ -47,7 +48,7 @@ void main() {
     texture(u_frame, uv + vec2(0.0, px.y)).rgb +
     texture(u_frame, uv - vec2(0.0, px.y)).rgb
   ) * 0.25;
-  vec3 linear = color + blur * u_bloom;
+  vec3 linear = (color + blur * u_bloom) * u_emission;
   fragColor = vec4(pow(max(linear, vec3(0.0)), vec3(1.0 / 2.2)), 1.0);
 }
 `;
@@ -137,6 +138,7 @@ export class ShaderHost {
       trailHalfLifeMs: 220,
       cameraShake: 0,
       bloom: 0.35,
+      emission: 1,
     };
     this._onLost = (event) => {
       event.preventDefault();
@@ -234,6 +236,7 @@ void main() {
       frame: gl.getUniformLocation(this.present, "u_frame"),
       resolution: gl.getUniformLocation(this.present, "u_resolution"),
       bloom: gl.getUniformLocation(this.present, "u_bloom"),
+      emission: gl.getUniformLocation(this.present, "u_emission"),
     };
     this.ready = true;
     this.error = "";
@@ -309,6 +312,7 @@ void main() {
     gl.uniform1i(this.presentLoc.frame, 0);
     gl.uniform2f(this.presentLoc.resolution, this.width, this.height);
     gl.uniform1f(this.presentLoc.bloom, frame.bloom);
+    gl.uniform1f(this.presentLoc.emission, Number.isFinite(frame.emission) ? frame.emission : 1);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     this.index = 1 - this.index;
   }

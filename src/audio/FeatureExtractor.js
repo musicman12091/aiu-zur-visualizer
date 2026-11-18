@@ -142,6 +142,82 @@ function emptyBands() {
   return { sub: 0, bass: 0, lowMid: 0, highMid: 0, treble: 0 };
 }
 
+// ---- ZUR-GH-013: true silence-to-peak gate + 4 s rolling-peak auto-gain (shared Android mic) ----
+export const CLEAN_GATE_LO = 0.018;
+export const CLEAN_GATE_HI = 0.13;
+export const AUTO_GAIN_WINDOW_SECONDS = 4;
+export const AUTO_GAIN_BUCKETS = 16;
+export const AUTO_GAIN_TARGET = 0.9;
+export const AUTO_GAIN_MIN_PEAK = 0.02;
+export const AUTO_GAIN_RANGE = Object.freeze([1, 8]);
+
+/** Largest of the five band energies (sub, bass, lowMid, highMid, treble). */
+export function maxBandEnergy(frame) {
+  if (!frame) return 0;
+  let m = 0;
+  for (const name of BAND_NAMES) {
+    const value = frame[name];
+    if (Number.isFinite(value) && value > m) m = value;
+  }
+  return m;
+}
+
+/** cleanGate = smoothstep(0.018, 0.13, maxBandEnergy * reactivityGain); 0 while the extractor reports silence. */
+export function cleanGate(maxEnergy, reactivityGain = 1) {
+  const x = (Number.isFinite(maxEnergy) ? maxEnergy : 0) * (Number.isFinite(reactivityGain) ? reactivityGain : 1);
+  const t = Math.min(1, Math.max(0, (x - CLEAN_GATE_LO) / (CLEAN_GATE_HI - CLEAN_GATE_LO)));
+  return t * t * (3 - 2 * t);
+}
+export function frameCleanGate(frame, reactivityGain = 1) {
+  if (!frame || frame.isSilent) return 0;
+  return cleanGate(maxBandEnergy(frame), reactivityGain);
+}
+
+/** Auto-gain from the 4 s rolling peak: clamp(0.9 / peak, 1, 8), unity below the 0.02 noise peak. */
+export function autoGainFromPeak(peak) {
+  if (!Number.isFinite(peak) || peak <= AUTO_GAIN_MIN_PEAK) return 1;
+  return Math.min(AUTO_GAIN_RANGE[1], Math.max(AUTO_GAIN_RANGE[0], AUTO_GAIN_TARGET / peak));
+}
+
+/** 4 s rolling peak kept in 16 buckets of 0.25 s (O(1) per frame, no per-frame allocation). */
+export class RollingPeak {
+  constructor(windowSeconds = AUTO_GAIN_WINDOW_SECONDS, buckets = AUTO_GAIN_BUCKETS) {
+    this.bucketSeconds = windowSeconds / buckets;
+    this.buckets = new Float32Array(buckets);
+    this.index = 0;
+    this.elapsed = 0;
+  }
+
+  reset() {
+    this.buckets.fill(0);
+    this.index = 0;
+    this.elapsed = 0;
+  }
+
+  push(value, dt) {
+    const v = Number.isFinite(value) ? Math.max(0, value) : 0;
+    this.elapsed += Number.isFinite(dt) && dt > 0 ? dt : 0;
+    while (this.elapsed >= this.bucketSeconds) {
+      this.elapsed -= this.bucketSeconds;
+      this.index = (this.index + 1) % this.buckets.length;
+      this.buckets[this.index] = 0;
+    }
+    if (v > this.buckets[this.index]) this.buckets[this.index] = v;
+    return this.peak();
+  }
+
+  peak() {
+    let m = 0;
+    for (let i = 0; i < this.buckets.length; i += 1) if (this.buckets[i] > m) m = this.buckets[i];
+    return m;
+  }
+}
+
+/** main.js: the 4 s auto-gain runs only on the shared Android mic stage. */
+export function autoGainEnabledFor(mode, micStage) {
+  return mode === "mic" && micStage === "shared";
+}
+
 export class FeatureExtractor {
   constructor(options = {}) {
     this.sampleRate = 0;
@@ -170,6 +246,9 @@ export class FeatureExtractor {
     this._silentFreq = null;
     this._silentWave = null;
     this._stereoScratch = null;
+    this.autoGainEnabled = false;
+    this.autoGain = 1;
+    this.rollingPeak = new RollingPeak();
     this.configure({
       sampleRate: options.sampleRate ?? 48000,
       fftSize: options.fftSize ?? 2048,
@@ -201,6 +280,16 @@ export class FeatureExtractor {
     const numeric = Number(value);
     if (!Number.isFinite(numeric)) return;
     this.preAmpGain = Math.min(PRE_AMP_MAX, Math.max(PRE_AMP_MIN, numeric));
+  }
+
+  /** ZUR-GH-013: 4 s rolling-peak auto-gain (enabled by main.js for the shared Android mic). */
+  setAutoGain(enabled) {
+    const next = Boolean(enabled);
+    if (next !== this.autoGainEnabled) {
+      this.rollingPeak.reset();
+      this.autoGain = 1;
+    }
+    this.autoGainEnabled = next;
   }
 
   setMix({ masterGain, bandGain, noiseGateThreshold } = {}) {
@@ -269,7 +358,8 @@ export class FeatureExtractor {
     const postRms = Number.isFinite(rms) ? Math.max(0, rms) : 0;
     const postPeak = Number.isFinite(peak) ? Math.max(0, peak) : 0;
 
-    if (postRms < this.noiseGateThreshold) {
+    // ZUR-GH-013: the shared-mic auto-gain (previous frame) also lifts the noise-gate test so quiet rooms still open it.
+    if (postRms * (this.autoGainEnabled ? this.autoGain : 1) < this.noiseGateThreshold) {
       this.silentFor += dt;
       this.isSilent = this.silentFor > SILENCE_HOLD_SECONDS;
     } else {
@@ -278,11 +368,19 @@ export class FeatureExtractor {
     }
 
     const shaped = emptyBands();
+    let rawPeak = 0;
     for (const name of BAND_NAMES) {
       const gain = Number.isFinite(this.bandGain[name]) ? this.bandGain[name] : 1;
       const level = Number.isFinite(bands[name]) ? bands[name] : 0;
-      shaped[name] = clamp01(level * gain * this.masterGain);
+      shaped[name] = level * gain * this.masterGain;
+      if (shaped[name] > rawPeak) rawPeak = shaped[name];
     }
+    if (this.autoGainEnabled) {
+      this.autoGain = autoGainFromPeak(this.rollingPeak.push(rawPeak, dt));
+    } else {
+      this.autoGain = 1;
+    }
+    for (const name of BAND_NAMES) shaped[name] = clamp01(shaped[name] * this.autoGain);
 
     let flux = 0;
     for (const name of BAND_NAMES) {
@@ -328,6 +426,11 @@ export class FeatureExtractor {
       beat: 0,
       beatConfidence: 0,
       isSilent: this.isSilent,
+      autoGain: this.autoGain,
+      maxBandEnergy: this.isSilent ? 0 : Math.max(
+        clamp01(this.medium.sub), clamp01(this.medium.bass), clamp01(this.medium.lowMid),
+        clamp01(this.slow.highMid), clamp01(this.slow.treble),
+      ),
     };
   }
 

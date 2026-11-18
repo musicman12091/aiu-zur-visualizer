@@ -14,8 +14,9 @@ uniform int u_steps;
 // render.vert.glsl (gl_Position.y += u_viewportYOffset * w), so N-fold mirrors fold AROUND the core.
 uniform float u_viewportYOffset;
 uniform float u_cameraZoom;   // ZUR-GH-009: pinch / wheel zoom 0.35..3.50 (scales the raymarch FOV)
-uniform int u_colorPalette;   // ZUR-GH-009: 0 true-neon, 1 full-spectrum, 2 white-static, 3 blood-red, 4 golden-cortex
+uniform int u_colorPalette;   // 0 true-neon, 1 full-spectrum, 2 white-static, 3 crimson-pulse, 4 golden-cortex
 uniform float u_spectralCentroid;
+uniform float u_emission;       // ZUR-GH-013 reactivity emission (0.00 = true-gate silence, black)
 
 out vec4 fragColor;
 
@@ -75,29 +76,32 @@ void main() {
   vec3 light = normalize(vec3(0.45, 0.7, -0.4));
   float diffuse = max(dot(normal, light), 0.0);
   float rim = pow(1.0 - max(dot(normal, -ray), 0.0), 2.2);
-  float band = fract(length(point) * 1.7 + atan(point.y, point.x) / 6.28318 + u_time * 0.025);
-  int index = int(floor(band * 4.0));
-  vec3 color = mix(u_palette[index], u_palette[index + 1], fract(band * 4.0));
+  // ZUR-GH-013: seam-free gradient (no angular term): radius, height, depth and the spectral centroid.
+  float band = fract(length(point) * 1.7 + point.y * 0.22 + point.z * 0.16 + u_spectralCentroid * 0.3 + u_time * 0.025);
+  float ramp = 1.0 - abs(band * 2.0 - 1.0);   // ping-pong: continuous across the fract() wrap
+  vec3 color = mix(mix(u_palette[0], u_palette[2], smoothstep(0.0, 0.5, ramp)), u_palette[4], smoothstep(0.5, 1.0, ramp));
   if (u_colorPalette == 1) {
     vec3 k = abs(fract(vec3(band + length(point) * 0.9) + vec3(1.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0);
     color = mix(vec3(1.0), clamp(k - 1.0, 0.0, 1.0), 0.95);
   } else if (u_colorPalette == 4) {
     // golden-cortex: gold #FFD700 -> #FF9900 shell with cyan-white axon seams
-    color = mix(vec3(1.0, 0.6795, 0.0), vec3(1.0, 0.3185, 0.0), band);
-    color = mix(color, vec3(0.0, 1.0, 1.0), smoothstep(0.82, 0.95, fract(band * 3.0)) * 0.5);
+    color = mix(vec3(1.0, 0.6795, 0.0), vec3(1.0, 0.3185, 0.0), ramp);
+    color = mix(color, vec3(0.0, 1.0, 1.0), smoothstep(0.82, 0.95, ramp) * 0.5);
   } else if (u_colorPalette == 2) {
     color = mix(vec3(1.0), vec3(0.6867, 0.8388, 1.0), rim) * 0.7;
   } else if (u_colorPalette == 3) {
-    // blood-red #2B0005 -> #D90416 -> #FF2A38 (linear)
-    color = band < 0.5 ? mix(vec3(0.0242, 0.0, 0.0015), vec3(0.6939, 0.0012, 0.0080), band * 2.0)
-                       : mix(vec3(0.6939, 0.0012, 0.0080), vec3(1.0, 0.0232, 0.0395), band * 2.0 - 1.0);
+    // crimson-pulse #2B0005 -> #D90416 -> #FF2A38 (linear)
+    color = mix(mix(vec3(0.0242, 0.0, 0.0015), vec3(0.6939, 0.0012, 0.0080), smoothstep(0.0, 0.5, ramp)),
+                vec3(1.0, 0.0232, 0.0395), smoothstep(0.5, 1.0, ramp));
   } else {
     // true-neon #00F5FF #FF007F #00FF66 #8A2BE2 (linear), sampled by band
-    vec3 neon[4] = vec3[4](vec3(0.0, 0.9131, 1.0), vec3(1.0, 0.0, 0.2122), vec3(0.0, 1.0, 0.1329), vec3(0.2542, 0.0242, 0.7605));
-    color = mix(neon[index], neon[(index + 1) % 4], smoothstep(0.35, 0.65, fract(band * 4.0)));
+    vec3 c0 = mix(vec3(0.0, 0.9131, 1.0), vec3(1.0, 0.0, 0.2122), smoothstep(0.0, 0.34, ramp));
+    vec3 c1 = mix(c0, vec3(0.2542, 0.0242, 0.7605), smoothstep(0.34, 0.67, ramp));
+    color = mix(c1, vec3(0.0, 1.0, 0.1329), smoothstep(0.67, 1.0, ramp));
   }
   color *= 0.35 + 0.8 * diffuse + 0.4 * u_bass;
   color += u_palette[4] * (rim * (0.25 + 0.5 * u_bass));
   float alpha = clamp(0.55 + rim * 0.35 + u_bass * 0.1, 0.0, 1.0);
+  alpha *= clamp(u_emission, 0.0, 1.0);
   fragColor = vec4(color * alpha, alpha);
 }

@@ -13,6 +13,7 @@ uniform float u_viewportYOffset;
 uniform sampler2D u_waterfallTex;
 uniform vec3 u_palette[5];
 uniform float u_bands[5]; // sub, bass, lowMid, highMid, treble
+uniform float u_emission;  // ZUR-GH-013 reactivity emission (0.00 = true-gate silence, black)
 
 out vec4 fragColor;
 
@@ -147,7 +148,7 @@ void main() {
 
   vec3 sky = skyColor(q, ray);
   if (!hit) {
-    fragColor = vec4(linearToSRGB(guardNeon(sky)), 1.0);
+    fragColor = vec4(linearToSRGB(guardNeon(sky) * u_emission), 1.0);
     return;
   }
 
@@ -180,5 +181,5 @@ void main() {
 
   float fog = 1.0 - exp(-travel * 0.055);
   color = mix(color, min(u_palette[1] * 0.32, vec3(OBSIDIAN_LIN)), fog * 0.85);
-  fragColor = vec4(linearToSRGB(guardNeon(color)), 1.0);
+  fragColor = vec4(linearToSRGB(guardNeon(color) * u_emission), 1.0);
 }

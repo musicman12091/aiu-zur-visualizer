@@ -43,10 +43,10 @@ export const COUNT_TIER_LABELS = Object.freeze({
   "256k": "256k (262,144)",
 });
 export const TRAIL_TYPES = Object.freeze(["comet", "electric", "strobe", "ribbon", "none"]);
-/** Index = `u_formationType` in sim.vert.glsl; ZUR-GH-009 ids 6..9 are appended after logo-attractor. */
+/** Index = `u_formationType` in sim.vert.glsl; ZUR-GH-009 ids 6..9 follow logo-attractor, ZUR-GH-013 adds 10. */
 export const FORMATION_TYPES = Object.freeze([
   "free-3d", "neon-tunnel", "polygon-rings", "supernova-shell", "fractal-core", "logo-attractor",
-  "neural-brain", "living-galaxy", "supermassive-blackhole", "wormhole",
+  "neural-brain", "living-galaxy", "supermassive-blackhole", "wormhole", "harmonic-ferrofluid",
 ]);
 export const FORMATION_LABELS = Object.freeze({
   "free-3d": "Free 3D Swarm",
@@ -55,35 +55,40 @@ export const FORMATION_LABELS = Object.freeze({
   "supernova-shell": "Supernova Shell",
   "fractal-core": "Fractal Core",
   "logo-attractor": "Logo / Text Attractor",
-  "neural-brain": "3D Brain (Golden Neurons & Synapses)",
+  "neural-brain": "Anatomical 3D Brain",
   "living-galaxy": "Living Spiral Galaxy",
   "supermassive-blackhole": "Supermassive Black Hole (Gargantua)",
-  "wormhole": "Spacetime Wormhole (Einstein-Rosen)",
+  "wormhole": "Spherical Wormhole — Funnel in Sphere",
+  "harmonic-ferrofluid": "Harmonic Ferrofluid Rings",
 });
-/** Index = `u_particleStyle`. "orb" was removed in ZUR-GH-009. */
-export const PARTICLE_STYLES = Object.freeze(["dart3d", "blood-drop", "synapse-spark", "star-streak"]);
+/**
+ * Index = `u_particleStyle`. ZUR-GH-013: crisp-dot is index 0 and the universal default; blood-drop was deleted and
+ * synapse-spark was rebuilt as synapse-node (legacy ids migrate through PARTICLE_STYLE_ALIASES).
+ */
+export const PARTICLE_STYLES = Object.freeze(["crisp-dot", "dart3d", "synapse-node", "star-streak"]);
 export const PARTICLE_STYLE_LABELS = Object.freeze({
+  "crisp-dot": "Crisp Dot — Pinpoint",
   "dart3d": "3D Dart",
-  "blood-drop": "Blood Drop",
-  "synapse-spark": "Synapse Spark",
-  "star-streak": "Star Streak",
+  "synapse-node": "Neural Node & Spark",
+  "star-streak": "Velocity Star Streak",
 });
-/** Index = `u_colorPalette` (golden-cortex = 4, ZUR-GH-010). */
-export const COLOR_PALETTES = Object.freeze(["true-neon", "full-spectrum", "white-static", "blood-red", "golden-cortex"]);
+export const PARTICLE_STYLE_ALIASES = Object.freeze({ "blood-drop": "crisp-dot", "synapse-spark": "synapse-node", orb: "crisp-dot" });
+/** Index = `u_colorPalette` (golden-cortex = 4). ZUR-GH-013: blood-red became crimson-pulse (same index 3). */
+export const COLOR_PALETTES = Object.freeze(["true-neon", "full-spectrum", "white-static", "crimson-pulse", "golden-cortex"]);
 export const COLOR_PALETTE_LABELS = Object.freeze({
   "true-neon": "True Neon",
   "full-spectrum": "Full Spectrum",
   "white-static": "White Static",
-  "blood-red": "Blood Red",
+  "crimson-pulse": "Crimson Pulse",
   "golden-cortex": "Golden Cortex",
 });
-/** Index = `u_kineticMode`. */
+export const COLOR_PALETTE_ALIASES = Object.freeze({ "blood-red": "crimson-pulse" });
+/** Index = `u_kineticMode`. ZUR-GH-013: splatter-run was deleted with the Blood mode (legacy saves fall back to off). */
 export const KINETIC_MODES = Object.freeze([
-  "off", "splatter-run", "synapse-cascade", "accretion-warp", "ribbon-curtain", "shock-shatter",
+  "off", "synapse-cascade", "accretion-warp", "ribbon-curtain", "shock-shatter",
 ]);
 export const KINETIC_LABELS = Object.freeze({
   "off": "Off",
-  "splatter-run": "Splatter Run",
   "synapse-cascade": "Synapse Cascade",
   "accretion-warp": "Accretion Warp",
   "ribbon-curtain": "Ribbon Curtain",
@@ -94,6 +99,13 @@ export const CAMERA_ZOOM_STEP = 0.05;
 export const REACTIVITY_GAIN_RANGE = Object.freeze([0.5, 5.0]);
 export const NOISE_GATE_RANGE = Object.freeze([0, 0.1]);
 export const NOISE_GATE_DEFAULT = 0.015;
+/** ZUR-GH-013 reactivity modes (u_reactivityMode index): silence = black, 0.06 ember outline, legacy ambient VJ glow. */
+export const REACTIVITY_MODES = Object.freeze(["true-gate", "ember-floor", "ambient-vj"]);
+export const REACTIVITY_MODE_LABELS = Object.freeze({
+  "true-gate": "True Gate — Silence = Black",
+  "ember-floor": "Ember Floor (0.06 outline)",
+  "ambient-vj": "Ambient VJ (always lit)",
+});
 export const OSCILLATION_TYPES = Object.freeze(["off", "wave", "helix", "bounce", "pulse"]);
 /** ZUR-GH-007: Logo / Attractor Text presets shown directly under the Formation dropdown. */
 export const LOGO_TEXT_PRESETS = Object.freeze(["AI: UNDERGROUND", "MON DAAIN", "TENTH GATE", "ZUR"]);
@@ -142,17 +154,18 @@ export const DEFAULT_PARTICLES = Object.freeze({
   densityAutoScale: true,
   trailLength: 0.28,
   trailType: "comet",
-  formationType: "neon-tunnel",
+  formationType: "wormhole",
   attractorText: "AI: UNDERGROUND",
   oscillationType: "helix",
   oscillationAmount: 1.0,
   oscillationSpeed: 1.2,
   pulseLayout: "band-clouds",
-  particleStyle: "dart3d",
+  particleStyle: "crisp-dot",
   colorPalette: "true-neon",
   kineticMode: "off",
   reactivityGain: 2.5,
   cameraZoom: 1.0,
+  reactivityMode: "true-gate",
 });
 
 /** Converts a per-step retention factor (e.g. 0.985 per 1/60 s) into a continuous damping rate (1/s). */
@@ -557,10 +570,13 @@ export function normalizeParticles(input) {
   if (Number.isFinite(src.oscillationAmount)) out.oscillationAmount = clampRange(src.oscillationAmount, OSCILLATION_AMOUNT_RANGE);
   if (Number.isFinite(src.oscillationSpeed)) out.oscillationSpeed = clampRange(src.oscillationSpeed, OSCILLATION_SPEED_RANGE);
   if (PULSE_LAYOUTS.includes(src.pulseLayout)) out.pulseLayout = src.pulseLayout;
-  // Legacy "orb" (or any unknown style) migrates to the default dart3d.
-  if (PARTICLE_STYLES.includes(src.particleStyle)) out.particleStyle = src.particleStyle;
-  if (COLOR_PALETTES.includes(src.colorPalette)) out.colorPalette = src.colorPalette;
+  // Legacy styles (orb, blood-drop, synapse-spark) migrate through the alias table; unknown ids use crisp-dot.
+  const style = PARTICLE_STYLE_ALIASES[src.particleStyle] || src.particleStyle;
+  if (PARTICLE_STYLES.includes(style)) out.particleStyle = style;
+  const palette = COLOR_PALETTE_ALIASES[src.colorPalette] || src.colorPalette;
+  if (COLOR_PALETTES.includes(palette)) out.colorPalette = palette;
   if (KINETIC_MODES.includes(src.kineticMode)) out.kineticMode = src.kineticMode;
+  if (REACTIVITY_MODES.includes(src.reactivityMode)) out.reactivityMode = src.reactivityMode;
   if (Number.isFinite(src.reactivityGain)) out.reactivityGain = clampRange(src.reactivityGain, REACTIVITY_GAIN_RANGE);
   if (Number.isFinite(src.cameraZoom)) out.cameraZoom = clampRange(src.cameraZoom, CAMERA_ZOOM_RANGE);
   return out;
@@ -600,6 +616,7 @@ export function encodePresetParam(sceneId, particles) {
     `ps:${p.particleStyle}`,
     `cp:${p.colorPalette}`,
     `km:${p.kineticMode}`,
+    `rm:${p.reactivityMode}`,
   ].join("_");
 }
 
@@ -645,6 +662,7 @@ export function decodePresetParam(value) {
     else if (key === "ps") result.particles.particleStyle = raw;
     else if (key === "cp") result.particles.colorPalette = raw;
     else if (key === "km") result.particles.kineticMode = raw;
+    else if (key === "rm") result.particles.reactivityMode = raw;
   }
   return matched ? result : null;
 }
@@ -738,6 +756,19 @@ export function radialKick(gain, sub, bass) {
   return 1 + 0.28 * gain * (sub * 0.65 + bass * 0.35);
 }
 
+/** ZUR-GH-013 tightening: formations that never swell on sustained audio (logo, brain, black hole, wormhole). */
+export const STRUCTURED_FORMATIONS = Object.freeze(["logo-attractor", "neural-brain", "supermassive-blackhole", "wormhole"]);
+export const STRUCTURED_ONSET_PULSE = 0.08;
+/** Target scale for a formation: structured ones get only a <= 1.08x transient onset micro-pulse. */
+export function formationKick(formationType, gain, sub, bass, onset = 0, gate = 1) {
+  if (STRUCTURED_FORMATIONS.includes(formationType)) {
+    const o = Math.min(1, Math.max(0, Number.isFinite(onset) ? onset : 0));
+    const g = Math.min(1, Math.max(0, Number.isFinite(gate) ? gate : 0));
+    return 1 + STRUCTURED_ONSET_PULSE * o * g;
+  }
+  return radialKick(gain, sub, bass);
+}
+
 /** Onset velocity impulse (sim.vert.glsl). */
 export function onsetImpulse(gain, onset) {
   return onset * 2.2 * gain;
@@ -748,11 +779,17 @@ export function pointSizePulse(gain, bass, onset) {
   return 1 + 0.45 * gain * (bass * 0.5 + onset * 0.5);
 }
 
-/** v_neuralPulse mirror (render.vert.glsl). */
-export function neuralPulse(radius, time, onset, treble) {
+/**
+ * v_neuralPulse mirror (render.vert.glsl). ZUR-GH-013: the amplitude comes strictly from the audio bands (the old 0.45
+ * idle baseline was deleted), so silence never fires a wave.
+ */
+export function neuralAudioDrive(sub, bass, onset, treble) {
+  return Math.min(1.5, Math.max(0, sub * 0.5 + bass * 0.8 + onset * 1.3 + treble * 0.6));
+}
+export function neuralPulse(radius, time, onset, treble, sub = 0, bass = 0) {
   const wave = Math.sin(radius * 14 - time * 9 - onset * 5);
   const t = Math.min(1, Math.max(0, (wave - 0.72) / (0.98 - 0.72)));
-  return t * t * (3 - 2 * t) * Math.min(1.5, Math.max(0, 0.45 + treble * 0.9 + onset * 1.1));
+  return t * t * (3 - 2 * t) * neuralAudioDrive(sub, bass, onset, treble);
 }
 
 /** Weighted band centroid 0..1 (sub = 0 ... treble = 1) fed to u_spectralCentroid. */
@@ -760,32 +797,6 @@ export function spectralCentroidFromBands(sub, bass, lowMid, highMid, treble) {
   const sum = sub + bass + lowMid + highMid + treble;
   if (!(sum > 1e-6)) return 0.5;
   return (bass * 0.25 + lowMid * 0.5 + highMid * 0.75 + treble) / sum;
-}
-
-/** ZUR-GH-010: blood-drop impact glass plane, downward-streak respawn floor and the share of particles routed there. */
-export const BLOOD_GLASS_Z = 0.79;
-export const BLOOD_RESPAWN_Y = -1.18;
-export const BLOOD_ROUTE_MOD = 5;
-export const BLOOD_ROUTE_BELOW = 2;
-/** `(gl_VertexID % 5) < 2` bypasses the formation tether and rushes the front glass (40%). */
-export function isBloodRouted(id) {
-  return id % BLOOD_ROUTE_MOD < BLOOD_ROUTE_BELOW;
-}
-/** Downward streak speed (normalised units / s) of a pinned drop: -clamp(0.55 + 1.55 * fract(seed * 13.1) + 1.2 * bass, 0.55, 2.8). */
-export function bloodStreakSpeed(seed, bass) {
-  const f = seed * 13.1 - Math.floor(seed * 13.1);
-  return Math.min(2.8, Math.max(0.55, 0.55 + 1.55 * f + 1.2 * bass));
-}
-
-/** Blood-drop wall pin (sim.vert.glsl, normalised units): returns the new state or null when not pinned. */
-export function bloodPin(posZ, velZ) {
-  if (posZ >= 0.78) return { z: BLOOD_GLASS_Z, vz: 0, pinned: true };
-  return { z: posZ, vz: velZ, pinned: false };
-}
-
-/** Blood-drop respawn trigger (sim.vert.glsl, normalised units). */
-export function bloodNeedsRespawn(posY) {
-  return posY < BLOOD_RESPAWN_Y;
 }
 
 /** Saturation floor used by the true-neon palette (render.frag.glsl satFloor). Input / output linear-ish rgb. */
@@ -805,11 +816,10 @@ export function densityCrowdNorm(activeCount) {
 export function zoomSpriteDamp(zoom) {
   return zoom > 1 ? 1 / zoom ** 0.35 : 1;
 }
-/** render.vert.glsl max sprite radius in px: 14 standard, 28 for blood splatters. */
+/** render.vert.glsl max sprite radius in px (ZUR-GH-013: one 14 px ceiling; the 28 px blood ceiling was deleted). */
 export const SPRITE_MAX_PX = 14;
-export const SPRITE_MAX_PX_BLOOD = 28;
-export function spriteRadiusPx(rawRadiusPx, zoom, blood = false) {
-  return Math.min(rawRadiusPx * zoomSpriteDamp(zoom), blood ? SPRITE_MAX_PX_BLOOD : SPRITE_MAX_PX);
+export function spriteRadiusPx(rawRadiusPx, zoom) {
+  return Math.min(rawRadiusPx * zoomSpriteDamp(zoom), SPRITE_MAX_PX);
 }
 
 /** Stage 5 formations (u_formationType >= 6): minimum tether stiffness and turbulent-curl cap (fraction of formation radius). */
@@ -855,7 +865,7 @@ export const GOLDEN_CORTEX_SOMA_ALPHA = 0.52;
 export const GOLDEN_CORTEX_SOMA_RADIANCE = 1.85;
 /** ZUR-GH-011: electric cyan-white (#00FFFF -> #FFFFFF) axon flash boost (was 2.8). */
 export const GOLDEN_CORTEX_PULSE_BOOST = 3.2;
-/** ZUR-GH-011: peak of the idle thalamic rhythm; above GOLDEN_CORTEX_PULSE_THRESHOLD so the cortex fires at u_rms == 0. */
+/** ZUR-GH-011 idle thalamic rhythm peak. ZUR-GH-013: only used by reactivityMode "ambient-vj" (never true-gate). */
 export const GOLDEN_CORTEX_THALAMIC_PEAK = 0.78;
 
 /** render.vert.glsl thalamic baseline mirror: slow radial sweep that keeps golden-cortex firing with no audio. */
@@ -869,3 +879,106 @@ export const GOLDEN_CORTEX_SOMA_FRACTION = 0.8;
 /** Golden Cortex split + firing threshold (ZUR-GH-010, unchanged by ZUR-GH-011). */
 export const GOLDEN_CORTEX_PULSE_THRESHOLD = 0.55;
 // GOLDEN_CORTEX_PULSE_BOOST / GOLDEN_CORTEX_SOMA_ALPHA above supersede the ZUR-GH-010 2.8 / 0.26 values.
+
+// ---- ZUR-GH-013 (v6.0) pure mirrors of shader math (pinned by tests/verify-contracts.mjs) ----
+
+/** True silence-to-peak gate thresholds: cleanGate = smoothstep(0.018, 0.13, maxBandEnergy * u_reactivityGain). */
+export const CLEAN_GATE_LO = 0.018;
+export const CLEAN_GATE_HI = 0.13;
+function gateSmoothstep(edge0, edge1, x) {
+  const t = Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0)));
+  return t * t * (3 - 2 * t);
+}
+export function maxBandEnergy(bands) {
+  let m = 0;
+  for (const value of bands || []) if (Number.isFinite(value) && value > m) m = value;
+  return m;
+}
+export function cleanGate(maxEnergy, reactivityGain = 1) {
+  const x = (Number.isFinite(maxEnergy) ? maxEnergy : 0) * (Number.isFinite(reactivityGain) ? reactivityGain : 1);
+  return gateSmoothstep(CLEAN_GATE_LO, CLEAN_GATE_HI, x);
+}
+/** ember-floor keeps a 0.06 outline between beats. */
+export const EMBER_FLOOR = 0.06;
+/** render.vert.glsl emissionFor(): true-gate = gate (0.00 at silence), ember-floor = max(gate, 0.06), ambient-vj = 1. */
+export function reactivityEmission(mode, gate) {
+  if (mode === "ember-floor") return Math.max(gate, EMBER_FLOOR);
+  if (mode === "ambient-vj") return 1;
+  return gate;
+}
+/** With the gate closed the trail decays with a 120 ms time constant (no lingering glow in silence). */
+export const TRUE_GATE_TRAIL_DECAY_MS = 120;
+export function gatedTrailKeep(keep, dt, gate, mode = "true-gate") {
+  if (mode === "ambient-vj") return keep;
+  const fast = Math.exp(-Math.max(dt, 0) / (TRUE_GATE_TRAIL_DECAY_MS / 1000));
+  const closed = Math.min(keep, fast);
+  const g = Math.min(1, Math.max(0, gate));
+  return closed + (keep - closed) * g;
+}
+/** sim.vert.glsl: extra damping (k += (1 - gate) * 5) so motion settles while the gate is closed. */
+export const TRUE_GATE_MOTION_DAMP = 5;
+export function gatedDamping(damping, gate, mode = "true-gate") {
+  return mode === "ambient-vj" ? damping : damping + (1 - Math.min(1, Math.max(0, gate))) * TRUE_GATE_MOTION_DAMP;
+}
+
+/** crisp-dot pinpoint: core = exp(-r2 * 16) with a hard cutoff at r = 1; exposure follows the live agent count. */
+export const CRISP_DOT_CORE_K = 16;
+export function crispDotCore(r) {
+  return r >= 1 ? 0 : Math.exp(-r * r * CRISP_DOT_CORE_K);
+}
+export function crispDotExposure(activeCount) {
+  return Math.min(1, Math.max(0.16, (16384 / Math.max(activeCount, 1)) ** 0.52));
+}
+/** star-streak: 1 + clamp(length(vScreen) * (16 + 45 * bass + 60 * onset), 0, 18); stretch == 1 at rest (crisp head). */
+export function starStreakStretch(screenSpeed, bass, onset) {
+  return 1 + Math.min(18, Math.max(0, screenSpeed * (16 + 45 * bass + 60 * onset)));
+}
+/** Energy conservation: the streak spreads the same energy as the resting dot. */
+export function starStreakConserve(stretch) {
+  return 1 / (1 + 0.35 * (Math.max(stretch, 1) - 1));
+}
+export const DART_SCALE = 0.55;
+export const SYNAPSE_SPARK_FRACTION = 0.15;
+
+/** Spherical wormhole horn torus (sim.vert.glsl wormholeTarget). */
+export const WORMHOLE_SHELL_R = 0.94;
+export const WORMHOLE_THROAT_R = 0.08;
+export const WORMHOLE_TILT_DEG = 22;
+export const WORMHOLE_SCALE = 2.6;
+export function wormholePoint(u, v) {
+  const theta = u * Math.PI * 2;
+  const phi = v * Math.PI * 2;
+  const rxz = 0.51 + 0.43 * Math.cos(theta);
+  const y = 0.76 * Math.sin(theta) * (0.52 + (1 - 0.52) * (0.5 + 0.5 * Math.cos(theta)));
+  const x = rxz * Math.cos(phi);
+  const z = rxz * Math.sin(phi);
+  const a = (WORMHOLE_TILT_DEG * Math.PI) / 180;
+  return [x, y * Math.cos(a) - z * Math.sin(a), y * Math.sin(a) + z * Math.cos(a)];
+}
+
+/** Anatomical 3D Brain region split (sim.vert.glsl brainRegion). */
+export const BRAIN_CEREBRUM_FRACTION = 0.82;
+export const BRAIN_CEREBELLUM_FRACTION = 0.11;
+export const BRAIN_BRAINSTEM_FRACTION = 0.07;
+export const BRAIN_LONGITUDINAL_GAP = 0.045;
+export const BRAIN_GYRI_AMPLITUDE = 0.03;
+export const BRAIN_VIEW_YAW_DEG = 32;
+export function brainRegion(u) {
+  if (u < BRAIN_CEREBRUM_FRACTION) return "cerebrum";
+  if (u < BRAIN_CEREBRUM_FRACTION + BRAIN_CEREBELLUM_FRACTION) return "cerebellum";
+  return "brainstem";
+}
+
+/** Harmonic Ferrofluid Rings: 70% spherical-harmonic spike shell on 5 FFT bands + 30% concentric EQ rings. */
+export const FERRO_SHELL_FRACTION = 0.70;
+export const FERRO_RING_FRACTION = 0.30;
+export const FERRO_HARMONIC_DEGREES = Object.freeze([2, 3, 4, 6, 8]);
+
+/** render.frag.glsl gradientT(): continuous palette coordinate (no angular term => no hue seams). */
+export function paletteGradientT(radialNorm, depthNorm, speedNorm, centroid, jitter = 0) {
+  return 0.62 * radialNorm + 0.28 * depthNorm + 0.18 * speedNorm + 0.30 * centroid + jitter;
+}
+/** iq cosine palette a + b * cos(TAU * (c * t + d)). */
+export function cosinePalette(t, a, b, c, d) {
+  return [0, 1, 2].map((i) => a[i] + b[i] * Math.cos(Math.PI * 2 * (c[i] * t + d[i])));
+}

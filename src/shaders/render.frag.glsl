@@ -1,43 +1,40 @@
 #version 300 es
-// ZUR Stage 3.2 — chromatic neon sprites: 100% saturated palette halo, white only as a tiny pinprick core.
-// Dart pass is additive (ONE, ONE); capsule pass is premultiplied (ONE, ONE_MINUS_SRC_ALPHA).
+// ZUR v6.0 (ZUR-GH-013) — crisp neon pinpoints. Every style is additive (ONE, ONE); silence is black in true-gate.
+// Palettes are smooth cosine / mix() gradients over radialNorm, depthNorm, speedNorm and u_spectralCentroid; there are
+// no angular colour buckets anywhere, so a ring of agents never shows a hue seam.
 precision highp float;
 precision highp int;
 
-uniform int u_shape;
+uniform int u_shape;             // 0 dart cone, 1 quad, 2 dart SDF quad
 uniform float u_radianceScale;
-uniform float u_particleSize;   // user multiplier 0.5x – 4.0x
-uniform float u_activeCount;    // live agent count (16k / 64k crowds)
+uniform float u_particleSize;    // user multiplier 0.5x – 4.0x
+uniform float u_activeCount;     // live agent count
 uniform float u_trailEnergyNorm; // ZUR-GH-008: clamp((1 - keepFactor) / (1 - 0.55), 0.18, 1.0)
 uniform vec3 u_lightDir;
-uniform vec3 u_rimColor;
 
-in vec3 v_color;
-in vec3 v_colorAlt;
 in vec2 v_local;
-flat in float v_halfSeg;
-flat in float v_radius;   // capsule: glow radius in pixels (v_local reaches it at the quad edge)
 flat in vec3 v_normal;
 in vec3 v_view;
-in float v_neuralPulse;   // ZUR-GH-009: dedicated synapse firing varying from render.vert.glsl
 flat in float v_seed;
-flat in float v_pinned;
+in float v_neuralPulse;
 flat in float v_tint;
-flat in float v_group;
-flat in vec3 v_formColor;
-flat in float v_formMix;
-flat in float v_hue;      // ZUR-GH-012: < 0.03 per-particle hue jitter (the hue bands come from v_worldPos)
-flat in vec3 v_worldPos;  // ZUR-GH-012: agent centre; coherent spatial hue bands for full-spectrum / true-neon
-flat in vec3 v_bh;        // ZUR-GH-010: event horizon disc in framebuffer px (z = radius, 0 = off)
-flat in float v_axon;     // ZUR-GH-010: 1 = white-matter axon tract (20%), 0 = cortical soma (80%)
+flat in float v_hue;
+flat in vec3 v_worldPos;
+flat in float v_speedNorm;
+flat in vec3 v_bh;
+flat in float v_axon;
+flat in float v_region;
+flat in float v_spark;
 flat in vec4 v_style;
+flat in float v_band;
 
-uniform int u_formationType;     // ZUR-GH-012: 5 logo-attractor, 6 neural-brain
-uniform int u_megastructure;     // ZUR-GH-012: 1 = orbit swarm around the Mandelbulb core (0.35x swarm alpha)
-uniform int u_particleStyle;     // 0 dart3d, 1 blood-drop, 2 synapse-spark, 3 star-streak
-uniform int u_colorPalette;      // 0 true-neon, 1 full-spectrum, 2 white-static, 3 blood-red, 4 golden-cortex
+uniform int u_formationType;     // 5 logo-attractor, 6 neural-brain
+uniform int u_megastructure;     // 1 = orbit swarm around the Mandelbulb core (0.35x swarm alpha)
+uniform int u_particleStyle;     // 0 crisp-dot, 1 dart3d, 2 synapse-node, 3 star-streak
+uniform int u_colorPalette;      // 0 true-neon, 1 full-spectrum, 2 white-static, 3 crimson-pulse, 4 golden-cortex
 uniform float u_time;
 uniform float u_treble;
+uniform float u_highMid;
 uniform float u_bass;
 uniform float u_onset;
 uniform float u_spectralCentroid;
@@ -45,159 +42,131 @@ uniform float u_spectralCentroid;
 out vec4 fragColor;
 
 const float RADIANCE_BUDGET = 1.6;
-// ZUR-GH-011 golden-cortex: resting soma alpha floor (was 0.26, applied before the density norm), metallic gold soma
-// radiance, and the cyan-white axon flash boost (was 2.8). Mirrored in particleMath.js GOLDEN_CORTEX_*.
 const float CORTEX_SOMA_ALPHA = 0.52;
 const float CORTEX_SOMA_RADIANCE = 1.85;
 const float CORTEX_PULSE_BOOST = 3.2;
-// ZUR-GH-012: logo glyph visibility (bypasses crowdNorm), blood glass runners, megastructure swarm alpha.
-const float LOGO_ALPHA_FLOOR = 0.88;
 const float LOGO_NEON_RADIANCE = 1.9;
-const float BLOOD_RUNNER_RADIANCE = 2.6;
 const float MEGA_SWARM_ALPHA = 0.35;
-const vec3 BLOOD_CORE = vec3(1.0, 0.003, 0.016);      // #FF0A22 in linear light
-const vec3 BLOOD_SPECULAR = vec3(1.0, 0.254, 0.305);  // #FF8A96 in linear light
+const float CRISP_DOT_GAIN = 2.4;
 const vec3 BRAIN_CRIMSON = vec3(1.0, 0.0024, 0.0090);       // #FF0818 in linear light
 const vec3 BRAIN_CRIMSON_DEEP = vec3(0.578, 0.0, 0.0030);   // #C8000A in linear light
 const vec3 BRAIN_SCARLET_FLASH = vec3(1.0, 0.0908, 0.1329); // #FF5566 in linear light (peak synapse flash only)
 const float TAU = 6.28318530718;
 
-// Hex constants below are converted to linear light (the rest of the pipeline is linear before the tone map).
 vec3 hsv2rgb(vec3 c) {
   vec3 p = abs(fract(c.xxx + vec3(1.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0);
   return c.z * mix(vec3(1.0), clamp(p - 1.0, 0.0, 1.0), c.y);
 }
 
-// ZUR-GH-012: coherent 3D spatial hue: azimuth sectors (atan(y, x)) + radial and Z bands, only the tiny v_hue jitter is
-// per particle. Neighbouring agents share chroma, so additive overlap stays vivid instead of cancelling to grey.
-float spatialHue() {
-  float azimuth = atan(v_worldPos.y, v_worldPos.x + 1e-5) / TAU + 0.5;       // 0..1
-  float sector = floor(clamp(azimuth, 0.0, 0.9999) * 6.0) / 6.0;
-  float radial = floor(length(v_worldPos.xy) * 0.7) * 0.17;
-  float depthBand = floor((v_worldPos.z + 4.0) * 0.45) * 0.11;
-  return fract(sector + radial + depthBand + v_hue);
+// iq cosine palette: a + b * cos(TAU * (c * t + d)), continuous in t.
+vec3 cosinePalette(float t, vec3 a, vec3 b, vec3 c, vec3 d) {
+  return a + b * cos(TAU * (c * t + d));
+}
+
+// Continuous gradient coordinate: radius, depth, speed and the live spectral centroid. No angular term.
+float gradientT() {
+  float radialNorm = clamp(length(v_worldPos) / 3.2, 0.0, 1.0);
+  float depthNorm = clamp((v_worldPos.z + 3.2) / 6.4, 0.0, 1.0);
+  return 0.62 * radialNorm + 0.28 * depthNorm + 0.18 * v_speedNorm + 0.30 * u_spectralCentroid + v_hue + 0.18 * v_region
+    + (v_band >= 0.0 ? v_band * 0.2 : 0.0);
+}
+
+// true-neon: smooth hue walk cyan #00F5FF -> magenta #FF007F -> violet #8A2BE2 -> green #00FF66 -> cyan, saturation 1.
+vec3 trueNeon(float t) {
+  float g = fract(t) * 4.0;
+  float h = mix(0.5, 0.917, smoothstep(0.0, 1.0, clamp(g, 0.0, 1.0)));
+  h = mix(h, 0.75, smoothstep(0.0, 1.0, clamp(g - 1.0, 0.0, 1.0)));
+  h = mix(h, 0.40, smoothstep(0.0, 1.0, clamp(g - 2.0, 0.0, 1.0)));
+  h = mix(h, 0.50, smoothstep(0.0, 1.0, clamp(g - 3.0, 0.0, 1.0)));
+  return hsv2rgb(vec3(h, 1.0, 1.0));
+}
+
+// full-spectrum: rainbow cosine with a saturation lift (continuous, wraps cleanly at t = 1).
+vec3 fullSpectrum(float t) {
+  vec3 c = cosinePalette(t, vec3(0.5), vec3(0.5), vec3(1.0), vec3(0.0, 0.33, 0.67));
+  float m = min(min(c.r, c.g), c.b);
+  float M = max(max(c.r, c.g), c.b);
+  return clamp((c - m * 0.85) / max(M - m * 0.85, 1e-3), 0.0, 1.0);
 }
 
 // Returns the un-tinted palette colour (peak channel ~1) for this fragment's agent.
 vec3 palettePick(float rim) {
-  if (u_colorPalette == 1) {
-    // full-spectrum rainbow, 0.95 saturation
-    // ZUR-GH-010: hue is distributed over 3D space + particle hash (v_hue), never washed by u_time, so every frame
-    // carries many hue sectors at once.
-    return hsv2rgb(vec3(spatialHue(), 0.95, 1.0));
-  }
+  float t = gradientT();
+  if (u_colorPalette == 1) return fullSpectrum(t);
   if (u_colorPalette == 4) {
-    // golden-cortex: 80% cortical soma in vivid metallic gold #FFD700 -> #FFA800 (x1.85 radiance, ZUR-GH-011); 20%
-    // white-matter axon tracts and firing waves (v_neuralPulse > 0.55) in Electric Cyan-White #00FFFF -> #FFFFFF with a 3.2x
-    // radiance boost (the boost is routed through the trail-energy / crowd guards in main(), whiteClip stays 0).
+    // golden-cortex: metallic gold soma gradient, cyan-white axon tracts and firing waves
     if (v_neuralPulse > 0.55) return mix(vec3(0.0, 1.0, 1.0), vec3(1.0), clamp(v_neuralPulse - 0.55, 0.0, 1.0) * 1.2);
     if (v_axon > 0.5) return mix(vec3(0.0, 1.0, 1.0), vec3(0.6867, 0.8388, 1.0), 0.45 + 0.4 * fract(v_seed * 3.1));
-    // #FFD700 = (1.0, 0.6795, 0.0) linear, #FFA800 = (1.0, 0.3916, 0.0) linear.
-    return mix(vec3(1.0, 0.6795, 0.0), vec3(1.0, 0.3916, 0.0), fract(v_seed * 5.0)) * CORTEX_SOMA_RADIANCE;
+    return mix(vec3(1.0, 0.6795, 0.0), vec3(1.0, 0.3916, 0.0), 0.5 + 0.5 * cos(TAU * t)) * CORTEX_SOMA_RADIANCE;
   }
   if (u_colorPalette == 2) {
-    // white-static: #FFFFFF core, #D8ECFF rim; flicker is a mild gate so it never clips
+    // white-static: #FFFFFF core, #D8ECFF rim; treble flicker is a mild gate so it never clips
     float flick = step(0.35, fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233)) + u_time * 43.0) * 43758.5453)) * u_treble;
-    vec3 c = mix(vec3(1.0), vec3(0.6867, 0.8388, 1.0), clamp(rim, 0.0, 1.0));
+    vec3 c = mix(vec3(1.0), vec3(0.6867, 0.8388, 1.0), clamp(rim + 0.3 * (0.5 + 0.5 * cos(TAU * t)), 0.0, 1.0));
     return c * (0.55 + 0.45 * flick);
   }
   if (u_colorPalette == 3) {
-    // blood-red #2B0005 -> #D90416 -> #FF2A38, ruby flash on beat/onset
-    float t = clamp(0.35 + 0.65 * fract(v_seed * 3.7) + 0.5 * u_onset, 0.0, 1.0);
-    vec3 c = t < 0.5 ? mix(vec3(0.0242, 0.0, 0.0015), vec3(0.6939, 0.0012, 0.0080), t * 2.0)
-                     : mix(vec3(0.6939, 0.0012, 0.0080), vec3(1.0, 0.0232, 0.0395), t * 2.0 - 1.0);
-    // ZUR-GH-012 (Option B): the 3D Brain in blood-red keeps arterial crimson soma (#C8000A -> #FF0818); only peak
-    // synapse flashes (v_neuralPulse > 0.65) go white-scarlet #FF5566. No pink blend on the resting cortex.
+    // crimson-pulse: #2B0005 -> #D90416 -> #FF2A38 gradient, ruby flash on beat / onset
+    float k = clamp(0.35 + 0.65 * (0.5 + 0.5 * cos(TAU * t)) + 0.5 * u_onset, 0.0, 1.0);
+    vec3 c = mix(mix(vec3(0.0242, 0.0, 0.0015), vec3(0.6939, 0.0012, 0.0080), smoothstep(0.0, 0.5, k)),
+                 vec3(1.0, 0.0232, 0.0395), smoothstep(0.5, 1.0, k));
     if (u_formationType == 6) {
-      c = v_neuralPulse > 0.65 ? BRAIN_SCARLET_FLASH : mix(BRAIN_CRIMSON_DEEP, BRAIN_CRIMSON, sqrt(fract(v_seed * 5.3)));
+      c = v_neuralPulse > 0.65 ? BRAIN_SCARLET_FLASH : mix(BRAIN_CRIMSON_DEEP, BRAIN_CRIMSON, 0.5 + 0.5 * cos(TAU * t));
     }
     return c * (1.0 + 0.8 * clamp(u_bass * 0.6 + u_onset, 0.0, 1.0));
   }
-  // true-neon: #00F5FF #FF007F #00FF66 #8A2BE2 with a saturation floor >= 0.85 (no pastel blend)
-  float g = spatialHue() * 4.0;
-  vec3 c = g < 1.0 ? vec3(0.0, 0.9131, 1.0) : g < 2.0 ? vec3(1.0, 0.0, 0.2122) : g < 3.0 ? vec3(0.0, 1.0, 0.1329) : vec3(0.2542, 0.0242, 0.7605);
-  return c;
+  return trueNeon(t);
 }
 
-
 void shade() {
-  // ZUR-GH-010: nothing is emitted inside the r < 0.24 event horizon, whatever the particle count or trail length.
+  // ZUR-GH-010: nothing is emitted inside the r < 0.24 event horizon.
   if (v_bh.z > 0.0 && distance(gl_FragCoord.xy, v_bh.xy) < v_bh.z) discard;
-  // Bounded radiance: big sprites in dense swarms never stack into solid white fireballs.
-  // ZUR-GH-010 density alpha: 64k keeps full radiance, 96k..256k fall off sub-linearly (never below 0.28).
+  if (v_tint <= 0.0) discard;
+  // Darts keep the ZUR-GH-010 density norm; crisp quads use the pinpoint exposure curve below.
   float crowdNorm = clamp(pow(65536.0 / max(float(u_activeCount), 65536.0), 0.58), 0.28, 1.0);
   crowdNorm *= RADIANCE_BUDGET / (1.0 + 0.32 * u_particleSize * u_particleSize);
-  // ZUR-GH-012: logo glyphs bypass the crowd / size alpha reduction, floor the alpha at 0.88 and glow at 1.9x.
   bool logo = u_formationType == 5;
   float logoBoost = logo ? LOGO_NEON_RADIANCE : 1.0;
   if (logo) crowdNorm = max(crowdNorm, 1.0);
-  // 3D Brain (formation 6) on every palette: firing waves get the 3.2x boost, soma rests at alpha 0.52 before the density norm
   bool cortexFiring = u_formationType == 6 && v_neuralPulse > 0.55;
   bool cortexSoma = u_formationType == 6 && v_axon < 0.5 && !cortexFiring;
   float paletteBoost = cortexFiring ? CORTEX_PULSE_BOOST : 1.0;
-  // ZUR-GH-008: steady-state trail energy normalisation + big-sprite core scaling (3.35x no longer blows out).
   float sizeNorm = u_particleSize > 1.5 ? 1.0 / pow(max(u_particleSize, 1.0), 0.65) : 1.0;
   float energyNorm = clamp(u_trailEnergyNorm, 0.18, 1.0);
-  if (u_particleStyle != 0) {
-    float headR = max(v_style.y, 1.0);
-    vec2 p = v_local;
-    vec3 base = palettePick(0.0);
-    float lum = v_tint * u_radianceScale * sqrt(crowdNorm) * energyNorm * paletteBoost * logoBoost;
-    vec3 outC = vec3(0.0);
-    float alpha = 0.0;
-    if (u_particleStyle == 1) {
-      // blood-drop: teardrop SDF head (+x is the travel direction) with an arterial comet streak behind it
-      vec2 uv = (p - vec2(v_style.x, 0.0)) / headR;
-      float splat = 0.0;
-      if (v_pinned > 0.5) {
-        // wall splat: multi-lobe radial distortion
-        float lobes = 0.55 + 0.45 * sin(atan(uv.y, uv.x) * 7.0 + v_seed * 19.0);
-        uv /= max(lobes, 0.2);
-        splat = 1.0;
-      }
-      float d = length(vec2(uv.x * (1.0 + 0.65 * uv.y), uv.y));
-      float head = 1.0 - smoothstep(0.7, 1.0, d);
-      float tailLen = max(v_style.x - 0.0, 0.0);
-      float along = clamp(-(p.x - v_style.x) / max(tailLen + headR, 1.0), 0.0, 1.0);
-      float tail = (p.x > v_style.x) ? 0.0 : (1.0 - along) * (1.0 - smoothstep(0.0, headR * (0.75 - 0.5 * along), abs(p.y)));
-      float core = clamp(max(head, tail * 0.8), 0.0, 1.0);
-      // ZUR-GH-012 glass runner on every palette: #FF0A22 core, #FF8A96 wet specular highlight, 2.6x radiance
-      vec3 blood = mix(vec3(0.18, 0.0, 0.02), BLOOD_CORE, core);
-      vec3 tinted = u_colorPalette == 3 ? blood : mix(blood, base, 0.35);
-      vec2 g = uv - vec2(-0.3, -0.35);
-      float glint = exp(-dot(g, g) * 14.0) * head;
-      outC = (tinted * core + BLOOD_SPECULAR * glint * 0.8) * lum * 3.0 * BLOOD_RUNNER_RADIANCE;
-      alpha = max(core, glint);
-      if (alpha < 0.01) discard;
-      if (splat > 0.5) outC *= 1.15;
-    } else if (u_particleStyle == 2) {
-      // synapse-spark: sharp golden soma core + cross dendrite filaments, cyan-white when firing
-      float r = length(p) / headR;
-      float soma = 1.0 - smoothstep(0.55, 1.0, r);
-      float ang = atan(p.y, p.x) + v_seed * 6.2831;
-      float branch = pow(abs(cos(ang * 2.0)), 14.0) * (1.0 - smoothstep(0.0, 4.0, r)) * step(1.0, r);
-      branch += 0.5 * pow(abs(cos(ang * 3.0 + 1.0)), 18.0) * (1.0 - smoothstep(0.0, 2.6, r)) * step(1.0, r);
-      bool firing = u_colorPalette == 4 ? v_neuralPulse > 0.55 : v_neuralPulse > 0.5;
-      vec3 gold = vec3(1.0, 0.6795, 0.0);
-      vec3 flashC = vec3(0.7454, 1.0, 1.0);
-      // ZUR-GH-012 Option B: blood-red brain dendrites never flash cyan; white-scarlet #FF5566 only above 0.65.
-      if (u_colorPalette == 3 && u_formationType == 6) flashC = v_neuralPulse > 0.65 ? BRAIN_SCARLET_FLASH : base;
-      vec3 somaC = base;
-      vec3 filC = firing ? flashC : somaC * 0.75;
-      float somaAlpha = cortexSoma ? CORTEX_SOMA_ALPHA : 1.0;
-      outC = (somaC * soma * somaAlpha + filC * branch * (firing ? 1.6 : 0.8)) * lum * (cortexSoma ? 6.0 : 3.0);
-      alpha = max(soma * somaAlpha, branch);
-      if (alpha < 0.01) discard;
-    } else {
-      // star-streak: razor-thin ~1.5 px core needle, anisotropic, no halo
-      float across = 1.0 - smoothstep(0.55, 1.0, abs(p.y) / 1.5);
-      float along = 1.0 - smoothstep(0.35, 1.0, abs(p.x) / max(v_style.z, 1.0));
-      alpha = across * along;
-      if (alpha < 0.01) discard;
-      outC = base * alpha * lum * 3.5;
+
+  if (u_shape == 1) {
+    // Crisp quads: crisp-dot, synapse-node, star-streak. Head = exp(-r2 * 16) core with a hard cutoff at r = 1.
+    float exposure = clamp(pow(16384.0 / max(float(u_activeCount), 1.0), 0.52), 0.16, 1.0);
+    if (logo) exposure = 1.0;
+    float headR = max(v_style.x, 1.0);
+    float tailPx = v_style.y;
+    float stretch = max(v_style.z, 1.0);
+    vec2 p = v_local / headR;                    // head-normalised, +x = travel direction
+    float r2 = dot(p, p);
+    float head = r2 < 1.0 ? exp(-r2 * 16.0) : 0.0;
+    float tail = 0.0;
+    if (tailPx > 0.5 && p.x < 0.0) {
+      float along = clamp(-v_local.x / tailPx, 0.0, 1.0);
+      float across = p.y / 0.6;
+      tail = (1.0 - along) * (1.0 - along) * exp(-across * across * 16.0) * step(-v_local.x, tailPx);
     }
-    if (logo) alpha = max(alpha, LOGO_ALPHA_FLOOR);
-    fragColor = vec4(outC, alpha);
+    // energy-conserving stretch: the streak spreads the same energy as the resting dot
+    float conserve = 1.0 / (1.0 + 0.35 * (stretch - 1.0));
+    float shape = max(head, tail) * conserve;
+    vec3 base = palettePick(sqrt(min(r2, 1.0)));
+    float lum = v_tint * u_radianceScale * exposure * energyNorm * paletteBoost * logoBoost * CRISP_DOT_GAIN;
+    if (cortexSoma) lum *= CORTEX_SOMA_ALPHA * 1.6;
+    vec3 outC = base * shape * lum;
+    if (v_spark > 0.5) {
+      // synapse-node axon tracer spark: only lit by onsets / high-mids (dark otherwise)
+      float sparkGate = clamp(u_onset * 1.6 + u_highMid * 1.4, 0.0, 1.0);
+      vec3 flashC = u_colorPalette == 3 ? BRAIN_SCARLET_FLASH : vec3(0.7454, 1.0, 1.0);
+      outC = mix(base, flashC, 0.6) * shape * lum * sparkGate * 1.6;
+    }
+    // pinpoint hot centre (tiny white core, no blow-out)
+    outC += vec3(1.0) * exp(-r2 * 64.0) * step(r2, 1.0) * lum * 0.18 * sizeNorm * (v_spark > 0.5 ? 0.0 : 1.0);
+    if (max(max(outC.r, outC.g), outC.b) < 1e-4) discard;
+    fragColor = vec4(outC, 1.0);
     return;
   }
   if (u_shape == 2) {
@@ -217,44 +186,22 @@ void shade() {
     fragColor = vec4(quadColor * u_radianceScale * 4.0 * sqrt(crowdNorm) * energyNorm * logoBoost * 0.85, 1.0);
     return;
   }
-  if (u_shape == 0) {
-    vec3 n = normalize(v_normal);
-    vec3 v = normalize(v_view);
-    float facing = abs(dot(n, v));
-    float normalShade = abs(dot(n, u_lightDir));
-    float rim = pow(1.0 - facing, 2.5);
-    float r2 = v_local.x * v_local.x;
-    float core = exp(-r2 * 42.0) * 0.30;
-    float halo = exp(-r2 * 4.5);
-    vec3 paletteColor = v_color;
-    vec3 paletteColorSecondary = mix(v_colorAlt, u_rimColor * length(v_color), 0.5);
-    {
-      // ZUR-GH-009 colour palette drives the dart colour (rim blends toward the secondary tone)
-      vec3 pc = palettePick(rim);
-      paletteColor = pc * v_tint;
-      paletteColorSecondary = mix(pc, vec3(0.6867, 0.8388, 1.0), u_colorPalette == 2 ? 0.5 : 0.0) * v_tint * 0.8;
-    }
-    float somaFade = cortexSoma ? 0.62 : paletteBoost;
-    paletteColor *= somaFade;
-    paletteColorSecondary *= somaFade;
-    vec3 dartColor = paletteColor * (0.45 + 0.85 * normalShade) + paletteColorSecondary * (0.65 * rim);
-    vec3 hot = mix(v_color, vec3(1.0), 0.25) * core * sizeNorm;
-    fragColor = vec4((dartColor * (0.4 + 0.6 * halo) + hot) * u_radianceScale * 4.0 * sqrt(crowdNorm) * energyNorm * logoBoost, 1.0);
-    return;
-  }
-  vec2 q = vec2(max(abs(v_local.x) - v_halfSeg, 0.0), v_local.y);
-  float r2 = dot(q, q) / max(v_radius * v_radius, 1e-4);
-  if (r2 >= 1.0) discard;
+  // u_shape == 0: dart3d cone
+  vec3 n = normalize(v_normal);
+  vec3 v = normalize(v_view);
+  float facing = abs(dot(n, v));
+  float normalShade = abs(dot(n, u_lightDir));
+  float rim = pow(1.0 - facing, 2.5);
+  float r2 = v_local.x * v_local.x;
   float core = exp(-r2 * 42.0) * 0.30;
   float halo = exp(-r2 * 4.5);
-  vec3 capsuleBase = palettePick(0.0) * v_tint;
-  vec3 hot = mix(capsuleBase, vec3(1.0), 0.25) * core * sizeNorm;
-  vec3 color = capsuleBase * halo * 1.1 + hot;
-  float capsuleAlpha = 0.40 * crowdNorm * energyNorm * (cortexSoma ? CORTEX_SOMA_ALPHA / 0.40 * 1.5 : paletteBoost);
-  if (logo) capsuleAlpha = max(capsuleAlpha, LOGO_ALPHA_FLOOR);
-  color *= logoBoost;
-  // Premultiplied: colour scales with the same bounded alpha so big sprites in 16k-64k crowds never stack to solid white.
-  fragColor = vec4(color * u_radianceScale * 12.0 * capsuleAlpha, min(halo, 1.0) * capsuleAlpha);
+  vec3 pc = palettePick(rim);
+  float somaFade = cortexSoma ? 0.62 : paletteBoost;
+  vec3 paletteColor = pc * v_tint * somaFade;
+  vec3 paletteColorSecondary = mix(pc, vec3(0.6867, 0.8388, 1.0), u_colorPalette == 2 ? 0.5 : 0.0) * v_tint * 0.8 * somaFade;
+  vec3 dartColor = paletteColor * (0.45 + 0.85 * normalShade) + paletteColorSecondary * (0.65 * rim);
+  vec3 hot = mix(pc * v_tint, vec3(1.0), 0.25) * core * sizeNorm;
+  fragColor = vec4((dartColor * (0.4 + 0.6 * halo) + hot) * u_radianceScale * 4.0 * sqrt(crowdNorm) * energyNorm * logoBoost, 1.0);
 }
 
 void main() {

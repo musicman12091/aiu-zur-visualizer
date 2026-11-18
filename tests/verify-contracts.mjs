@@ -192,8 +192,15 @@ test("capture starts are synchronous and never reach destination", () => {
   assert.ok((code.match(/noiseSuppression: false/g) || []).length >= 2);
   assert.ok((code.match(/autoGainControl: false/g) || []).length >= 2);
   assert.match(code, /\[40, 120, 500, 2000, 8000\]/);
-  assert.doesNotMatch(code, /\.connect\(\s*(context|nextContext|audioContext)\.destination\s*\)/);
-  assert.equal(code.includes("source.connect(context.destination)"), false);
+  // ZUR-GH-013: exactly one destination connect in the whole engine, inside monitorConnect() (file track + Speaker
+  // Monitor only); capture starts never reach it.
+  assert.equal((code.match(/\.connect\([^)]*\.destination/g) || []).length, 1, "single destination path");
+  const monitor = code.slice(code.indexOf("function monitorConnect"), code.indexOf("function monitorDisconnect"));
+  assert.match(monitor, /currentMode !== "file-track"/);
+  assert.match(monitor, /source\.connect\(context\.destination\)/);
+  for (const name of ["startTabCapture", "startMicCapture", "startTestOscillator"]) {
+    assert.doesNotMatch(sliceExport(code, name), /destination|monitorConnect/, `${name} never reaches the destination`);
+  }
   assert.doesNotMatch(code, /getVideoTracks\(\)[^\n;]{0,80}\.stop\(/);
 });
 
@@ -838,17 +845,18 @@ test("Stage 3 frozen AppState keys, enums and defaults", () => {
     densityAutoScale: true,
     trailLength: 0.28,
     trailType: "comet",
-    formationType: "neon-tunnel",
+    formationType: "wormhole",
     attractorText: "AI: UNDERGROUND",
     oscillationType: "helix",
     oscillationAmount: 1.0,
     oscillationSpeed: 1.2,
     pulseLayout: "band-clouds",
-    particleStyle: "dart3d",
+    particleStyle: "crisp-dot",
     colorPalette: "true-neon",
     kineticMode: "off",
     reactivityGain: 2.5,
     cameraZoom: 1.0,
+    reactivityMode: "true-gate",
   });
   assert.deepEqual([...SCENE_IDS], [
     "particle-swarm-3d", "pulse-field-3d", "megastructure-3d", "spectral-canyon-3d", "aurora-ribbons",
@@ -861,7 +869,7 @@ test("Stage 3 frozen AppState keys, enums and defaults", () => {
   assert.deepEqual([...TRAIL_TYPES], ["comet", "electric", "strobe", "ribbon", "none"]);
   assert.deepEqual([...FORMATION_TYPES], [
     "free-3d", "neon-tunnel", "polygon-rings", "supernova-shell", "fractal-core", "logo-attractor",
-    "neural-brain", "living-galaxy", "supermassive-blackhole", "wormhole",
+    "neural-brain", "living-galaxy", "supermassive-blackhole", "wormhole", "harmonic-ferrofluid",
   ]);
   assert.deepEqual([...OSCILLATION_TYPES], ["off", "wave", "helix", "bounce", "pulse"]);
   assert.deepEqual([...PULSE_LAYOUTS], ["band-clouds", "geodesic-sphere", "wave-grid"]);
@@ -873,7 +881,7 @@ test("Stage 3 frozen AppState keys, enums and defaults", () => {
   assert.equal(validatePreset(MODE_B_PRESET).ok, true);
   for (const [key, bad] of [
     ["trailLength", 1.01], ["trailType", "laser"], ["formationType", "cube"], ["oscillationType", "spin"],
-    ["oscillationAmount", 3.5], ["oscillationSpeed", 0.1], ["pulseLayout", "grid"], ["particleCountTier", "8k"], ["particleStyle", "orb"], ["densityAutoScale", "yes"],
+    ["oscillationAmount", 3.5], ["oscillationSpeed", 0.1], ["pulseLayout", "grid"], ["particleCountTier", "8k"], ["particleStyle", "orb"], ["particleStyle", "blood-drop"], ["densityAutoScale", "yes"], ["reactivityMode", "loud"],
   ]) {
     const preset = JSON.parse(JSON.stringify(STAGE2_DEFAULT_PRESET));
     preset.particles[key] = bad;
@@ -1017,7 +1025,7 @@ test("Stage 3 shaders and HUD bind every frozen uniform/key", () => {
     "sel-trail-type", "rng-trail-length", "sel-formation", "sel-oscillation", "rng-osc-amount", "rng-osc-speed",
     "sel-pulse-layout", "chk-density",
   ]) assert.match(hud, new RegExp(`"${id}"`), id);
-  assert.match(read("src/controls/hudTabs.js"), /3D Audio Pulse Field/);
+  assert.match(read("src/app/AppState.js"), /label: "3D Pulse Field"/);
   const sw = read("sw.js");
   for (const file of ["sim.vert.glsl", "sim.frag.glsl", "render.vert.glsl", "render.frag.glsl", "post.vert.glsl", "trail.frag.glsl", "kaleido.frag.glsl"]) {
     assert.match(sw, new RegExp(file.replace(".", "\\.")), file);
@@ -1079,9 +1087,10 @@ function hexSaturation(hex) {
 const frag32 = () => stripComments(read("src/shaders/render.frag.glsl"));
 const sim32 = () => stripComments(read("src/shaders/sim.vert.glsl"));
 
-test("ZUR-GH-011 storage key and schema are zur_state_v5_3 / 5.3 (v5.2, v5.1, v5.0 + v4 keys kept as legacy)", () => {
-  assert.equal(STORAGE_KEY, "zur_state_v5_3");
-  assert.equal(STORAGE_SCHEMA, 5.3);
+test("ZUR-GH-013 storage key and schema are zur_state_v6_0 / 6.0 (v5.3, v5.2, v5.1, v5.0 + v4 keys kept as legacy)", () => {
+  assert.equal(STORAGE_KEY, "zur_state_v6_0");
+  assert.equal(STORAGE_SCHEMA, 6.0);
+  assert.ok(LEGACY_STORAGE_KEYS.includes("zur_state_v5_3"));
   assert.ok(LEGACY_STORAGE_KEYS.includes("zur_state_v5_2"));
   assert.ok(LEGACY_STORAGE_KEYS.includes("zur_state_v5_1"));
   assert.ok(LEGACY_STORAGE_KEYS.includes("zur_state_v5_0"));
@@ -1163,14 +1172,14 @@ test("Stage 3.2 crowdNorm formula: JS mirror and render.frag", () => {
   for (const size of [2.2, 3, 3.5, 4]) for (const count of [16384, 65536]) assert.ok(crowdNorm(size, count) < 0.15, `${size}@${count}`);
 });
 
-test("Stage 3.2 Velocity Capsule alpha scales by 0.40 * crowdNorm (premultiplied blend)", () => {
+test("ZUR-GH-013 Velocity Capsule shading removed: every particle style draws additively (ONE, ONE)", () => {
   assert.equal(CAPSULE_ALPHA, 0.40);
   assert.equal(capsuleAlpha(3.5, 16384), 0.4 * crowdNorm(3.5, 16384));
-  assert.ok(capsuleAlpha(3.5, 16384) < 0.03, "no solid-white fireball");
-  assert.match(frag32(), /capsuleAlpha = 0\.40 \* crowdNorm/);
-  assert.match(frag32(), /fragColor = vec4\(color \* u_radianceScale \* [\d.]+ \* capsuleAlpha, min\(halo, 1\.0\) \* capsuleAlpha\)/);
+  assert.doesNotMatch(frag32(), /capsuleAlpha/);
   const system = stripComments(read("src/render/ParticleSystem3D.js"));
-  assert.match(system, /gl\.blendFunc\(gl\.ONE, gl\.ONE_MINUS_SRC_ALPHA\)/);
+  const draw = system.slice(system.indexOf("const dart = "));
+  assert.match(draw, /gl\.blendFunc\(gl\.ONE, gl\.ONE\)/);
+  assert.doesNotMatch(draw.slice(0, draw.indexOf("drawArraysInstanced")), /ONE_MINUS_SRC_ALPHA/);
   for (const name of ["u_particleSize", "u_activeCount"]) assert.match(system, new RegExp(`gl\\.uniform1f\\(R\\.${name}`), `${name} wired`);
 });
 
@@ -1220,7 +1229,9 @@ test("Stage 3.2 u_viewportYOffset documented in CONTRACTS.md", () => {
 test("Stage 3.2 u_viewportYOffset uniform wired through vertex, post and ParticleSystem3D", () => {
   const vert = stripComments(read("src/shaders/render.vert.glsl"));
   assert.match(vert, /uniform float u_viewportYOffset;/);
-  assert.equal((vert.match(/gl_Position\.y \+= u_viewportYOffset \* gl_Position\.w;/g) || []).length, 2, "both gl_Position paths");
+  // ZUR-GH-013: the dart cone path offsets clip space; the screen-space crisp quad path offsets its NDC centre.
+  assert.equal((vert.match(/gl_Position\.y \+= u_viewportYOffset \* gl_Position\.w;/g) || []).length, 1, "cone path");
+  assert.match(vert, /vec2 quadNdc = ndc0 \+ offsetPx \* 2\.0 \/ u_resolution \+ vec2\(0\.0, u_viewportYOffset\);/, "quad path");
   const system = read("src/render/ParticleSystem3D.js");
   assert.match(system, /"u_viewportYOffset"/);
   assert.match(system, /gl\.uniform1f\(R\.u_viewportYOffset/);
@@ -1249,14 +1260,14 @@ test("Stage 3.2 HUD: Scene, Palette, Hue shift on top; Hide HUD button; pulse la
   assert.ok(!hud.includes('"sel-scene"') && hud.indexOf('"sel-palette"') > 0 && hud.indexOf('"sel-palette"') < hud.indexOf('"rng-hue"'), "single Palette row precedes Hue; scene is chosen by the tab bar");
   assert.match(hud, /btn-hide-hud/);
   assert.match(hud, /Hide HUD \/ Fullscreen/);
-  assert.match(read("src/controls/hudTabs.js"), /"pulse-field-3d": \[\s*\["pulseLayout", "Pulse Field Layout"\]/);
+  assert.match(read("src/controls/hudTabs.js"), /\["pulseLayout", "Pulse Field Layout"\]/);
   assert.match(read("src/app/main.js"), /canvas\.addEventListener\("click"[\s\S]*?toggleHidden/);
   assert.match(read("index.html"), /\.hud-hide\s*\{[^}]*position:\s*sticky/);
 });
 
-test("ZUR-GH-011 sw.js cache is v9, claims clients and precaches new shaders", () => {
+test("ZUR-GH-013 sw.js cache is zur-shell-v11, claims clients and precaches new shaders", () => {
   const sw = read("sw.js");
-  assert.match(sw, /const CACHE = "zur-shell-v10"/);
+  assert.match(sw, /const CACHE = "zur-shell-v11"/);
   assert.match(sw, /self\.skipWaiting\(\)/);
   assert.match(sw, /self\.clients\.claim\(\)/);
   assert.match(sw, /\.(html|js|glsl)/);
@@ -1265,10 +1276,11 @@ test("ZUR-GH-011 sw.js cache is v9, claims clients and precaches new shaders", (
   }
 });
 
-test("Stage 3.2 AudioEngine stays silent (no destination connection)", () => {
+test("Stage 3.2 AudioEngine stays silent unless a loaded track has Speaker Monitor checked", () => {
   const audio = stripComments(read("src/audio/AudioEngine.js"));
-  assert.doesNotMatch(audio, /\.connect\([^)]*\.destination/);
+  assert.equal((audio.match(/\.connect\([^)]*\.destination/g) || []).length, 1);
   assert.match(audio, /destinationConnections/);
+  assert.match(audio, /silent: destinationConnections === 0/);
 });
 
 test("Stage 4 visual controls have validated defaults and bounded values", () => {
@@ -1372,7 +1384,9 @@ test("Fractal core is raymarched before swarm with bounded tier steps and palett
   assert.match(particle, /u_steps, visual\?\.qualityTier === "safe" \? 16 : 24/);
   assert.match(fragment, /for \(int stepIndex = 0; stepIndex < 24/);
   assert.match(fragment, /length\(point\) > 1\.35/);
-  assert.match(fragment, /u_palette\[index \+ 1\]/);
+  assert.match(fragment, /mix\(mix\(u_palette\[0\], u_palette\[2\]/);
+  const shading = stripComments(fragment).slice(stripComments(fragment).indexOf("float band"));
+  assert.ok(shading.length > 100 && !shading.includes("atan("), "no angular palette buckets (Mandelbulb phi atan is geometry only)");
   assert.match(read("src/render/RenderHost.js"), /megastructure: scene === "megastructure-3d"/);
 });
 
@@ -1550,8 +1564,8 @@ test("Spectral canyon draws neon wireframe ridges with an idle baseline wave", (
 test("HUD hides 3D swarm on spectral-canyon and prompts Mic/oscillator while CAPTURE IDLE", () => {
   const hud = read("src/controls/ControlHUD.js");
   const html = read("index.html");
-  assert.match(read("src/controls/hudTabs.js"), /"spectral-canyon-3d": \[/);
-  assert.match(hud, /this\.visual\.hidden = onRig/);
+  assert.match(read("src/app/AppState.js"), /id: "canyon", sceneId: SPECTRAL_CANYON_SCENE_ID/);
+  assert.doesNotMatch(hud, /this\.visual\.hidden = /, "ZUR-GH-013: the unlocked deck never hides the visual controls");
   assert.match(hud, /audio-prompt/);
   assert.match(hud, /btn-mic-prompt/);
   assert.match(hud, /btn-oscillator-prompt/);
@@ -1582,10 +1596,11 @@ test("ZUR-GH-007 core raymarcher shares the kaleido optical centre (0.0, u_viewp
   assert.match(core, /vec2 opticalCenter = vec2\(0\.5, 0\.5 \+ 0\.5 \* u_viewportYOffset\)/);
   assert.match(core, /gl_FragCoord\.xy \/ u_resolution - opticalCenter/);
   assert.match(kaleido, /vec2 center = vec2\(0\.5, 0\.5 \+ 0\.5 \* u_viewportYOffset\)/);
-  assert.equal((vert.match(/gl_Position\.y \+= u_viewportYOffset \* gl_Position\.w/g) || []).length, 2);
+  assert.equal((vert.match(/gl_Position\.y \+= u_viewportYOffset \* gl_Position\.w/g) || []).length, 1);
+  assert.match(vert, /\+ vec2\(0\.0, u_viewportYOffset\);/);
   const corePass = ps.slice(ps.indexOf("if (extras.megastructure)"), ps.indexOf("const dart"));
   assert.match(corePass, /gl\.uniform1f\(C\.u_viewportYOffset, viewportYOffset\)/);
-  assert.match(ps, /"u_viewportYOffset",\s*\]\);/);
+  assert.match(ps, /"u_viewportYOffset", "u_emission",\s*\]\);/);
   assert.match(ps, /gl\.uniform1f\(R\.u_viewportYOffset, viewportYOffset\)/);
   assert.match(ps, /gl\.uniform1f\(P\.u_viewportYOffset, viewportYOffset\)/);
 });
@@ -1702,7 +1717,7 @@ test("ZUR-GH-007 HUD places the Logo / Attractor Text selector directly under Fo
   assert.deepEqual([...LOGO_TEXT_PRESETS], ["AI: UNDERGROUND", "MON DAAIN", "TENTH GATE", "ZUR"]);
   // ZUR-GH-010: the selector lives in the Logo / Text Attractor sub-mode (formation is locked to logo-attractor there).
   assert.match(hud, /logoText: \["sel-attractor-preset"/);
-  assert.match(read("src/controls/hudTabs.js"), /"logo-text": \[\s*\["logoText", "Logo Text"\]/);
+  assert.match(read("src/controls/hudTabs.js"), /\["logoText", "Logo Text"\]/);
 });
 
 test("ZUR-GH-007 canyon scrolls z at u_time * 2.5 with waterfall + multi-band ridges", () => {
@@ -1797,7 +1812,7 @@ test("ZUR-GH-008 caps keepFactor at 0.90 for >= 16k agents and bounds steady-sta
   assert.match(frag, /uniform float u_trailEnergyNorm;/);
   assert.match(frag, /float sizeNorm = u_particleSize > 1\.5 \? 1\.0 \/ pow\(max\(u_particleSize, 1\.0\), 0\.65\) : 1\.0;/);
   assert.match(frag, /\* sqrt\(crowdNorm\) \* energyNorm \* logoBoost, 1\.0\)/, "dart radiance scaled by u_trailEnergyNorm");
-  assert.match(frag, /float capsuleAlpha = 0\.40 \* crowdNorm \* energyNorm \*/, "premultiplied capsule radiance + alpha scaled");
+  assert.match(frag, /exposure \* energyNorm \* paletteBoost \* logoBoost \* CRISP_DOT_GAIN/, "crisp quad radiance scaled by u_trailEnergyNorm");
   const kaleido = stripComments(read("src/shaders/kaleido.frag.glsl"));
   assert.match(kaleido, /uniform vec3 u_paletteHue;/);
   assert.match(kaleido, /const float CHROMA_FLOOR_PEAK = 0\.65;/);
@@ -1896,16 +1911,17 @@ const g009 = {
   ps: () => read("src/render/ParticleSystem3D.js"),
 };
 
-test("ZUR-GH-011 sw.js cache is zur-shell-v10 and storage key zur_state_v5_3 with v5.2 + v5.1 + v4 migration", () => {
-  assert.match(read("sw.js"), /const CACHE = "zur-shell-v10"/);
-  assert.equal(STORAGE_KEY, "zur_state_v5_3");
-  assert.deepEqual(LEGACY_STORAGE_KEYS.slice(0, 4), ["zur_state_v5_2", "zur_state_v5_1", "zur_state_v5_0", "zur_state_v4_0"]);
+test("ZUR-GH-013 sw.js cache is zur-shell-v11 and storage key zur_state_v6_0 with v5.3 + v5.2 + v5.1 + v4 migration", () => {
+  assert.match(read("sw.js"), /const CACHE = "zur-shell-v11"/);
+  assert.equal(STORAGE_KEY, "zur_state_v6_0");
+  assert.deepEqual(LEGACY_STORAGE_KEYS.slice(0, 5), ["zur_state_v5_3", "zur_state_v5_2", "zur_state_v5_1", "zur_state_v5_0", "zur_state_v4_0"]);
   const old = structuredClone(MODE_A_PRESET);
   old.particles = { ...old.particles, particleCountTier: "16k", particleStyle: "orb" };
   const loaded = loadStoredState(mockStorage({ zur_state_v4_0: JSON.stringify({ storageSchema: 4.0, preset: old }) }));
   assert.equal(loaded.migrated, true);
   assert.equal(loaded.preset.particles.particleCountTier, "64k", "legacy small tier -> 64k");
-  assert.equal(loaded.preset.particles.particleStyle, "dart3d", "legacy orb -> dart3d");
+  assert.equal(loaded.preset.particles.particleStyle, "crisp-dot", "legacy orb -> crisp-dot (v6.0 default)");
+  assert.equal(loaded.preset.particles.reactivityMode, "true-gate");
 });
 
 test("ZUR-GH-009 five count tiers: 64k 96k 128k 160k 256k, default 64k, no small tiers", () => {
@@ -1975,96 +1991,92 @@ test("ZUR-GH-009 u_cameraZoom in render.vert and core.frag, wired through Partic
   assert.match(g009.ps(), /gl\.uniform1f\(C\.u_cameraZoom, zoom\)/);
 });
 
-test("ZUR-GH-009 particleStyle options exclude orb everywhere (state, HUD, shaders)", () => {
-  assert.deepEqual([...pm009.PARTICLE_STYLES], ["dart3d", "blood-drop", "synapse-spark", "star-streak"]);
-  assert.equal(DEFAULT_PARTICLES.particleStyle, "dart3d");
-  assert.equal(normalizeParticles({ particleStyle: "orb" }).particleStyle, "dart3d");
+test("ZUR-GH-013 particleStyle options: crisp-dot first, no orb / blood-drop anywhere (state, HUD, shaders)", () => {
+  assert.deepEqual([...pm009.PARTICLE_STYLES], ["crisp-dot", "dart3d", "synapse-node", "star-streak"]);
+  assert.equal(DEFAULT_PARTICLES.particleStyle, "crisp-dot");
+  assert.equal(pm009.PARTICLE_STYLE_LABELS["crisp-dot"], "Crisp Dot — Pinpoint");
+  assert.equal(normalizeParticles({ particleStyle: "orb" }).particleStyle, "crisp-dot");
+  assert.equal(normalizeParticles({ particleStyle: "blood-drop" }).particleStyle, "crisp-dot");
+  assert.equal(normalizeParticles({ particleStyle: "synapse-spark" }).particleStyle, "synapse-node");
   for (const f of ["src/controls/ControlHUD.js", "src/shaders/render.vert.glsl", "src/shaders/render.frag.glsl", "src/shaders/sim.vert.glsl"]) {
-    assert.doesNotMatch(stripComments(read(f)), /"orb"|\borb\b/i, f);
+    assert.doesNotMatch(stripComments(read(f)), /"orb"|\borb\b|blood-drop/i, f);
   }
-  assert.doesNotMatch(JSON.stringify(pm009.PARTICLE_STYLE_LABELS), /orb/i);
+  assert.doesNotMatch(JSON.stringify(pm009.PARTICLE_STYLE_LABELS), /orb|blood/i);
   assert.match(g009.frag(), /uniform int u_particleStyle;/);
   assert.match(g009.vert(), /uniform int u_particleStyle;/);
 });
 
-test("ZUR-GH-009 particle style shading: blood-drop teardrop, synapse-spark, star-streak needle", () => {
+test("ZUR-GH-013 particle style shading: crisp-dot pinpoint, star-streak stretch, synapse-node soma + 15% sparks, dart 0.55x", () => {
   const f = g009.frag();
-  assert.match(f, /length\(vec2\(uv\.x \* \(1\.0 \+ 0\.65 \* uv\.y\), uv\.y\)\)/);
-  assert.match(f, /mix\(vec3\(0\.18, 0\.0, 0\.02\), BLOOD_CORE, core\)/);
-  assert.match(f, /BLOOD_SPECULAR/); // ZUR-GH-012: wet highlight #FF8A96 replaces the old pink glint
-  assert.match(f, /sin\(atan\(uv\.y, uv\.x\) \* 7\.0 \+ v_seed \* 19\.0\)/);
-  assert.match(f, /v_neuralPulse > 0\.5/);
+  const v = g009.vert();
+  assert.match(f, /float exposure = clamp\(pow\(16384\.0 \/ max\(float\(u_activeCount\), 1\.0\), 0\.52\), 0\.16, 1\.0\);/);
+  assert.match(f, /float head = r2 < 1\.0 \? exp\(-r2 \* 16\.0\) : 0\.0;/, "exp(-r2*16) core, hard cutoff at r = 1");
+  assert.match(f, /float conserve = 1\.0 \/ \(1\.0 \+ 0\.35 \* \(stretch - 1\.0\)\);/, "energy-conserving streak");
+  assert.match(v, /stretch = 1\.0 \+ clamp\(length\(vScreen\) \* \(16\.0 \+ 45\.0 \* u_bass \+ 60\.0 \* u_onset\), 0\.0, 18\.0\);/);
+  assert.match(v, /float stretch = 1\.0;/, "crisp head at rest");
+  assert.match(v, /const float DART_SCALE = 0\.55;/);
+  assert.match(v, /const float SYNAPSE_SPARK_FRACTION = 0\.15;/);
+  assert.match(f, /u_onset \* 1\.6 \+ u_highMid \* 1\.4/, "axon sparks gated by onset / highMid");
+  assert.doesNotMatch(f, /sin\(atan\(uv\.y, uv\.x\) \* 7\.0/, "no asterisk soma");
   assert.match(f, /vec3\(0\.7454, 1\.0, 1\.0\)/, "#E0FFFF in linear light");
-  assert.match(g009.vert(), /clamp\(speed \* 14\.0, 1\.0, 6\.5\)/);
-  assert.match(g009.vert(), /headR = u_formationType == 5 \? LOGO_MIN_RADIUS_PX : 1\.5/);
+  assert.equal(pm009.crispDotCore(0), 1);
+  assert.equal(pm009.crispDotCore(1), 0, "hard cutoff at r = 1");
+  assert.ok(Math.abs(pm009.crispDotCore(0.5) - Math.exp(-0.25 * 16)) < 1e-12);
+  assert.ok(Math.abs(pm009.crispDotExposure(262144) - Math.max(0.16, Math.min(1, (16384 / 262144) ** 0.52))) < 1e-12);
+  assert.equal(pm009.crispDotExposure(16384), 1);
+  assert.equal(pm009.starStreakStretch(0, 1, 1), 1, "at rest the streak is a crisp dot");
+  assert.equal(pm009.starStreakStretch(10, 1, 1), 19, "clamped to 1 + 18");
+  assert.ok(pm009.starStreakConserve(19) < 0.15 && pm009.starStreakConserve(1) === 1);
 });
 
-test("ZUR-GH-009 colorPalette options + u_colorPalette in render.frag, core.frag and kaleido", () => {
-  assert.deepEqual([...pm009.COLOR_PALETTES], ["true-neon", "full-spectrum", "white-static", "blood-red", "golden-cortex"]);
+test("ZUR-GH-013 colorPalette options + u_colorPalette in render.frag, core.frag and kaleido (crimson-pulse replaces blood-red)", () => {
+  assert.deepEqual([...pm009.COLOR_PALETTES], ["true-neon", "full-spectrum", "white-static", "crimson-pulse", "golden-cortex"]);
+  assert.equal(normalizeParticles({ colorPalette: "blood-red" }).colorPalette, "crimson-pulse");
   assert.equal(DEFAULT_PARTICLES.colorPalette, "true-neon");
   assert.match(g009.frag(), /uniform int u_colorPalette;/);
   assert.match(g009.core(), /uniform int u_colorPalette;/);
   assert.match(stripComments(read("src/shaders/kaleido.frag.glsl")), /uniform int u_colorPalette;/);
-  assert.match(g009.frag(), /hsv2rgb\(vec3\(spatialHue\(\), 0\.95, 1\.0\)\)/);
   assert.match(g009.frag(), /step\(0\.35, fract\(sin\(dot\(gl_FragCoord\.xy, vec2\(12\.9898, 78\.233\)\) \+ u_time \* 43\.0\) \* 43758\.5453\)\) \* u_treble/);
-  assert.match(g009.frag(), /\* u_trailEnergyNorm|energyNorm/);
+  assert.match(g009.frag(), /energyNorm/);
   assert.match(g009.ps(), /gl\.uniform1i\(R\.u_colorPalette, paletteIndex\)/);
   assert.ok(pm009.hsvSaturation([0, 0.9131, 1.0]) >= 0.85 && pm009.hsvSaturation([1.0, 0.0, 0.2122]) >= 0.85);
 });
 
-test("ZUR-GH-009 four new formations in state and sim.vert (ids appended after logo-attractor)", () => {
-  const ids = ["neural-brain", "living-galaxy", "supermassive-blackhole", "wormhole"];
+test("ZUR-GH-009/013 formations after logo-attractor (brain, galaxy, black hole, wormhole, ferrofluid) in state and sim.vert", () => {
+  const ids = ["neural-brain", "living-galaxy", "supermassive-blackhole", "wormhole", "harmonic-ferrofluid"];
   assert.deepEqual(FORMATION_TYPES.slice(6), ids);
   assert.equal(FORMATION_TYPES.indexOf("logo-attractor"), 5);
   assert.deepEqual(ids.map((id) => pm009.FORMATION_LABELS[id]), [
-    "3D Brain (Golden Neurons & Synapses)", "Living Spiral Galaxy",
-    "Supermassive Black Hole (Gargantua)", "Spacetime Wormhole (Einstein-Rosen)",
+    "Anatomical 3D Brain", "Living Spiral Galaxy", "Supermassive Black Hole (Gargantua)",
+    "Spherical Wormhole — Funnel in Sphere", "Harmonic Ferrofluid Rings",
   ]);
   const sim = g009.sim();
-  assert.match(sim, /u_formationType == 6/);
-  assert.match(sim, /u_formationType == 7/);
-  assert.match(sim, /u_formationType == 8/);
-  assert.match(sim, /u_formationType == 9/);
-  assert.match(sim, /0\.06 \* sin\(pos\.x \* 18\.0 \+ sin\(pos\.z \* 14\.0\)\) \* cos\(pos\.y \* 16\.0\)/);
-  assert.match(sim, /0\.12 \+ 0\.58 \* abs\(cos\(phi\)\) \* sin\(theta\)/);
-  assert.match(sim, /0\.08 \* exp\(0\.32 \* /);
-  assert.match(sim, /1\.35 \/ pow\(r \+ 0\.12, 1\.15\)/);
+  for (let i = 6; i <= 10; i += 1) assert.match(sim, new RegExp(`u_formationType == ${i}`));
   assert.match(sim, /float spiral = log\(rd \/ BH_DISK_INNER\)/);
-  assert.match(sim, /sqrt\(0\.18 \* 0\.18 \+ z \* z \* 1\.4\)/);
+  assert.match(sim, /vec3 wormholeTarget\(/);
 });
 
-test("ZUR-GH-009 neural-brain v_neuralPulse is a dedicated varying (out in render.vert, in render.frag)", () => {
+test("ZUR-GH-013 neural-brain v_neuralPulse is audio-only (no 0.45 baseline; thalamic idle only in ambient-vj)", () => {
   assert.match(g009.vert(), /out float v_neuralPulse;/);
   assert.match(g009.frag(), /in float v_neuralPulse;/);
-  assert.match(g009.vert(), /sin\(length\(a_pos\.xyz\) \* 14\.0 - u_time \* 9\.0 - u_onset \* 5\.0\)/);
-  assert.match(g009.vert(), /v_neuralPulse = smoothstep\(0\.72, 0\.98, wave\) \* clamp\(0\.45 \+ u_treble \* 0\.9 \+ u_onset \* 1\.1, 0\.0, 1\.5\)/);
-  assert.ok(Math.abs(pm009.neuralPulse(0.5, 0, 0.5, 0.3, 0.3) - pm009.neuralPulse(0.5, 0, 0.5, 0.3, 0.3)) < 1e-12);
+  assert.match(g009.vert(), /float audioDrive = clamp\(u_bands\[0\] \* 0\.5 \+ u_bass \* 0\.8 \+ u_onset \* 1\.3 \+ u_treble \* 0\.6, 0\.0, 1\.5\);/);
+  assert.doesNotMatch(g009.vert(), /0\.45 \+ u_treble/, "no idle 0.45 baseline");
+  const vert = g009.vert();
+  const thal = vert.indexOf("float thalamic");
+  assert.ok(thal > 0 && vert.slice(Math.max(0, thal - 200), thal).includes("u_reactivityMode == 2"), "thalamic rhythm only in ambient-vj");
+  assert.equal(pm009.neuralPulse(0.5, 0.3, 0, 0, 0, 0), 0, "silence -> no firing wave");
+  assert.equal(pm009.neuralAudioDrive(0, 0, 0, 0), 0);
+  assert.ok(pm009.neuralAudioDrive(0.5, 0.5, 0.5, 0.5) > 0);
 });
 
-test("ZUR-GH-009 blood-drop pin (0.79) and respawn (-1.18 / -0.65) in sim.vert (Audit Fix 3)", () => {
-  const sim = g009.sim();
-  assert.match(sim, /u_particleStyle == 1 \|\| u_kineticMode == 1/);
-  assert.match(sim, /\(1\.1 \+ 2\.2 \* u_onset\)/);
-  assert.match(sim, /0\.78/);
-  assert.match(sim, /0\.79/);
-  assert.match(sim, /vel\.x \*= 0\.85/);
-  assert.match(sim, /outAuxW = 2\.6/);
-  assert.match(sim, /\(1\.8 \+ 2\.4 \* u_bass\)/);
-  assert.match(sim, /-1\.18/);
-  assert.match(sim, /-0\.65/);
-  assert.match(sim, /formationPos \* 0\.25/);
-  assert.match(sim, /1\.35 \+ 1\.8 \* u_onset/);
-  assert.deepEqual(pm009.bloodPin(0.8, 1.5), { z: 0.79, vz: 0, pinned: true });
-  assert.equal(pm009.bloodNeedsRespawn(-1.3), true);
-  assert.equal(pm009.bloodNeedsRespawn(-1.0), false);
-});
-
-test("ZUR-GH-009 kineticMode options, default off, u_kineticMode in sim.vert, HUD row above Oscillation", () => {
-  assert.deepEqual([...pm009.KINETIC_MODES], ["off", "splatter-run", "synapse-cascade", "accretion-warp", "ribbon-curtain", "shock-shatter"]);
+test("ZUR-GH-013 kineticMode options (splatter-run removed), default off, u_kineticMode in sim.vert, HUD row above Oscillation", () => {
+  assert.deepEqual([...pm009.KINETIC_MODES], ["off", "synapse-cascade", "accretion-warp", "ribbon-curtain", "shock-shatter"]);
   assert.equal(DEFAULT_PARTICLES.kineticMode, "off");
+  assert.equal(normalizeParticles({ kineticMode: "splatter-run" }).kineticMode, "off");
   const sim = g009.sim();
   assert.match(sim, /uniform int u_kineticMode;/);
-  for (let mode = 2; mode <= 5; mode += 1) assert.match(sim, new RegExp(`u_kineticMode == ${mode}`));
+  for (let mode = 1; mode <= 4; mode += 1) assert.match(sim, new RegExp(`u_kineticMode == ${mode}`));
+  assert.doesNotMatch(sim, /u_kineticMode == 5/);
   const hud = g009.hud();
   assert.ok(hud.indexOf('"sel-kinetic-mode"') > 0 && hud.indexOf('"sel-kinetic-mode"') < hud.indexOf('"sel-oscillation"'));
   const layout = read("src/controls/hudTabs.js");
@@ -2110,7 +2122,8 @@ test("ZUR-GH-009 smoke script covers 256k stability, scenarios and audio-reactiv
   assert.match(smoke, /256k/);
   assert.match(smoke, /blackRatio < 0\.85/);
   assert.match(smoke, /whiteClip < 0\.01/);
-  assert.match(smoke, /blood-red/);
+  assert.match(smoke, /crimson-pulse/, "ZUR-GH-013: the blood scenario became crimson-pulse");
+  assert.doesNotMatch(smoke, /"blood-red"|"synapse-spark"|data-hud-tab/);
   assert.match(smoke, /wormhole/);
   assert.match(smoke, /rng-osc-amount", 0/);
   assert.match(read("package.json"), /smoke:gh009/);
@@ -2123,114 +2136,73 @@ let failed = 0;
 const gh010 = await import("../src/app/AppState.js");
 const gh010Tabs = await import("../src/controls/hudTabs.js");
 const gh010Math = await import("../src/render/particleMath.js");
-const E = gh010.enforceTabConstraints;
 
-test("ZUR-GH-010 HUD_TABS are the six blueprint ids, default deep-space", () => {
-  assert.deepEqual([...gh010.HUD_TABS], ["deep-space", "brain-3d", "blood-swarm", "megastructure", "canyon-pulse", "audio-rig"]);
-  assert.equal(gh010.DEFAULT_HUD.hudTab, "deep-space");
-  assert.deepEqual([...gh010.SWARM_MODES], ["blood-drip", "logo-text", "free-swarm"]);
-  assert.deepEqual([...gh010.SHADER_SCENES], ["spectral-canyon-3d", "pulse-field-3d", "aurora-ribbons"]);
-});
-
-test("ZUR-GH-010 enforceTabConstraints is pure and idempotent on all 6 tabs", () => {
-  for (const hudTab of gh010.HUD_TABS) {
-    const input = { hudTab, flowMode: "gas", formation: "logo-attractor", particleStyle: "blood-drop", trailType: "none", trailLength: 0.1, oscillationAmount: 3 };
-    const frozen = JSON.stringify(input);
-    const a = E(input);
-    assert.equal(JSON.stringify(input), frozen, `${hudTab} input untouched`);
-    assert.deepEqual(E(a), a, `${hudTab} idempotent`);
-    assert.equal(a.formation, a.formationType, `${hudTab} formation===formationType`);
-    assert.equal(a.flowMode, a.flowType, `${hudTab} flowMode===flowType`);
+test("ZUR-GH-013 unlocked deck: no HUD tabs, no enforceTabConstraints, every control row always laid out", () => {
+  for (const gone of ["HUD_TABS", "enforceTabConstraints", "switchHudTab", "switchPresetTab", "sceneForHud", "VISUAL_HUD_TABS", "DEFAULT_HUD"]) {
+    assert.equal(gone in gh010, false, `${gone} removed from AppState`);
   }
+  assert.doesNotMatch(stripComments(read("src/app/main.js")) + stripComments(read("src/controls/ControlHUD.js")), /enforceTabConstraints|\bhudTab\b/);
+  const rows = gh010Tabs.DECK_LAYOUT.map(([name]) => name);
+  assert.deepEqual(rows.slice(0, 4), ["formation", "style", "palette", "reactivityMode"], "Formation, Particle Style, Palette, Reactivity Mode lead the deck");
+  for (const name of ["kinetic", "count", "size", "zoom", "trailType", "trailLength", "oscillation", "logoText", "pulseLayout", "kaleido", "scenePalette"]) assert.ok(rows.includes(name), name);
+  assert.equal(new Set(rows).size, rows.length, "no duplicate rows");
+  assert.deepEqual(gh010Tabs.optionsFor("style").map((o) => o.value), ["crisp-dot", "dart3d", "synapse-node", "star-streak"], "full style list, never narrowed");
+  assert.deepEqual(gh010Tabs.optionsFor("formation").map((o) => o.value), [...FORMATION_TYPES], "every formation selectable");
+  assert.deepEqual(gh010Tabs.optionsFor("reactivityMode").map((o) => o.value), ["true-gate", "ember-floor", "ambient-vj"]);
 });
 
-test("ZUR-GH-010 deep-space: particle scene, cosmic formations, no gas/fluid, osc off on wormhole/BH/galaxy", () => {
-  const a = E({ hudTab: "deep-space", sceneId: "aurora-ribbons", formation: "free-3d", flowMode: "gas", particleStyle: "blood-drop", oscillationType: "sine" });
-  assert.equal(a.sceneId, "particle-swarm-3d");
-  assert.equal(a.formation, "wormhole");
-  assert.equal(a.flowMode, "physarum");
-  assert.ok(["star-streak", "dart3d", "synapse-spark"].includes(a.particleStyle));
-  assert.equal(a.oscillationType, "off");
-  assert.equal(E({ hudTab: "deep-space", flowMode: "fluid" }).flowMode, "physarum");
-  for (const f of ["supermassive-blackhole", "living-galaxy"]) assert.equal(E({ hudTab: "deep-space", formation: f, oscillationType: "sine" }).oscillationType, "off");
-  const flows = gh010Tabs.optionsFor("flow", "deep-space").map((o) => o.value);
-  assert.ok(!flows.includes("gas") && !flows.includes("fluid"), "deep-space flow list never offers gas/fluid");
-});
-
-test("ZUR-GH-010 brain-3d: neural-brain, synapse-spark, synapse-cascade, golden-cortex entry palette", () => {
-  const a = gh010.switchHudTab({ hudTab: "deep-space", colorPalette: "true-neon", kineticMode: "splatter-run", particleStyle: "blood-drop", flowMode: "gas" }, "brain-3d");
-  assert.equal(a.formation, "neural-brain");
-  assert.equal(a.formationType, "neural-brain");
-  assert.equal(a.particleStyle, "synapse-spark");
-  assert.equal(a.kineticMode, "synapse-cascade");
-  assert.equal(a.oscillationType, "off");
-  assert.equal(a.colorPalette, "golden-cortex");
-  assert.equal(a.flowMode, "physarum");
-});
-
-test("ZUR-GH-010 blood-drip: free-3d + blood-drop + splatter-run + comet trail >= 0.72", () => {
-  const a = E({ hudTab: "blood-swarm", swarmMode: "blood-drip", trailType: "none", trailLength: 0.1, oscillationType: "sine" });
-  assert.equal(a.formation, "free-3d");
-  assert.equal(a.particleStyle, "blood-drop");
-  assert.equal(a.kineticMode, "splatter-run");
-  assert.equal(a.oscillationType, "off");
-  assert.equal(a.trailType, "comet");
-  assert.equal(a.trailLength, 0.72);
-  assert.equal(E({ hudTab: "blood-swarm", swarmMode: "blood-drip", trailType: "comet", trailLength: 0.9 }).trailLength, 0.9);
-  assert.equal(gh010.switchHudTab({ hudTab: "deep-space", colorPalette: "true-neon" }, "blood-swarm", { swarmMode: "blood-drip" }).colorPalette, "blood-red");
-});
-
-test("ZUR-GH-010 logo-text: logo-attractor, kinetic off, osc <= 0.15, trail <= 0.35", () => {
-  const a = E({ hudTab: "blood-swarm", swarmMode: "logo-text", oscillationAmount: 3, trailLength: 0.81, kineticMode: "shock-shatter" });
-  assert.equal(a.formation, "logo-attractor");
-  assert.equal(a.kineticMode, "off");
-  assert.equal(a.oscillationAmount, 0.15);
-  assert.equal(a.trailLength, 0.35);
-  assert.deepEqual(gh010Tabs.optionsFor("logoText", "logo-text").map((o) => o.value), ["MON DAAIN", "AI: UNDERGROUND", "TENTH GATE", "ZUR"]);
-});
-
-test("ZUR-GH-010 free-swarm: fractal-core|free-3d and allows fluid/gas physics", () => {
-  assert.equal(E({ hudTab: "blood-swarm", swarmMode: "free-swarm", formation: "wormhole" }).formation, "free-3d");
-  assert.equal(E({ hudTab: "blood-swarm", swarmMode: "free-swarm", formation: "fractal-core" }).formation, "fractal-core");
-  assert.equal(E({ hudTab: "blood-swarm", swarmMode: "free-swarm", flowMode: "gas" }).flowMode, "gas");
-  assert.equal(E({ hudTab: "blood-swarm", swarmMode: "free-swarm", flowMode: "fluid" }).flowMode, "fluid");
-});
-
-test("ZUR-GH-010 megastructure + canyon-pulse sub-scenes route sceneId", () => {
-  const m = E({ hudTab: "megastructure", formation: "wormhole" });
-  assert.equal(m.sceneId, "megastructure-3d");
-  assert.equal(m.formation, "fractal-core");
-  for (const scene of ["spectral-canyon-3d", "pulse-field-3d", "aurora-ribbons"]) {
-    assert.equal(E({ hudTab: "canyon-pulse", shaderScene: scene }).sceneId, scene);
+test("ZUR-GH-013 Quick Presets strip + Engine Selector: ids, labels, scene routing, never touch particleStyle", () => {
+  assert.deepEqual(gh010.QUICK_PRESETS.map((q) => q.label), ["Wormhole", "3D Brain", "Gargantua", "Ferrofluid Rings", "Spiral Galaxy", "Logo Text", "Megastructure", "Spectral Canyon"]);
+  assert.deepEqual(gh010.ENGINES.map((e) => e.label), ["3D Particle Engine", "Megastructure", "Spectral Canyon", "3D Pulse Field", "Aurora Ribbons"]);
+  assert.deepEqual(gh010.ENGINES.map((e) => e.sceneId), ["particle-swarm-3d", "megastructure-3d", "spectral-canyon-3d", "pulse-field-3d", "aurora-ribbons"]);
+  for (const style of ["crisp-dot", "dart3d", "synapse-node", "star-streak"]) {
+    let preset = structuredClone(gh010.STAGE2_DEFAULT_PRESET);
+    preset.particles.particleStyle = style;
+    for (const q of gh010.QUICK_PRESET_IDS) {
+      preset = gh010.applyQuickPreset(preset, q);
+      assert.equal(preset.particles.particleStyle, style, `quick preset ${q} keeps ${style}`);
+      assert.equal(validatePreset(preset).ok, true, q);
+    }
+    for (const e of gh010.ENGINE_IDS) {
+      preset = gh010.applyEngine(preset, e);
+      assert.equal(preset.particles.particleStyle, style, `engine ${e} keeps ${style}`);
+      assert.equal(preset.sceneId, gh010.sceneForEngine(e));
+    }
   }
+  assert.equal(gh010.applyQuickPreset(gh010.STAGE2_DEFAULT_PRESET, "brain").particles.formationType, "neural-brain");
+  assert.equal(gh010.applyQuickPreset(gh010.STAGE2_DEFAULT_PRESET, "ferrofluid").particles.formationType, "harmonic-ferrofluid");
+  assert.equal(gh010.applyQuickPreset(gh010.STAGE2_DEFAULT_PRESET, "canyon").sceneId, "spectral-canyon-3d");
+  for (const q of gh010.QUICK_PRESETS) assert.equal("particleStyle" in (q.particles || {}), false, `${q.id} has no style override`);
+  const hud = read("src/controls/ControlHUD.js");
+  assert.match(hud, /this\.quickBar\.id = "hud-quick-presets"/);
+  assert.match(hud, /this\.engineBar\.id = "hud-engines"/);
+  assert.match(hud, /button\.dataset\.quickPreset = entry\.id/);
+  assert.match(hud, /button\.dataset\.engine = engine\.id/);
 });
 
-test("ZUR-GH-010 audio-rig keeps the last visual tab's scene", () => {
-  const brain = gh010.switchHudTab({ hudTab: "megastructure" }, "brain-3d");
-  const rig = gh010.switchHudTab(brain, "audio-rig");
-  assert.equal(rig.hudTab, "audio-rig");
-  assert.equal(rig.sceneId, "particle-swarm-3d");
-  assert.equal(rig.formation, "neural-brain");
-  const mega = gh010.switchHudTab(gh010.switchHudTab({}, "megastructure"), "audio-rig");
-  assert.equal(mega.sceneId, "megastructure-3d");
+test("ZUR-GH-013 palette / formation / reactivity changes never reset particleStyle (AppState + autopilot)", () => {
+  const state = new AppState(gh010.STAGE2_DEFAULT_PRESET);
+  state.updatePreset((draft) => { draft.particles = normalizeParticles({ ...draft.particles, particleStyle: "star-streak" }); });
+  for (const formationType of FORMATION_TYPES) {
+    state.updatePreset((draft) => { draft.particles = normalizeParticles({ ...draft.particles, formationType }); });
+    assert.equal(state.preset.particles.particleStyle, "star-streak", formationType);
+  }
+  for (const colorPalette of pm009.COLOR_PALETTES) {
+    state.updatePreset((draft) => { draft.particles = normalizeParticles({ ...draft.particles, colorPalette }); });
+    assert.equal(state.preset.particles.particleStyle, "star-streak", colorPalette);
+  }
+  for (const reactivityMode of pm009.REACTIVITY_MODES) {
+    state.updatePreset((draft) => { draft.particles = normalizeParticles({ ...draft.particles, reactivityMode }); });
+    assert.equal(state.preset.particles.particleStyle, "star-streak", reactivityMode);
+  }
+  assert.doesNotMatch(stripComments(read("src/app/VJAutopilot.js")), /particleStyle/, "autopilot never touches style");
 });
 
-test("ZUR-GH-010 control layouts: only the ticket's rows per tab / sub-mode", () => {
-  const L = gh010Tabs.CONTROL_LAYOUT;
-  const keys = (k) => L[k].map((r) => r[0]);
-  assert.deepEqual(Object.keys(L).sort(), ["aurora-ribbons", "blood-drip", "brain-3d", "deep-space", "free-swarm", "logo-text", "megastructure", "pulse-field-3d", "spectral-canyon-3d"].sort());
-  assert.ok(!keys("blood-drip").includes("formation") && !keys("blood-drip").includes("style"));
-  assert.ok(!keys("spectral-canyon-3d").includes("count") && !keys("spectral-canyon-3d").includes("zoom"));
-  assert.ok(keys("megastructure").includes("godRays") && keys("megastructure").includes("chromatic"));
-  assert.ok(!keys("deep-space").includes("oscillation"));
-  assert.deepEqual(keys("pulse-field-3d")[0], "pulseLayout");
-  for (const k of Object.keys(L)) assert.ok(!keys(k).includes("shape"), `${k} has no 3D shape row`);
-});
-
-test("ZUR-GH-010 zero blank <option> across every static option list (all 6 tabs)", () => {
+test("ZUR-GH-010/013 zero blank <option> across every static option list (unlocked deck)", () => {
   const lists = gh010Tabs.allStaticOptionLists();
-  assert.ok(lists.length > 50);
+  assert.equal(lists.length, 14, "every deck select (formation, flow, style, kinetic, palette, reactivityMode, scenePalette, ...)");
   for (const { key, control, options } of lists) {
+    assert.ok(options.length > 0, `${key}/${control} empty`);
     for (const o of gh010Tabs.normalizeOptions(options)) {
       assert.ok(o.value.trim().length > 0 && o.label.trim().length > 0, `${key}/${control} blank option`);
     }
@@ -2240,13 +2212,14 @@ test("ZUR-GH-010 zero blank <option> across every static option list (all 6 tabs
   assert.match(read("src/controls/ControlHUD.js"), /fillSelect\(/);
 });
 
-test("ZUR-GH-010 dark-mode select CSS, sticky tab bar, no particleShape / duplicate palette row", () => {
+test("ZUR-GH-010/013 dark-mode select CSS, sticky quick-preset strip, no particleShape / duplicate palette row", () => {
   const html = read("index.html");
   assert.match(html, /\.control-hud select, \.control-hud option \{ color-scheme: dark; background-color: #121624; color: #f0f4ff; \}/);
   const hud = read("src/controls/ControlHUD.js");
   assert.ok(!/"sel-shape"/.test(hud) && !/3D shape/.test(hud), "no 3D shape row");
-  assert.equal((hud.match(/"sel-palette"/g) || []).length, 1, "single palette select");
-  assert.match(hud + read("src/controls/hudTabs.js"), /data-hud-tab|dataset\.hudTab/);
+  assert.equal((hud.match(/"sel-palette"/g) || []).length, 1, "single particle palette select");
+  assert.equal((hud.match(/"sel-scene-palette"/g) || []).length, 1, "single scene palette select");
+  assert.doesNotMatch(hud + read("src/controls/hudTabs.js"), /data-hud-tab|dataset\.hudTab/);
 });
 
 test("ZUR-GH-011 golden-cortex palette: index 4, 80% gold soma alpha 0.52 x1.85, cyan-white pulse > 0.55 x3.2", () => {
@@ -2258,20 +2231,14 @@ test("ZUR-GH-011 golden-cortex palette: index 4, 80% gold soma alpha 0.52 x1.85,
   assert.match(fg, /const float CORTEX_SOMA_RADIANCE = 1\.85;/);
   assert.match(fg, /const float CORTEX_PULSE_BOOST = 3\.2;/);
   assert.match(fg, /cortexFiring \? CORTEX_PULSE_BOOST : 1\.0/);
-  assert.match(fg, /cortexSoma \? CORTEX_SOMA_ALPHA : 1\.0/);
-  assert.match(fg, /vec3\(1\.0, 0\.3916, 0\.0\), fract\(v_seed \* 5\.0\)\) \* CORTEX_SOMA_RADIANCE/, "#FFD700 -> #FFA800 metallic gold x1.85");
-  assert.doesNotMatch(fg, /0\.26/, "ZUR-GH-010 0.26 soma alpha is gone");
-  assert.ok(COLOR_PALETTES_GH010().includes("golden-cortex"));
+  assert.match(fg, /if \(cortexSoma\) lum \*= CORTEX_SOMA_ALPHA/);
+  assert.match(fg, /mix\(vec3\(1\.0, 0\.6795, 0\.0\), vec3\(1\.0, 0\.3916, 0\.0\), 0\.5 \+ 0\.5 \* cos\(TAU \* t\)\) \* CORTEX_SOMA_RADIANCE/, "#FFD700 -> #FFA800 smooth gold gradient x1.85");
+  assert.ok(gh010Tabs.optionsFor("palette").map((o) => o.value).includes("golden-cortex"));
   assert.equal(gh010Math.GOLDEN_CORTEX_SOMA_FRACTION, 0.8);
-  // (ZUR-GH-010 soma alpha 0.26 superseded by ZUR-GH-011 0.52.)
   assert.equal(gh010Math.GOLDEN_CORTEX_PULSE_THRESHOLD, 0.55);
-  // (ZUR-GH-010 pulse boost 2.8 superseded by ZUR-GH-011 3.2.)
-  const f = frag32();
-  assert.match(f, /u_formationType == 6 && v_neuralPulse > 0\.55/);
-  assert.match(stripComments(read("src/shaders/render.vert.glsl")), /uniform int u_colorPalette;/, "vertex stage sees the palette for the thalamic baseline");
-  assert.match(f, /CORTEX_SOMA_ALPHA \/ 0\.40 \* 1\.5/, "capsule soma uses the same 0.52 floor");
+  assert.match(fg, /u_formationType == 6 && v_neuralPulse > 0\.55/);
+  assert.match(stripComments(read("src/shaders/render.vert.glsl")), /uniform int u_colorPalette;/);
 });
-function COLOR_PALETTES_GH010() { return gh010Tabs.optionsFor("palette", "brain-3d").map((o) => o.value); }
 
 test("ZUR-GH-010 multi-hue spatial palettes: hue driven by position/hash, not a global u_time wash", () => {
   const v = stripComments(read("src/shaders/render.vert.glsl")) + stripComments(read("src/shaders/render.frag.glsl"));
@@ -2285,35 +2252,17 @@ test("ZUR-GH-010 draw path: dart3d TRIANGLES x12, other styles TRIANGLE_STRIP x4
   assert.match(ps, /else gl\.drawArraysInstanced\(gl\.TRIANGLE_STRIP, 0, 4, count\);/);
 });
 
-test("ZUR-GH-010 crowdNorm to 262144 + zoom damp + 14/28 px sprite ceilings", () => {
+test("ZUR-GH-010 crowdNorm to 262144 + zoom damp + 14 px sprite ceiling (blood 28 px ceiling removed)", () => {
   assert.match(frag32(), /clamp\(pow\(65536\.0 \/ max\(float\(u_activeCount\), 65536\.0\), 0\.58\), 0\.28, 1\.0\)/);
   assert.equal(gh010Math.densityCrowdNorm(65536), 1);
   assert.ok(Math.abs(gh010Math.densityCrowdNorm(262144) - Math.max(0.28, Math.pow(0.25, 0.58))) < 1e-9);
   const vert = stripComments(read("src/shaders/render.vert.glsl"));
   assert.match(vert, /1\.0 \/ pow\(u_cameraZoom, 0\.35\)/);
-  assert.match(vert, /bloodStyle \? 28\.0 : 14\.0/);
+  assert.match(vert, /min\(worldSize \* pxPerUnit \* zoomDamp, 14\.0\)/);
+  assert.doesNotMatch(vert, /28\.0|bloodStyle/);
   assert.equal(gh010Math.zoomSpriteDamp(1), 1);
   assert.ok(Math.abs(gh010Math.zoomSpriteDamp(3.5) - 1 / Math.pow(3.5, 0.35)) < 1e-9);
-  assert.ok(gh010Math.spriteRadiusPx(500, 1, false) <= 14);
-  assert.ok(gh010Math.spriteRadiusPx(500, 1, true) <= 28);
-});
-
-test("ZUR-GH-010 blood glass runners: 40% route, z 0.79 pin, streak speed clamp, respawn y < -1.18", () => {
-  const sim = sim32();
-  assert.match(sim, /\(gl_VertexID % 5\) < 2/);
-  assert.match(sim, /pos\.z = 0\.79/);
-  assert.match(sim, /vel\.y = -clamp\(0\.55 \+ 1\.55 \* fract\(seed \* 13\.1\) \+ 1\.2 \* u_bass, 0\.55, 2\.8\)/);
-  assert.match(sim, /pos\.y < -1\.18/);
-  assert.match(read("src/shaders/sim.vert.glsl"), /oVelocityAux\.w = 2\.8/);
-  let routed = 0;
-  for (let i = 0; i < 1000; i++) if (gh010Math.isBloodRouted(i)) routed++;
-  assert.equal(routed, 400);
-  assert.equal(gh010Math.BLOOD_GLASS_Z, 0.79);
-  assert.ok(gh010Math.bloodNeedsRespawn(-1.2) && !gh010Math.bloodNeedsRespawn(-1.0));
-  for (const [seed, bass] of [[0, 0], [0.99, 1], [0.5, 2]]) {
-    const v = gh010Math.bloodStreakSpeed(seed, bass);
-    assert.ok(Math.abs(v) >= 0.55 && Math.abs(v) <= 2.8);
-  }
+  assert.ok(gh010Math.spriteRadiusPx(500, 1) <= 14);
 });
 
 test("ZUR-GH-010 formation confinement: tether >= 4.2 and curl <= 0.18 * radius for u_formation >= 6", () => {
@@ -2444,7 +2393,8 @@ test("ZUR-GH-011 DOM node identity gate: 10 slider inputs + AppState/status upda
     hud.setHandlers({
       particles: (partial) => state.updatePreset((draft) => { draft.particles = normalizeParticles({ ...draft.particles, ...partial }); }),
     });
-    assert.equal(state.preset.hud.hudTab, "deep-space");
+    assert.equal(state.preset.hud, undefined, "v6.0 presets carry no hud tab state");
+    assert.equal(state.preset.deck.quickPreset, "wormhole");
     const zoom = hud.controls.zoom.input;
     const reactivity = hud.controls.reactivity.input;
     const palette = hud.controls.palette.select;
@@ -2483,85 +2433,71 @@ test("ZUR-GH-011 DOM node identity gate: 10 slider inputs + AppState/status upda
     for (const fn of windowListeners.pointerup || []) fn({ type: "pointerup" });
     assert.equal(Number(zoom.value), 1.5, "pointerup re-syncs the slider");
 
-    // Sanity: the gate is not vacuous; a structural change (tab switch) does re-lay-out, and keeps scrollTop.
-    hud._switch("brain-3d");
-    assert.ok(stats.moves > movesBefore, "tab switch re-orders rows");
+    // ZUR-GH-013: Quick Presets / Engine changes are value changes on the single unlocked deck, never a re-layout.
+    state.replacePreset(gh010.applyQuickPreset(state.preset, "brain"));
+    state.replacePreset(gh010.applyEngine(state.preset, "canyon"));
+    assert.equal(stats.moves, movesBefore, "quick preset + engine switch never move rows");
+    assert.equal(hud._layoutKey, "deck");
+    assert.equal(hud.controls.formation.select, formation);
+    // Sanity: the gate is not vacuous; a genuinely new layout key does re-order rows, and keeps scrollTop.
+    hud._applyLayout("probe", gh010Tabs.DECK_LAYOUT);
+    assert.ok(stats.moves > movesBefore, "a new layout key re-orders rows");
     assert.equal(hud.panel.scrollTop, 240);
-    assert.equal(hud._layoutKey, "brain-3d|blood-drip|spectral-canyon-3d");
   } finally {
     if (hadDocument) globalThis.document = previousDocument; else delete globalThis.document;
     if (previousAdd) globalThis.addEventListener = previousAdd; else delete globalThis.addEventListener;
   }
 });
 
-test("ZUR-GH-011 HUD source: status emits only touch pills; layout keyed on hudTab|swarmMode|shaderScene; guards", () => {
+test("ZUR-GH-011/013 HUD source: status emits only touch pills; single 'deck' layout key; focus / drag guards", () => {
   const hud = read("src/controls/ControlHUD.js");
   assert.match(hud, /type === "status" \? this\.syncStatus\(\) : this\.sync\(\)/);
-  assert.match(hud, /const structuralKey = `\$\{flat\.hudTab\}\|\$\{flat\.swarmMode\}\|\$\{flat\.shaderScene\}`/);
+  assert.match(hud, /this\._applyLayout\("deck", DECK_LAYOUT\)/);
   assert.match(hud, /document\.activeElement !== select/);
   assert.match(hud, /control\.input === this\._dragInput/);
   assert.doesNotMatch(hud, /innerHTML/);
   assert.equal((hud.match(/replaceChildren\(/g) || []).length, 1, "only _build() clears the root");
 });
 
-test("ZUR-GH-011 Blood & Swarm entry defaults to blood-drip (blood-drop / splatter-run / blood-red / comet >= 0.72)", () => {
-  const brain = gh010.switchHudTab({ hudTab: "blood-swarm", swarmMode: "free-swarm" }, "brain-3d");
-  assert.equal(brain.swarmMode, "free-swarm", "stale sub-mode survives on another tab (the 25667.mp4 trap)");
-  const blood = gh010.switchHudTab(brain, "blood-swarm");
-  assert.equal(blood.swarmMode, "blood-drip");
-  assert.equal(blood.particleStyle, "blood-drop");
-  assert.equal(blood.kineticMode, "splatter-run");
-  assert.equal(blood.colorPalette, "blood-red");
-  assert.equal(blood.trailType, "comet");
-  assert.ok(blood.trailLength >= 0.72);
-  for (const from of ["deep-space", "megastructure", "canyon-pulse"]) {
-    assert.equal(gh010.switchHudTab(gh010.switchHudTab({ hudTab: "blood-swarm", swarmMode: "logo-text" }, from), "blood-swarm").swarmMode, "blood-drip", from);
-  }
-  assert.equal(gh010.switchHudTab(brain, "blood-swarm", { swarmMode: "free-swarm" }).swarmMode, "free-swarm", "explicit sub-pill wins");
-  const logo = gh010.switchHudTab(blood, "blood-swarm", { swarmMode: "logo-text" });
-  assert.equal(gh010.switchHudTab(logo, "blood-swarm").swarmMode, "logo-text", "re-tapping the active tab keeps the sub-mode");
-  assert.equal(gh010.switchHudTab(gh010.switchHudTab(logo, "audio-rig"), "blood-swarm").swarmMode, "logo-text", "returning from Audio & Rig keeps it");
-  const preset = gh010.switchPresetTab(gh010.switchPresetTab(gh010.STAGE2_DEFAULT_PRESET, "blood-swarm", { swarmMode: "free-swarm" }), "brain-3d");
-  const viaPreset = gh010.switchPresetTab(preset, "blood-swarm");
-  assert.equal(viaPreset.hud.swarmMode, "blood-drip");
-  assert.equal(viaPreset.particles.particleStyle, "blood-drop");
-});
-
-test("ZUR-GH-011 sticky header: Hide HUD + tab bar share one solid z-20 sticky container", () => {
+test("ZUR-GH-011/013 sticky header: Hide HUD + Quick Presets strip share one solid z-20 sticky container", () => {
   const html = read("index.html");
   assert.match(html, /\.hud-sticky \{\s*position: sticky; top: -12px; z-index: 20;[^}]*background: rgba\(10, 14, 24, 0\.98\)/);
   assert.match(html, /\.hud-sticky \.hud-hide \{ position: static;/);
   assert.match(html, /\.hud\.is-collapsed \.hud-tabs \{ display: none; \}/);
   const hud = read("src/controls/ControlHUD.js");
   assert.match(hud, /this\.stickyHeader\.append\(this\.hideButton\)/);
-  assert.match(hud, /this\.stickyHeader\.append\(this\.tabBar\)/);
-  assert.doesNotMatch(hud, /this\.body\.append\(this\.tabBar\)/);
+  assert.match(hud, /this\.stickyHeader\.append\(this\.quickBar\)/);
+  assert.match(hud, /this\.body\.append\(this\.engineBar\)/);
+  assert.doesNotMatch(hud, /this\.tabBar/);
 });
 
-test("ZUR-GH-011 golden-cortex idle thalamic baseline fires above 0.55 with no audio", () => {
+test("ZUR-GH-013 thalamic idle rhythm survives only in ambient-vj; true-gate brain is dark in silence", () => {
   const vert = stripComments(read("src/shaders/render.vert.glsl"));
   assert.match(vert, /if \(u_formationType == 6\) \{/);
-  assert.match(vert, /float thalamic = sin\(length\(a_pos\.xyz\) \* 6\.0 - u_time \* 3\.8 \+ seed \* 1\.7\);/);
+  assert.match(vert, /float thalamic = sin\(length\(center\) \* 6\.0 - u_time \* 3\.8 \+ seed \* 1\.7\);/);
   assert.match(vert, /v_neuralPulse = max\(v_neuralPulse, smoothstep\(0\.55, 0\.95, thalamic\) \* 0\.78\);/);
   let audioIdleMax = 0;
   let thalamicMax = 0;
   for (let r = 0; r <= 1.5; r += 0.01) {
     for (let t = 0; t < 2; t += 0.05) {
-      audioIdleMax = Math.max(audioIdleMax, gh010Math.neuralPulse(r, t, 0, 0));
+      audioIdleMax = Math.max(audioIdleMax, gh010Math.neuralPulse(r, t, 0, 0, 0, 0));
       thalamicMax = Math.max(thalamicMax, gh010Math.thalamicPulse(r, t, 0.3));
     }
   }
-  assert.ok(audioIdleMax < gh010Math.GOLDEN_CORTEX_PULSE_THRESHOLD, "audio wave alone never fires at idle (the dark-brain bug)");
-  assert.ok(thalamicMax > gh010Math.GOLDEN_CORTEX_PULSE_THRESHOLD, "thalamic baseline crosses the firing threshold");
-  assert.ok(Math.abs(thalamicMax - gh010Math.GOLDEN_CORTEX_THALAMIC_PEAK) < 1e-3);
+  assert.equal(audioIdleMax, 0, "no audio -> no firing wave at all (true silence)");
+  assert.ok(thalamicMax > gh010Math.GOLDEN_CORTEX_PULSE_THRESHOLD, "ambient-vj thalamic baseline still crosses the firing threshold");
+  assert.equal(pm009.reactivityEmission("true-gate", 0), 0);
+  assert.equal(pm009.reactivityEmission("ember-floor", 0), 0.06);
+  assert.equal(pm009.reactivityEmission("ambient-vj", 0), 1);
 });
 
-test("ZUR-GH-011 smoke:gh010 carries node-identity, blood-default and brain-luminance gates", () => {
+test("ZUR-GH-011/013 smoke:gh010 carries node-identity, style-persistence, reactivity and brain-luminance gates", () => {
   const smoke = read("tests/smoke-zur-gh-010.mjs");
   assert.match(smoke, /nodeIdentity/);
-  assert.match(smoke, /bloodDefault/);
+  assert.match(smoke, /stylePersistence/);
   assert.match(smoke, /brainLuma/);
   assert.match(smoke, /activeMeanLuma >= 0\.22/);
+  assert.doesNotMatch(smoke, /bloodDefault|blood-swarm"\]|goTab\(/);
 });
 
 test("ZUR-GH-012 smoke passes Linux container flags only on linux", () => {
@@ -2624,42 +2560,64 @@ const gh012 = {
 const gh012App = await import("../src/app/AppState.js");
 const gh012Math = await import("../src/render/particleMath.js");
 
-test("ZUR-GH-012 sceneId is derived from hudTab for every HUD tab", () => {
-  const expected = { "deep-space": "particle-swarm-3d", "brain-3d": "particle-swarm-3d", "blood-swarm": "particle-swarm-3d", megastructure: "megastructure-3d" };
-  for (const tab of gh012App.VISUAL_HUD_TABS) {
-    const flat = gh012App.enforceTabConstraints({ ...gh012App.flattenPreset(gh012App.STAGE2_DEFAULT_PRESET), hudTab: tab, sceneId: "megastructure-3d" });
-    if (expected[tab]) assert.equal(flat.sceneId, expected[tab], tab);
-    else assert.equal(flat.sceneId, flat.shaderScene, tab);
-    assert.equal(gh012App.sceneForHud(tab, flat.shaderScene), flat.sceneId, tab);
+test("ZUR-GH-013 sceneId is derived from the Engine Selector for every engine", () => {
+  const expected = { particles: "particle-swarm-3d", megastructure: "megastructure-3d", canyon: "spectral-canyon-3d", pulse: "pulse-field-3d", aurora: "aurora-ribbons" };
+  assert.deepEqual([...gh012App.ENGINE_IDS], Object.keys(expected));
+  for (const [engine, scene] of Object.entries(expected)) {
+    assert.equal(gh012App.sceneForEngine(engine), scene, engine);
+    assert.equal(gh012App.engineForScene(scene), engine, scene);
+    assert.equal(gh012App.applyEngine(gh012App.STAGE2_DEFAULT_PRESET, engine).sceneId, scene);
   }
 });
 
-test("ZUR-GH-012 Mode B applies deep-space / particle-swarm-3d / wormhole / 64k / 1.0; Mode A is consistent", () => {
+test("ZUR-GH-012/013 Mode B applies particle-swarm-3d / wormhole / 64k / 1.0; Mode A keeps a valid scene and the style", () => {
   const b = gh012App.applyModeKeepingScene(MODE_B_PRESET, gh012App.STAGE2_DEFAULT_PRESET);
-  assert.equal(b.hud.hudTab, "deep-space");
+  assert.equal(b.hud, undefined);
   assert.equal(b.sceneId, "particle-swarm-3d");
   assert.equal(b.particles.formationType, "wormhole");
   assert.equal(b.particles.particleCountTier, "64k");
   assert.equal(b.particles.particleSize, 1.0);
-  const desynced = { ...gh012App.STAGE2_DEFAULT_PRESET, sceneId: "megastructure-3d", hud: { ...gh012App.STAGE2_DEFAULT_PRESET.hud, hudTab: "deep-space" } };
-  assert.equal(gh012App.applyModeKeepingScene(MODE_B_PRESET, desynced).sceneId, "particle-swarm-3d");
-  const a = gh012App.applyModeKeepingScene(MODE_A_PRESET, gh012App.STAGE2_DEFAULT_PRESET);
-  assert.equal(a.sceneId, gh012App.sceneForHud(a.hud.hudTab, a.hud.shaderScene, a.hud.visualTab));
+  assert.equal(validatePreset(b).ok, true);
+  const styled = structuredClone(gh012App.STAGE2_DEFAULT_PRESET);
+  styled.particles.particleStyle = "star-streak";
+  const a = gh012App.applyModeKeepingScene(MODE_A_PRESET, styled);
+  assert.ok(SCENE_IDS.includes(a.sceneId));
+  assert.equal(validatePreset(a).ok, true);
 });
 
-test("ZUR-GH-012 zur_state_v5_2 migrates to v5_3 and a desynced hudTab/sceneId is repaired", () => {
-  assert.equal(gh012App.STORAGE_KEY, "zur_state_v5_3");
-  assert.equal(gh012App.STORAGE_SCHEMA, 5.3);
-  assert.ok(gh012App.LEGACY_STORAGE_KEYS.includes("zur_state_v5_2"));
-  assert.equal(typeof gh012App.upgradeToV53, "function");
-  const bad = { ...gh012App.STAGE2_DEFAULT_PRESET, sceneId: "megastructure-3d", hud: { ...gh012App.STAGE2_DEFAULT_PRESET.hud, hudTab: "deep-space" } };
-  const loaded = loadStoredState(mockStorage({ zur_state_v5_2: JSON.stringify({ storageSchema: 5.2, preset: bad }) }));
-  assert.equal(loaded.migrated, true);
-  assert.equal(loaded.preset.hud.hudTab, "deep-space");
-  assert.equal(loaded.preset.sceneId, "particle-swarm-3d");
-  const current = loadStoredState(mockStorage({ zur_state_v5_3: JSON.stringify({ storageSchema: 5.3, preset: bad }) }));
-  assert.equal(current.preset.sceneId, "particle-swarm-3d", "even a current-schema desync is repaired");
-  assert.equal(new AppState(bad).preset.sceneId, "particle-swarm-3d");
+test("ZUR-GH-013 zur_state_v5_3 / v5_2 Blood saves migrate to zur_state_v6_0 crisp-dot + wormhole, hud deleted", () => {
+  assert.equal(gh012App.STORAGE_KEY, "zur_state_v6_0");
+  assert.equal(gh012App.STORAGE_SCHEMA, 6.0);
+  assert.ok(gh012App.LEGACY_STORAGE_KEYS.includes("zur_state_v5_3") && gh012App.LEGACY_STORAGE_KEYS.includes("zur_state_v5_2"));
+  assert.equal(typeof gh012App.upgradeToV60, "function");
+  const blood = structuredClone(gh012App.STAGE2_DEFAULT_PRESET);
+  delete blood.deck;
+  blood.hud = { hudTab: "blood-swarm", swarmMode: "blood-drip", shaderScene: "spectral-canyon-3d", visualTab: "blood-swarm" };
+  blood.particles = { ...blood.particles, formationType: "free-3d", particleStyle: "blood-drop", kineticMode: "splatter-run", colorPalette: "blood-red" };
+  delete blood.particles.reactivityMode;
+  for (const [key, schema] of [["zur_state_v5_3", 5.3], ["zur_state_v5_2", 5.2]]) {
+    const loaded = loadStoredState(mockStorage({ [key]: JSON.stringify({ storageSchema: schema, preset: blood }) }));
+    assert.equal(loaded.migrated, true, key);
+    assert.equal(loaded.preset.hud, undefined, `${key} hud deleted`);
+    assert.equal(loaded.preset.particles.particleStyle, "crisp-dot", key);
+    assert.equal(loaded.preset.particles.formationType, "wormhole", key);
+    assert.equal(loaded.preset.particles.kineticMode, "off", key);
+    assert.equal(loaded.preset.particles.colorPalette, "crimson-pulse", key);
+    assert.equal(loaded.preset.particles.reactivityMode, "true-gate", key);
+    assert.equal(loaded.preset.sceneId, "particle-swarm-3d", key);
+    assert.equal(validatePreset(loaded.preset).ok, true, key);
+  }
+  // A non-blood v5.3 save keeps the user's own formation; style moves to the v6.0 crisp-dot default, hud is dropped.
+  const own = structuredClone(gh012App.STAGE2_DEFAULT_PRESET);
+  delete own.deck;
+  own.hud = { hudTab: "brain-3d", swarmMode: "free-swarm", shaderScene: "spectral-canyon-3d", visualTab: "brain-3d" };
+  own.particles = { ...own.particles, formationType: "neural-brain", particleStyle: "star-streak" };
+  const kept = loadStoredState(mockStorage({ zur_state_v5_3: JSON.stringify({ storageSchema: 5.3, preset: own }) }));
+  assert.equal(kept.preset.particles.particleStyle, "crisp-dot");
+  assert.equal(kept.preset.particles.formationType, "neural-brain");
+  assert.equal(kept.preset.hud, undefined);
+  const serialized = JSON.parse(serializeStoredState(kept.preset));
+  assert.equal(serialized.storageSchema, 6.0);
 });
 
 test("ZUR-GH-012 one transform-feedback step per frame: planSimStep, MAX_STEPS_PER_FRAME 1, simSteps stat", () => {
@@ -2688,16 +2646,27 @@ test("ZUR-GH-012 dart3d uses a 4-vertex velocity dart quad from 131072 agents", 
   assert.match(gh012.frag(), /u_shape == 2/);
 });
 
-test("ZUR-GH-012 full-spectrum / true-neon hue uses coherent spatial bands, not per-particle v_seed", () => {
+test("ZUR-GH-013 no atan seams: palettes are smooth iq-cosine / mix() gradients over radial, depth, speed, centroid", () => {
   const f = gh012.frag();
-  const fn = f.slice(f.indexOf("float spatialHue()"), f.indexOf("vec3 palettePick"));
-  assert.match(fn, /atan\(v_worldPos\.y, v_worldPos\.x/);
-  assert.match(fn, /v_worldPos\.z/);
-  assert.doesNotMatch(fn, /v_seed/);
-  assert.match(f, /hsv2rgb\(vec3\(spatialHue\(\), 0\.95, 1\.0\)\)/);
-  assert.match(f, /float g = spatialHue\(\) \* 4\.0;/);
+  assert.doesNotMatch(f, /atan\(/, "render.frag has no atan (no wedge buckets)");
+  assert.doesNotMatch(f, /floor\(/, "render.frag has no floor() buckets");
+  const g = f.slice(f.indexOf("float gradientT()"), f.indexOf("vec3 trueNeon"));
+  for (const term of ["radialNorm", "depthNorm", "v_speedNorm", "u_spectralCentroid"]) assert.ok(g.includes(term), term);
+  assert.doesNotMatch(g, /v_seed\s*\*\s*[1-9]/, "no per-particle hue scatter");
+  assert.match(f, /vec3 fullSpectrum\(float t\)/);
+  assert.match(f, /cos\(TAU \* \(/, "iq cosine palette a + b cos(2pi(c t + d))");
   assert.match(gh012.vert(), /flat out vec3 v_worldPos/);
-  assert.match(gh012.vert(), /\(hueHash - 0\.5\) \* 0\.028/);
+  assert.match(f, /cosinePalette\(t, vec3\(0\.5\), vec3\(0\.5\), vec3\(1\.0\), vec3\(0\.0, 0\.33, 0\.67\)\)/);
+  const pal = (t) => pm009.cosinePalette(t, [0.5, 0.5, 0.5], [0.5, 0.5, 0.5], [1, 1, 1], [0, 0.33, 0.67]);
+  for (let t = 0; t < 1; t += 0.01) {
+    const a = pal(t);
+    const b = pal(t + 0.01);
+    assert.ok(Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) < 0.12, `continuous at t=${t.toFixed(2)}`);
+  }
+  const wrapA = pal(0);
+  const wrapB = pal(1);
+  assert.ok(Math.hypot(wrapA[0] - wrapB[0], wrapA[1] - wrapB[1], wrapA[2] - wrapB[2]) < 1e-9, "periodic: no seam at the wrap");
+  assert.doesNotMatch(stripComments(read("src/shaders/core.frag.glsl")), /neon\[index\]|floor\(atan/);
 });
 
 test("ZUR-GH-012 Gargantua: edge-on disk plane normal (0.08, 0.96, -0.26) + 28% photon ring + 12% jets", () => {
@@ -2708,26 +2677,24 @@ test("ZUR-GH-012 Gargantua: edge-on disk plane normal (0.08, 0.96, -0.26) + 28% 
   assert.match(gh012.vert(), /u_formationType == 8/);
 });
 
-test("ZUR-GH-012 logo-attractor bypasses crowdNorm: 2.6 px, alpha >= 0.88, 1.9x neon", () => {
+test("ZUR-GH-012 logo-attractor bypasses crowdNorm and the crisp exposure: 2.6 px, 1.9x neon", () => {
   const f = gh012.frag();
   const v = gh012.vert();
-  assert.match(f, /const float LOGO_ALPHA_FLOOR = 0\.88;/);
   assert.match(f, /const float LOGO_NEON_RADIANCE = 1\.9;/);
   assert.match(v, /const float LOGO_MIN_RADIUS_PX = 2\.6;/);
   assert.match(f, /if \(logo\) crowdNorm = max\(crowdNorm, 1\.0\);/);
+  assert.match(f, /if \(logo\) exposure = 1\.0;/);
   assert.match(f, /bool logo = u_formationType == 5;/);
   assert.match(v, /radiusPx = max\(radiusPx, LOGO_MIN_RADIUS_PX\)/);
-  assert.equal(FORMATION_TYPES_GH012().indexOf("logo-attractor"), 5);
+  assert.match(v, /headR = max\(headR, LOGO_MIN_RADIUS_PX \* 1\.5\)/);
+  assert.equal(gh012Math.FORMATION_TYPES.indexOf("logo-attractor"), 5);
 });
-function FORMATION_TYPES_GH012() { return gh012Math.FORMATION_TYPES; }
 
-test("ZUR-GH-012 blood glass runners 2.6x with #FF0A22 core, #FF8A96 specular, >= 3.2 px; brain 0.52/0.78/3.2 on all palettes", () => {
+test("ZUR-GH-013 Blood removed from shaders / state / HUD; brain 0.52 / 0.78 / 3.2 on all palettes kept", () => {
+  for (const file of ["src/shaders/render.frag.glsl", "src/shaders/render.vert.glsl", "src/shaders/sim.vert.glsl", "src/controls/ControlHUD.js", "src/controls/hudTabs.js", "src/app/main.js", "src/app/VJAutopilot.js"]) {
+    assert.doesNotMatch(stripComments(read(file)), /BLOOD_|blood-drip|blood-drop|splatter-run|blood-swarm|Blood & Swarm|bloodStyle/, file);
+  }
   const f = gh012.frag();
-  assert.match(f, /const float BLOOD_RUNNER_RADIANCE = 2\.6;/);
-  const rawFrag = read("src/shaders/render.frag.glsl");
-  assert.match(rawFrag, /BLOOD_CORE = vec3\(1\.0, 0\.003, 0\.016\); *\/\/ #FF0A22/);
-  assert.match(rawFrag, /BLOOD_SPECULAR = vec3\(1\.0, 0\.254, 0\.305\); *\/\/ #FF8A96/);
-  assert.match(gh012.vert(), /const float BLOOD_MIN_RUNNER_PX = 3\.2;/);
   assert.match(f, /const float CORTEX_SOMA_ALPHA = 0\.52;/);
   assert.match(f, /const float CORTEX_PULSE_BOOST = 3\.2;/);
   assert.match(f, /bool cortexFiring = u_formationType == 6 && v_neuralPulse > 0\.55;/);
@@ -2738,17 +2705,16 @@ test("ZUR-GH-012 blood glass runners 2.6x with #FF0A22 core, #FF8A96 specular, >
   assert.equal(gh012Math.FORMATION_TYPES.indexOf("neural-brain"), 6);
 });
 
-test("ZUR-GH-012 Option B: blood-red 3D Brain stays crimson (#FF0818/#C8000A), #FF5566 only on peak flashes; smoke gates luma >= 0.12 + R > 2.2G", () => {
+test("ZUR-GH-012/013 crimson-pulse 3D Brain stays crimson (#FF0818/#C8000A), #FF5566 only on peak flashes; smoke gates luma >= 0.12 + R > 2.2G", () => {
   const f = gh012.frag();
   const rawFrag = read("src/shaders/render.frag.glsl");
-  assert.doesNotMatch(f, /mix\(c, BLOOD_SPECULAR, 0\.75\)/, "no pink blend on the blood-red brain");
   assert.match(rawFrag, /BRAIN_CRIMSON = vec3\(1\.0, 0\.0024, 0\.0090\); *\/\/ #FF0818/);
   assert.match(rawFrag, /BRAIN_CRIMSON_DEEP = vec3\(0\.578, 0\.0, 0\.0030\); *\/\/ #C8000A/);
   assert.match(rawFrag, /BRAIN_SCARLET_FLASH = vec3\(1\.0, 0\.0908, 0\.1329\); *\/\/ #FF5566/);
   assert.match(f, /v_neuralPulse > 0\.65 \? BRAIN_SCARLET_FLASH : mix\(BRAIN_CRIMSON_DEEP, BRAIN_CRIMSON,/);
-  assert.match(f, /if \(u_colorPalette == 3 && u_formationType == 6\) flashC = v_neuralPulse > 0\.65 \? BRAIN_SCARLET_FLASH : base;/, "no cyan dendrite flash on the crimson brain");
+  assert.match(f, /vec3 flashC = u_colorPalette == 3 \? BRAIN_SCARLET_FLASH : vec3\(0\.7454, 1\.0, 1\.0\);/, "no cyan dendrite flash on the crimson brain");
   const smoke = read("tests/smoke-zur-gh-010.mjs");
-  assert.match(smoke, /m\.activeMeanLuma >= 0\.12\)\) problems\.push\(`3D Brain blood-red/);
+  assert.match(smoke, /m\.activeMeanLuma >= 0\.12\)\) problems\.push\(`3D Brain crimson-pulse/);
   assert.match(smoke, /m\.meanR > 2\.2 \* m\.meanG/);
   assert.match(smoke, /else if \(!\(m\.activeMeanLuma >= 0\.25\)\) problems\.push\(`3D Brain \$\{palette\}/, "other 4 palettes keep >= 0.25");
 });
@@ -2782,8 +2748,301 @@ test("ZUR-GH-012 Android mic fallback: raw -> {audio:true} -> silent 124 BPM Dem
   assert.match(read("src/app/main.js"), /setMicStatus\(mode === "microphone"/);
 });
 
-test("ZUR-GH-012 service worker cache zur-shell-v10", () => {
-  assert.match(read("sw.js"), /const CACHE = "zur-shell-v10"/);
+test("ZUR-GH-013 service worker cache zur-shell-v11", () => {
+  assert.match(read("sw.js"), /const CACHE = "zur-shell-v11"/);
+  assert.doesNotMatch(read("sw.js"), /zur-shell-v10"/);
+});
+
+// ---------------------------------------------------------------- ZUR-GH-013 (zur-shell-v11 / zur_state_v6_0)
+const gh013Fx = await import("../src/audio/FeatureExtractor.js");
+const gh013 = {
+  sim: () => stripComments(read("src/shaders/sim.vert.glsl")),
+  vert: () => stripComments(read("src/shaders/render.vert.glsl")),
+  frag: () => stripComments(read("src/shaders/render.frag.glsl")),
+  audio: () => stripComments(read("src/audio/AudioEngine.js")),
+};
+
+test("ZUR-GH-013 cleanGate = smoothstep(0.018, 0.13, maxBandEnergy * u_reactivityGain) in JS and GLSL", () => {
+  assert.equal(gh013Fx.CLEAN_GATE_LO, 0.018);
+  assert.equal(gh013Fx.CLEAN_GATE_HI, 0.13);
+  assert.equal(pm009.CLEAN_GATE_LO, 0.018);
+  assert.equal(pm009.CLEAN_GATE_HI, 0.13);
+  assert.match(gh013.vert(), /return smoothstep\(0\.018, 0\.13, maxBandEnergy \* u_reactivityGain\);/);
+  assert.equal(pm009.cleanGate(0, 2.5), 0);
+  assert.equal(pm009.cleanGate(0.018 / 2.5, 2.5), 0, "gate fully closed at the low edge");
+  assert.equal(pm009.cleanGate(0.13 / 2.5, 2.5), 1, "gate fully open at the high edge");
+  const mid = pm009.cleanGate(0.074 / 2.5, 2.5);
+  assert.ok(mid > 0.45 && mid < 0.55, "smoothstep midpoint");
+  assert.equal(pm009.maxBandEnergy([0.01, 0.3, 0.2, NaN, 0.1]), 0.3);
+  assert.equal(gh013Fx.frameCleanGate({ sub: 0.9, bass: 0.9, lowMid: 0.9, highMid: 0.9, treble: 0.9, isSilent: true }, 2.5), 0, "isSilent forces 0");
+  assert.ok(gh013Fx.frameCleanGate({ sub: 0.5, bass: 0.5, lowMid: 0.1, highMid: 0.1, treble: 0.1, isSilent: false }, 2.5) > 0.99);
+  assert.ok(Number.isFinite(pm009.cleanGate(NaN, 2.5)) && pm009.cleanGate(NaN, 2.5) === 0, "NaN-safe");
+});
+
+test("ZUR-GH-013 reactivityMode true-gate (default) / ember-floor 0.06 / ambient-vj; emission multiplies every engine", () => {
+  assert.deepEqual([...pm009.REACTIVITY_MODES], ["true-gate", "ember-floor", "ambient-vj"]);
+  assert.equal(DEFAULT_PARTICLES.reactivityMode, "true-gate");
+  assert.equal(pm009.reactivityEmission("true-gate", 0), 0, "silence = 0.00 emission");
+  assert.equal(pm009.reactivityEmission("true-gate", 0.4), 0.4);
+  assert.equal(pm009.reactivityEmission("ember-floor", 0), 0.06);
+  assert.equal(pm009.reactivityEmission("ambient-vj", 0), 1);
+  assert.match(gh013.vert(), /float emissionFor\(float cleanGate\)/);
+  assert.match(stripComments(read("src/shaders/core.frag.glsl")), /alpha \*= clamp\(u_emission, 0\.0, 1\.0\);/);
+  assert.match(stripComments(read("src/shaders/spectral-canyon.frag.glsl")), /guardNeon\(color\) \* u_emission/);
+  assert.match(read("src/render/ShaderHost.js"), /vec3 linear = \(color \+ blur \* u_bloom\) \* u_emission;/);
+  assert.match(read("src/render/RenderHost.js"), /reactivityEmission\(/);
+  assert.match(read("src/render/ParticleSystem3D.js"), /gl\.uniform1f\(L\.u_cleanGate, gate\)/);
+  assert.match(read("src/controls/ControlHUD.js"), /reactivityMode: \["sel-reactivity-mode", "particles", "reactivityMode"\]/);
+});
+
+test("ZUR-GH-013 no fake idle brightness: no constant idle floor or u_time-only pulses outside ambient-vj", () => {
+  const v = gh013.vert();
+  assert.doesNotMatch(v, /0\.45 \+ u_treble|idleGlow|IDLE_BRIGHT/);
+  assert.match(v, /u_reactivityMode == 2/, "time-only (thalamic) rhythm is fenced to ambient-vj");
+  const ps = stripComments(read("src/render/ParticleSystem3D.js"));
+  assert.match(ps, /gatedTrailKeep\(/);
+  assert.equal(pm009.TRUE_GATE_TRAIL_DECAY_MS, 120);
+  const dt = 1 / 60;
+  const closed = pm009.gatedTrailKeep(0.98, dt, 0, "true-gate");
+  assert.ok(Math.abs(closed - Math.exp(-dt / 0.12)) < 1e-12, "120 ms trail decay with the gate closed");
+  assert.equal(pm009.gatedTrailKeep(0.98, dt, 1, "true-gate"), 0.98, "open gate keeps the user's trail");
+  assert.equal(pm009.gatedTrailKeep(0.98, dt, 0, "ambient-vj"), 0.98);
+  assert.equal(pm009.gatedDamping(1, 0), 1 + pm009.TRUE_GATE_MOTION_DAMP, "damped motion in silence");
+  assert.equal(pm009.gatedDamping(1, 1), 1);
+  const sim = gh013.sim();
+  assert.match(sim, /k \+= \(1\.0 - u_cleanGate\) \* 5\.0;/);
+  assert.match(sim, /float burst = u_cleanGate \* \(sustainedBurst \+ u_onset \* [\d.]+\)/, "beats: velocity burst");
+  assert.match(sim, /pos \+= radial \* u_cleanGate \* u_onset/, "beats: radial displacement");
+});
+
+test("ZUR-GH-013 Load Audio Track (WAV/MP3/OGG): AudioElement -> MediaElementSource -> Analyser; Speaker Monitor only path to speakers", () => {
+  const a = gh013.audio();
+  const raw = read("src/audio/AudioEngine.js");
+  assert.match(raw, /export const TRACK_ACCEPT = "\.wav,\.mp3,\.ogg,audio\/wav,audio\/x-wav,audio\/mpeg,audio\/ogg";/);
+  const finish = a.slice(a.indexOf("async function finishFileTrack"), a.indexOf("export async function playPauseTrack"));
+  assert.match(finish, /trackElement = new Audio\(\);/);
+  assert.match(finish, /createMediaElementSource\(trackElement\)/);
+  assert.match(finish, /attachAnalyser\(context, source, fftSize, 1\);/);
+  assert.match(finish, /currentMode = "file-track";/);
+  assert.ok(finish.indexOf("applySpeakerMonitor()") > finish.indexOf("attachAnalyser"), "monitor applied after the analyser");
+  assert.doesNotMatch(finish, /\.destination/);
+  const apply = a.slice(a.indexOf("function applySpeakerMonitor"), a.indexOf("function releaseTrack"));
+  assert.match(apply, /currentMode === "file-track" && speakerMonitor\) monitorConnect\(\);\s*else monitorDisconnect\(\);/);
+  for (const fn of ["startFileTrack", "playPauseTrack", "setSpeakerMonitor", "getTrackState"]) assert.match(raw, new RegExp(`export (async )?function ${fn}\\(`), fn);
+  assert.match(a, /destinationConnections = 0;[\s\S]*destinationConnections = 1;|destinationConnections = 1;[\s\S]*destinationConnections = 0;/);
+  const stop = a.slice(a.indexOf("export async function stopCapture"));
+  assert.match(stop.slice(0, 1200), /releaseTrack\(\)|monitorDisconnect\(\)/, "stop always unroutes the speakers");
+  const hud = read("src/controls/ControlHUD.js");
+  assert.match(hud, /"Load Audio Track \(WAV\/MP3\/OGG\)"/);
+  assert.match(hud, /this\.trackFile\.id = "file-audio-track";/);
+  assert.match(hud, /this\.trackFile\.accept = TRACK_ACCEPT;/);
+  assert.match(hud, /"btn-track-play"/);
+  assert.match(hud, /"chk-speaker-monitor"/);
+  const main = read("src/app/main.js");
+  for (const h of ["trackFile", "trackPlay", "speakerMonitor"]) assert.match(main, new RegExp(`${h}[:(]`), h);
+});
+
+test("ZUR-GH-013 mic and tab capture stay at destinationConnections 0 (monitorConnect refuses non-file modes)", () => {
+  const a = gh013.audio();
+  const monitor = a.slice(a.indexOf("function monitorConnect"), a.indexOf("function monitorDisconnect"));
+  assert.match(monitor, /if \(currentMode !== "file-track" \|\| !source \|\| !context \|\| monitorConnected\) return false;/);
+  for (const name of ["startTabCapture", "startMicCapture", "startDemoBeat", "startTestOscillator"]) {
+    const start = a.indexOf(`function ${name}`);
+    assert.ok(start >= 0, name);
+    const body = a.slice(start, start + 2500);
+    assert.doesNotMatch(body.slice(0, body.indexOf("\n}\n") + 1 || undefined), /monitorConnect|\.connect\([^)]*destination/, name);
+  }
+  assert.match(a, /if \(isAudioDestination\(destination\)\) \{\s*destinationRefusals \+= 1;\s*throw/);
+  assert.match(a, /silent: destinationConnections === 0/);
+});
+
+test("ZUR-GH-013 4 s rolling-peak auto-gain on the shared Android mic only", () => {
+  assert.equal(gh013Fx.AUTO_GAIN_WINDOW_SECONDS, 4);
+  assert.equal(gh013Fx.AUTO_GAIN_BUCKETS, 16);
+  assert.deepEqual([...gh013Fx.AUTO_GAIN_RANGE], [1, 8]);
+  const rp = new gh013Fx.RollingPeak();
+  for (let i = 0; i < 60; i += 1) rp.push(0.1, 1 / 60);
+  assert.ok(Math.abs(rp.peak() - 0.1) < 1e-7);
+  for (let i = 0; i < 60 * 4.5; i += 1) rp.push(0, 1 / 60);
+  assert.equal(rp.peak(), 0, "peak forgets after the 4 s window");
+  assert.equal(gh013Fx.autoGainFromPeak(0), 1, "no boost of pure noise / silence");
+  assert.equal(gh013Fx.autoGainFromPeak(0.01), 1, "below the minimum peak");
+  assert.equal(gh013Fx.autoGainFromPeak(0.05), 8, "clamped at 8x");
+  assert.ok(Math.abs(gh013Fx.autoGainFromPeak(0.45) - 2) < 1e-12);
+  assert.equal(gh013Fx.autoGainFromPeak(2), 1, "never attenuates below 1x");
+  assert.equal(gh013Fx.autoGainEnabledFor("mic", "shared"), true);
+  assert.equal(gh013Fx.autoGainEnabledFor("mic", "raw"), false);
+  assert.equal(gh013Fx.autoGainEnabledFor("tab", "shared"), false);
+  assert.equal(gh013Fx.autoGainEnabledFor("file-track", undefined), false);
+  const fx = new gh013Fx.FeatureExtractor();
+  assert.equal(typeof fx.setAutoGain, "function");
+  const main = read("src/app/main.js");
+  assert.match(main, /extractor\.setAutoGain\(autoGainEnabledFor\(/);
+  assert.match(main, /extractor\.setAutoGain\(false\)/);
+});
+
+test("ZUR-GH-013 anatomical neural-brain: 82% cerebrum / 11% cerebellum / 7% brainstem, 0.045 gap, +/-0.03 gyri, 32 deg view", () => {
+  assert.equal(pm009.BRAIN_CEREBRUM_FRACTION, 0.82);
+  assert.equal(pm009.BRAIN_CEREBELLUM_FRACTION, 0.11);
+  assert.ok(Math.abs(pm009.BRAIN_BRAINSTEM_FRACTION - 0.07) < 1e-12);
+  assert.ok(Math.abs(pm009.BRAIN_CEREBRUM_FRACTION + pm009.BRAIN_CEREBELLUM_FRACTION + pm009.BRAIN_BRAINSTEM_FRACTION - 1) < 1e-12);
+  assert.equal(pm009.BRAIN_LONGITUDINAL_GAP, 0.045);
+  assert.equal(pm009.BRAIN_GYRI_AMPLITUDE, 0.03);
+  assert.equal(pm009.BRAIN_VIEW_YAW_DEG, 32);
+  const counts = { cerebrum: 0, cerebellum: 0, brainstem: 0 };
+  for (let i = 0; i < 10000; i += 1) counts[pm009.brainRegion((i + 0.5) / 10000)] += 1;
+  assert.deepEqual(counts, { cerebrum: 8200, cerebellum: 1100, brainstem: 700 });
+  const sim = gh013.sim();
+  assert.match(sim, /const float BRAIN_CEREBRUM_FRAC = 0\.82;/);
+  assert.match(sim, /const float BRAIN_CEREBELLUM_FRAC = 0\.11;/);
+  assert.match(sim, /const float BRAIN_GAP = 0\.045;/);
+  assert.match(sim, /const float BRAIN_VIEW_YAW = 0\.5585053606;/);
+  assert.ok(Math.abs(0.5585053606 - (32 * Math.PI) / 180) < 1e-9);
+  assert.match(sim, /p\.x = s \* max\(s \* p\.x, BRAIN_GAP \* 0\.5\);/, "the longitudinal fissure stays empty (no central egg)");
+  assert.match(sim, /p \+= n \* 0\.03 \* ridge;/, "+/-0.03 gyri");
+  assert.match(sim, /region < BRAIN_CEREBRUM_FRAC \+ BRAIN_CEREBELLUM_FRAC/);
+});
+
+test("ZUR-GH-013 harmonic-ferrofluid: 70% spherical-harmonic spike shell on 5 bands + 30% concentric EQ rings", () => {
+  assert.equal(FORMATION_TYPES.indexOf("harmonic-ferrofluid"), 10);
+  assert.equal(pm009.FERRO_SHELL_FRACTION, 0.7);
+  assert.equal(pm009.FERRO_RING_FRACTION, 0.3);
+  assert.deepEqual([...pm009.FERRO_HARMONIC_DEGREES], [2, 3, 4, 6, 8]);
+  const sim = gh013.sim();
+  assert.match(sim, /const float FERRO_SHELL_FRAC = 0\.70;/);
+  assert.match(sim, /if \(u_formationType == 10\) return harmonicFerrofluidTarget\(seed, uid\);/);
+  const fn = sim.slice(sim.indexOf("vec3 harmonicFerrofluidTarget"), sim.indexOf("vec3 harmonicFerrofluidTarget") + 2600);
+  assert.match(fn, /kind < FERRO_SHELL_FRAC/);
+  assert.match(fn, /u_bands\[ring\]/, "each EQ ring follows its band");
+  assert.match(fn, /int ring = int\(uid % 5u\);/, "5 concentric rings");
+  assert.equal(gh010.QUICK_PRESETS.find((q) => q.id === "ferrofluid").particles.formationType, "harmonic-ferrofluid");
+});
+
+test("ZUR-GH-013 wormhole: horned torus tilted 22 deg, R 0.94 outer shell, 0.08 throat", () => {
+  assert.equal(pm009.WORMHOLE_TILT_DEG, 22);
+  assert.equal(pm009.WORMHOLE_SHELL_R, 0.94);
+  assert.equal(pm009.WORMHOLE_THROAT_R, 0.08);
+  const outer = pm009.wormholePoint(0, 0);
+  assert.ok(Math.abs(Math.hypot(...outer) - 0.94) < 1e-9);
+  const throat = pm009.wormholePoint(0.5, 0);
+  assert.ok(Math.abs(Math.hypot(...throat) - 0.08) < 1e-9);
+  let shell = 0;
+  let inner = 0;
+  const N = 4000;
+  for (let i = 0; i < N; i += 1) {
+    const r = Math.hypot(...pm009.wormholePoint((i + 0.5) / N, (i * 0.618) % 1));
+    assert.ok(Number.isFinite(r) && r <= 1.0, "closed shell bounded by the unit sphere");
+    if (r >= 0.8) shell += 1;
+    if (r < 0.3) inner += 1;
+  }
+  assert.ok(shell / N > 0.3 && inner / N > 0.1, "both outer shell and throat are occupied");
+  const sim = gh013.sim();
+  assert.match(sim, /const float WORMHOLE_TILT = 0\.3839724354;/);
+  assert.ok(Math.abs(0.3839724354 - (22 * Math.PI) / 180) < 1e-9);
+  assert.match(sim, /float rxz = 0\.51 \+ 0\.43 \* cos\(theta\);/, "R = 0.51 + 0.43 = 0.94, throat 0.51 - 0.43 = 0.08");
+  assert.equal(DEFAULT_PARTICLES.formationType, "wormhole");
+});
+
+test("ZUR-GH-013 Blood removed: no Blood & Swarm tab, styles, kinetic or palette ids anywhere in the shipped app", () => {
+  const files = ["index.html", "sw.js", "src/app/main.js", "src/controls/ControlHUD.js", "src/controls/hudTabs.js", "src/app/VJAutopilot.js",
+    "src/shaders/render.frag.glsl", "src/shaders/render.vert.glsl", "src/shaders/sim.vert.glsl", "src/render/ParticleSystem3D.js", "src/render/RenderHost.js"];
+  for (const file of files) assert.doesNotMatch(stripComments(read(file)), /blood|splatter/i, file);
+  assert.ok(!pm009.PARTICLE_STYLES.includes("blood-drop"));
+  assert.ok(!pm009.KINETIC_MODES.includes("splatter-run"));
+  assert.ok(!pm009.COLOR_PALETTES.includes("blood-red"));
+  for (const gone of ["BLOOD_GLASS_Z", "bloodPin", "bloodNeedsRespawn", "isBloodRouted", "bloodStreakSpeed"]) assert.equal(gone in pm009, false, gone);
+  // Migration-only references (legacy detection) are allowed in AppState / particleMath aliases.
+  assert.match(read("src/app/AppState.js"), /isLegacyBloodPreset/);
+});
+
+test("ZUR-GH-013 crisp-dot is the #1 default everywhere (fresh state, Mode A/B, migrations)", () => {
+  assert.equal(DEFAULT_PARTICLES.particleStyle, "crisp-dot");
+  assert.equal(pm009.PARTICLE_STYLES[0], "crisp-dot");
+  assert.equal(gh010.STAGE2_DEFAULT_PRESET.particles.particleStyle, "crisp-dot");
+  assert.equal(new AppState(gh010.STAGE2_DEFAULT_PRESET).preset.particles.particleStyle, "crisp-dot");
+  assert.equal(gh010.applyModeKeepingScene(MODE_B_PRESET, gh010.STAGE2_DEFAULT_PRESET).particles.particleStyle, "crisp-dot");
+  assert.equal(pm009.CRISP_DOT_CORE_K, 16);
+  assert.equal(pm009.DART_SCALE, 0.55);
+  assert.equal(pm009.SYNAPSE_SPARK_FRACTION, 0.15);
+  assert.match(read("src/controls/hudTabs.js") + read("src/render/particleMath.js"), /Crisp Dot — Pinpoint/);
+});
+
+test("ZUR-GH-013 smoke:gh010 asserts the v6.0 gates (a)-(f) and keeps the kept gates", () => {
+  const smoke = read("tests/smoke-zur-gh-010.mjs");
+  assert.match(smoke, /silence\.frameMeanLuma <= 0\.025/, "(a) meanLuma");
+  assert.match(smoke, /silence\.blackRatio >= 0\.94/, "(a) blackRatio");
+  assert.match(smoke, /active\.activeMeanLuma >= 0\.12/, "(b) >= 0.12");
+  assert.match(smoke, /ratio >= 5/, "(b) >= 5x silence");
+  assert.match(smoke, /maxAdjacentHueDelta <= 0\.08/, "(c) seams");
+  assert.match(smoke, /stylePersistence/, "(d)");
+  assert.match(smoke, /shellFraction >= 0\.30/, "(e) shell");
+  assert.match(smoke, /throatFraction >= 0\.05/, "(e) throat");
+  assert.match(smoke, /262144/);
+  assert.match(smoke, /crowdNorm/);
+  assert.match(smoke, /destinationConnections/);
+  assert.match(smoke, /autoGain/);
+  assert.match(smoke, /zur_state_v5_3/);
+  assert.match(smoke, /consoleErrors\.length/);
+  assert.doesNotMatch(smoke, /enforceTabConstraints|goTab\(|idle activeMeanLuma/);
+});
+
+test("ZUR-GH-013 tightening 1: brain / wormhole / logo / black hole swap the 1.42x sustained swell for a <= 1.08x onset micro-pulse", () => {
+  const sim = gh013.sim();
+  assert.match(sim, /bool structuredFormation\(\) \{\s*return u_formationType == 5 \|\| u_formationType == 6 \|\| u_formationType == 8 \|\| u_formationType == 9;/);
+  assert.match(sim, /const float STRUCTURED_ONSET_PULSE = 0\.08;/);
+  assert.match(sim, /if \(structuredFormation\(\)\) kick = 1\.0 \+ STRUCTURED_ONSET_PULSE \* clamp\(u_onset, 0\.0, 1\.0\) \* u_cleanGate;/);
+  assert.match(sim, /float sustainedBurst = structuredFormation\(\) \? 0\.0 : u_bass \* 1\.6;/, "no sustained bass burst on structured shapes");
+  assert.match(sim, /float structuredImpulse = structuredFormation\(\) \? 0\.35 : 1\.0;/);
+  assert.match(sim, /FORMATION_CURL_CAP \* \(structuredFormation\(\) \? 0\.33 : 1\.0\)/);
+  assert.match(sim, /cerebrumSurface\(d, side\) \* \(1\.0 \+ 0\.04 \* u_onset \* u_cleanGate\)/, "brain soma breathes on onsets only");
+  // sustained bass / RMS are routed elsewhere
+  assert.match(sim, /0\.25 \+ 0\.55 \* \(b1 \+ b4\) \+ 0\.30 \* u_bass \+ 0\.35 \* u_rms/, "ferrofluid spike amplitude");
+  assert.match(sim, /u_onset \* 9\.0 \+ u_high \* 6\.0 \+ u_bass \* 4\.0 \+ u_rms \* 3\.0/, "tracer speed");
+  const v = gh013.vert();
+  assert.match(v, /0\.9 \* u_onset \+ 0\.5 \* u_bass \+ 0\.35 \* u_rms/, "brightness");
+  assert.match(v, /stretch = min\(stretch \+ 2\.5 \* \(u_bass \+ u_rms\) \* cleanGate, 19\.0\);/, "streak stretch");
+  // JS mirror: worst-case sustained bed (sub = bass = 1, gain 5) never scales a structured target beyond 1.0;
+  // a full onset with the gate open peaks at exactly 1.08.
+  for (const f of ["neural-brain", "wormhole", "logo-attractor", "supermassive-blackhole"]) {
+    assert.ok(pm009.STRUCTURED_FORMATIONS.includes(f), f);
+    assert.equal(pm009.formationKick(f, 5, 1, 1, 0, 1), 1, `${f} sustained`);
+    assert.ok(Math.abs(pm009.formationKick(f, 5, 1, 1, 1, 1) - 1.08) < 1e-12, `${f} onset peak`);
+    assert.equal(pm009.formationKick(f, 2.5, 1, 1, 1, 0), 1, `${f} closed gate`);
+  }
+  assert.ok(Math.abs(pm009.formationKick("free-3d", 2.5, 1, 1) - pm009.radialKick(2.5, 1, 1)) < 1e-12, "other formations keep the legacy kick");
+  assert.ok(Math.abs(pm009.radialKick(2.5, 0.55, 0.7) - 1.42) < 0.01, "the legacy sustained swell was ~1.42x");
+  const smoke = read("tests/smoke-zur-gh-010.mjs");
+  assert.match(smoke, /structured swell gate/);
+  assert.match(smoke, /ratio <= 1\.10/);
+});
+
+test("ZUR-GH-013 tightening 2: particleStyle resets to crisp-dot only when migrating < v6_0; v6_0 saves keep it", () => {
+  for (const style of ["crisp-dot", "star-streak", "synapse-node", "dart3d"]) {
+    const p = structuredClone(gh010.STAGE2_DEFAULT_PRESET);
+    p.particles.particleStyle = style;
+    const current = loadStoredState(mockStorage({ zur_state_v6_0: serializeStoredState(p) }));
+    assert.equal(current.key, "zur_state_v6_0");
+    assert.equal(current.migrated, false, `${style}: a v6_0 save is not a migration`);
+    assert.equal(current.preset.particles.particleStyle, style, `v6_0 keeps ${style}`);
+    assert.equal(new AppState(current.preset).preset.particles.particleStyle, style, `AppState keeps ${style}`);
+    // round trip: save -> reload -> save is stable
+    const again = loadStoredState(mockStorage({ zur_state_v6_0: serializeStoredState(current.preset) }));
+    assert.equal(again.preset.particles.particleStyle, style);
+    // the same style in an older envelope is migrated to the v6.0 default
+    for (const [key, schema] of [["zur_state_v5_3", 5.3], ["zur_state_v5_2", 5.2], ["zur_state_v4_0", 4.0]]) {
+      const old = structuredClone(p);
+      delete old.deck;
+      const legacy = loadStoredState(mockStorage({ [key]: JSON.stringify({ storageSchema: schema, preset: old }) }));
+      assert.equal(legacy.migrated, true, `${key} ${style}`);
+      assert.equal(legacy.preset.particles.particleStyle, "crisp-dot", `${key}: ${style} -> crisp-dot`);
+    }
+  }
+  const src = stripComments(read("src/app/AppState.js"));
+  const mig = src.slice(src.indexOf("export function migrateStoredPayload"), src.indexOf("export function loadStoredState"));
+  assert.match(mig, /if \(schema < STORAGE_SCHEMA\) \{[\s\S]*?upgradeToV60\(/, "the crisp-dot reset lives only in the < v6_0 branch");
+  assert.equal((src.match(/upgradeToV60\(/g) || []).length, 2, "defined once, called once");
+  const smoke = read("tests/smoke-zur-gh-010.mjs");
+  assert.match(smoke, /v6_0 particleStyle reload gate/);
 });
 
 for (const entry of tests) {

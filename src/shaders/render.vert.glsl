@@ -1,69 +1,72 @@
 #version 300 es
-// ZUR Stage 3 — instanced 3D darts / velocity capsules built from gl_VertexID.
-// Per-instance state (divisor = 1): a_pos = xyz + size/seed, a_vel = xyz + phase/life.
+// ZUR v6.0 (ZUR-GH-013) — instanced particle sprites built from gl_VertexID.
+// Styles (u_particleStyle): 0 crisp-dot (4-vertex pinpoint quad, default), 1 dart3d (12-vertex cone, or the 4-vertex
+// dart SDF quad from 131072 agents, both 0.55x), 2 synapse-node (crisp soma + 15% axon tracer sparks), 3 star-streak.
+// Per-instance state (divisor = 1): a_pos = xyz + seed, a_vel = xyz + phase.
 precision highp float;
 precision highp int;
 
 layout(location = 0) in vec4 a_pos;
 layout(location = 1) in vec4 a_vel;
 
-// ZUR-GH-008: shared dart3d edges must rasterise watertight. Each corner's clip position is a pure function of
-// (instance, vertex index) and gl_Position is invariant, so the 4 triangles meet bit-identically (no dotted seams).
+// ZUR-GH-008: shared dart3d edges must rasterise watertight (bit-identical shared vertices).
 invariant gl_Position;
 
 uniform mat4 u_viewProj;
 uniform vec3 u_camPos;
 uniform vec2 u_resolution;
 uniform float u_projScale;      // projection[1][1]
-uniform int u_shape;            // 0 dart (12 verts, TRIANGLES), 1 capsule (4 verts, TRIANGLE_STRIP), 2 dart SDF quad (4 verts, >= 131072 agents)
+uniform int u_shape;            // 0 dart cone (12 verts, TRIANGLES), 1 quad (4 verts, TRIANGLE_STRIP), 2 dart SDF quad (4 verts, >= 131072 agents)
 uniform float u_size;           // user multiplier 0.5x – 4.0x
 uniform float u_minRadiusPx;    // capture-space floor, already scaled to render height
 uniform uint u_visibleThreshold;
-uniform float u_exposure;       // capsule motion stretch (seconds)
+uniform float u_exposure;       // legacy capsule exposure (seconds), kept bound
 uniform vec3 u_palette[5];
 uniform float u_time;
 uniform float u_high;
 uniform float u_rms;
-uniform int u_colorPalette;     // ZUR-GH-011: shared with render.frag.glsl (4 = golden-cortex thalamic baseline)
+uniform int u_colorPalette;
 uniform float u_intensity;
 uniform int u_trailType;        // 0 comet, 1 electric, 2 strobe, 3 ribbon, 4 none
 uniform float u_trailLength;    // 0..1
 uniform float u_densityScaleBoost;
 uniform int u_pulseLayout;      // -1 = swarm scene, 0 band-clouds, 1 geodesic-sphere, 2 wave-grid
 uniform float u_bands[5];       // sub, bass, lowMid, highMid, treble
-uniform float u_viewportYOffset; // NDC lift (+0.38 when the portrait HUD drawer is open), lerped to 0 when hidden
-uniform float u_cameraZoom;     // ZUR-GH-009: pinch / wheel zoom 0.35..3.50 (scales projected clip XY and sprite size)
-uniform int u_particleStyle;    // ZUR-GH-009: 0 dart3d, 1 blood-drop, 2 synapse-spark, 3 star-streak
-uniform int u_formationType;    // ZUR-GH-009: 6 neural-brain gold tint, 8 black-hole Doppler beaming
+uniform float u_viewportYOffset; // NDC lift (+0.38 when the portrait HUD drawer is open)
+uniform float u_cameraZoom;     // pinch / wheel zoom 0.35..3.50
+uniform int u_particleStyle;    // 0 crisp-dot, 1 dart3d, 2 synapse-node, 3 star-streak
+uniform int u_formationType;    // 5 logo-attractor, 6 neural-brain, 8 black hole, 9 wormhole, 10 harmonic-ferrofluid
 uniform float u_bass;
 uniform float u_onset;
 uniform float u_treble;
-uniform float u_reactivityGain; // ZUR-GH-009: Reactivity Punch 0.5..5.0
-uniform float u_activeCount;    // ZUR-GH-010: live agent count (shortens needle streaks at 96k..256k so the swarm stays readable)
-uniform int u_kineticMode;      // ZUR-GH-010: 1 = splatter-run (blood sprite ceiling 28 px)
+uniform float u_reactivityGain; // Reactivity Punch 0.5..5.0
+uniform float u_activeCount;    // live agent count
+uniform int u_kineticMode;      // 0 off, 1 synapse-cascade, 2 accretion-warp, 3 ribbon-curtain, 4 shock-shatter
+uniform int u_reactivityMode;   // ZUR-GH-013: 0 true-gate (silence = black), 1 ember-floor (0.06), 2 ambient-vj
 
-out vec3 v_color;
-out vec3 v_colorAlt;            // secondary palette color for the dart rim (chromatic, never white)
-out vec2 v_local;               // capsule: pixel coords along/perp velocity
-flat out float v_halfSeg;
-flat out float v_radius;
+out vec2 v_local;               // style quad coords (px along / across the screen direction)
 flat out vec3 v_normal;
 out vec3 v_view;
 flat out float v_seed;          // per-agent random 0..1
-out float v_neuralPulse;        // ZUR-GH-009: dedicated synapse-firing wave (NOT stored in the velocity aux channel)
-flat out float v_pinned;        // ZUR-GH-009: 2.6 while a blood drop is splatted on the wall (sim.vert aux.w), else 0
-flat out float v_tint;          // scalar brightness (energy * shimmer * depth * intensity * trail flicker)
-flat out float v_group;         // 0..1 colour slot for the fragment palette
-flat out vec3 v_formColor;      // formation-owned colour (golden brain neurons) used by the true-neon palette
-flat out float v_formMix;
-flat out float v_hue;           // ZUR-GH-012: < 0.03 per-particle hue jitter; the hue itself comes from v_worldPos bands in render.frag.glsl
-flat out vec3 v_worldPos;       // ZUR-GH-012: agent centre, drives the coherent spatial hue bands
-flat out vec3 v_bh;             // ZUR-GH-010: black-hole event horizon (screen px centre xy, radius px z; 0 = off)
-flat out float v_axon;          // ZUR-GH-010: 1 = 20% white-matter axon tract, 0 = 80% cortical soma
-flat out vec4 v_style;          // non-dart styles: head offset px, head radius px, half length px, half width px
+out float v_neuralPulse;        // audio-driven firing wave (brainstem -> cortex on the 3D Brain)
+flat out float v_tint;          // scalar brightness (energy * depth * intensity * emission)
+flat out float v_hue;           // < 0.03 per-particle hue jitter
+flat out vec3 v_worldPos;       // agent centre: drives the continuous palette gradients
+flat out float v_speedNorm;     // 0..1 speed for the palette gradient
+flat out vec3 v_bh;             // black-hole event horizon (screen px centre xy, radius px z; 0 = off)
+flat out float v_axon;          // 1 = white-matter axon tract, 0 = cortical soma
+flat out float v_region;        // 3D Brain region: 0 cerebrum, 1 cerebellum, 2 brainstem
+flat out float v_spark;         // synapse-node: 1 = axon tracer spark (15%), 0 = soma
+flat out vec4 v_style;          // style extents: x head radius px, y tail px, z stretch, w quad half width px
+flat out float v_band;          // pulse-field band 0..4 (-1 = swarm)
 
 const float LOGO_MIN_RADIUS_PX = 2.6;
-const float BLOOD_MIN_RUNNER_PX = 3.2;
+const float DART_SCALE = 0.55;          // ZUR-GH-013: tighter darts (no furry needles)
+const float CRISP_DOT_MAX_PX = 10.0;
+const float SYNAPSE_SPARK_FRACTION = 0.15;
+const float BRAIN_SCALE = 3.4;
+const float BRAIN_CEREBRUM_FRAC = 0.82;
+const float BRAIN_CEREBELLUM_FRAC = 0.11;
 
 uint hash32(uint x) {
   x ^= x >> 16u;
@@ -74,12 +77,8 @@ uint hash32(uint x) {
   return x;
 }
 
-vec3 paletteAt(uint index) {
-  if (index == 0u) return u_palette[0];
-  if (index == 1u) return u_palette[1];
-  if (index == 2u) return u_palette[2];
-  if (index == 3u) return u_palette[3];
-  return u_palette[4];
+float hashf(uint x) {
+  return float(hash32(x) >> 8u) * (1.0 / 16777216.0);
 }
 
 // Singularity-free velocity frame: blend the up hint away from +Y on steep dives.
@@ -111,56 +110,84 @@ int dartIndex(int face, int corner) {
   return corner == 1 ? 4 : 1;
 }
 
+// ZUR-GH-013 true silence-to-peak gate, identical to FeatureExtractor.js cleanGate().
+float cleanGateFromBands() {
+  float maxBandEnergy = max(max(u_bands[0], u_bands[1]), max(max(u_bands[2], u_bands[3]), u_bands[4]));
+  return smoothstep(0.018, 0.13, maxBandEnergy * u_reactivityGain);
+}
+
+float emissionFor(float cleanGate) {
+  if (u_reactivityMode == 0) return cleanGate;             // true-gate: silence = 0.00 emission (black)
+  if (u_reactivityMode == 1) return max(cleanGate, 0.06);  // ember-floor: 0.06 outline between beats
+  return 1.0;                                              // ambient-vj: legacy always-lit VJ look
+}
+
+void offscreen() {
+  gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+}
+
 void main() {
   uint iid = uint(gl_InstanceID);
   v_local = vec2(0.0);
-  v_halfSeg = 0.0;
-  v_radius = 1.0;
   v_normal = vec3(0.0, 1.0, 0.0);
   v_view = vec3(0.0, 0.0, 1.0);
   v_seed = 0.0;
   v_neuralPulse = 0.0;
-  v_pinned = 0.0;
   v_tint = 0.0;
-  v_group = 0.0;
-  v_formColor = vec3(0.0);
-  v_formMix = 0.0;
   v_hue = 0.0;
   v_worldPos = vec3(0.0);
+  v_speedNorm = 0.0;
   v_axon = 0.0;
+  v_region = 0.0;
+  v_spark = 0.0;
+  v_band = -1.0;
   v_bh = vec3(0.0);
+  v_style = vec4(1.0, 0.0, 1.0, 1.0);
+
+  float cleanGate = cleanGateFromBands();
+  float emission = emissionFor(cleanGate);
+  if (emission <= 0.0 || (u_visibleThreshold != 0xffffffffu && hash32(iid) >= u_visibleThreshold)) {
+    offscreen();
+    return;
+  }
   if (u_formationType == 8) {
     vec4 bhClip = u_viewProj * vec4(0.0, 0.0, 0.0, 1.0);
     float bhW = max(bhClip.w, 0.05);
     vec2 bhNdc = bhClip.xy / bhW * u_cameraZoom + vec2(0.0, u_viewportYOffset);
-    float bhPx = u_projScale * 0.5 * u_resolution.y / bhW * u_cameraZoom * (0.24 * 3.2 * 1.2); // 1.2x margin hides the sprite edge halo/bloom bleed around the r < 0.24 void
+    float bhPx = u_projScale * 0.5 * u_resolution.y / bhW * u_cameraZoom * (0.24 * 3.2 * 1.2);
     v_bh = vec3((bhNdc * 0.5 + 0.5) * u_resolution, bhPx);
-  }
-  v_style = vec4(0.0, 1.0, 1.0, 1.0);
-  if (u_visibleThreshold != 0xffffffffu && hash32(iid) >= u_visibleThreshold) {
-    gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
-    v_color = vec3(0.0);
-    v_colorAlt = vec3(0.0);
-    return;
   }
 
   vec3 center = a_pos.xyz;
   float seed = a_pos.w;
   vec3 vel = a_vel.xyz;
-  // sim.vert.glsl stores phase + 2.6 for a wall-pinned blood drop.
-  float pinned = a_vel.w >= 2.0 ? 2.6 : 0.0;
-  float phase = a_vel.w - pinned;
   float speed = length(vel);
   v_seed = seed;
-  v_pinned = pinned;
-  // ZUR-GH-009: synapse firing wave travelling outward through the agent positions.
-  float wave = sin(length(a_pos.xyz) * 14.0 - u_time * 9.0 - u_onset * 5.0);
-  v_neuralPulse = smoothstep(0.72, 0.98, wave) * clamp(0.45 + u_treble * 0.9 + u_onset * 1.1, 0.0, 1.5);
+  v_worldPos = center;
+  v_speedNorm = clamp(speed * 0.2, 0.0, 1.0);
+  v_hue = (hashf(iid ^ 0x2545f491u) - 0.5) * 0.028;
+  v_axon = hashf(iid ^ 0xb5297a4du) < 0.8 ? 0.0 : 1.0;
+  float sparkHash = hashf(iid ^ 0x9c1f4e3bu);
+
+  // Audio-only firing wave: amplitude comes strictly from the bands (0 in silence); time only moves the front.
+  float audioDrive = clamp(u_bands[0] * 0.5 + u_bass * 0.8 + u_onset * 1.3 + u_treble * 0.6, 0.0, 1.5);
+  float wave = sin(length(center) * 14.0 - u_time * 9.0 - u_onset * 5.0);
+  v_neuralPulse = smoothstep(0.72, 0.98, wave) * audioDrive;
   if (u_formationType == 6) {
-    // ZUR-GH-011 / ZUR-GH-012: baseline thalamic rhythm for the 3D Brain on every palette. A slow (~0.6 Hz) radial sweep peaks at 0.78 (> the 0.55 firing threshold),
-    // so the golden cortex keeps firing cyan-white even at u_rms == 0; audio still adds the faster beat-driven wave.
-    float thalamic = sin(length(a_pos.xyz) * 6.0 - u_time * 3.8 + seed * 1.7);
-    v_neuralPulse = max(v_neuralPulse, smoothstep(0.55, 0.95, thalamic) * 0.78);
+    float region = hashf(iid ^ 0x68e31da4u);
+    v_region = region < BRAIN_CEREBRUM_FRAC ? 0.0 : (region < BRAIN_CEREBRUM_FRAC + BRAIN_CEREBELLUM_FRAC ? 1.0 : 2.0);
+    // brainstem -> cortex conduction wave, launched from the base of the brainstem
+    float c = cos(2.1293017);   // brain view yaw (32 degrees + 90 degrees), sim.vert.glsl brainView()
+    float s = sin(2.1293017);
+    vec3 stemBase = vec3(c * 0.0 + s * -0.20, -0.86, -s * 0.0 + c * -0.20) * BRAIN_SCALE;
+    float travel = length(center - stemBase) / BRAIN_SCALE;
+    float conduction = sin(travel * 11.0 - u_time * 8.0 - u_onset * 4.0);
+    v_neuralPulse = smoothstep(0.55, 0.95, conduction) * audioDrive;
+    if (u_reactivityMode == 2) {
+      // ambient-vj only: the legacy idle thalamic rhythm (a time-only pulse, never used by true-gate / ember-floor)
+      float thalamic = sin(length(center) * 6.0 - u_time * 3.8 + seed * 1.7);
+      v_neuralPulse = max(v_neuralPulse, smoothstep(0.55, 0.95, thalamic) * 0.78);
+    }
   }
 
   vec4 clipCenter = u_viewProj * vec4(center, 1.0);
@@ -169,69 +196,40 @@ void main() {
   bool pulse = u_pulseLayout >= 0;
   int band = int(iid % 5u);
   float bandLevel = pulse ? clamp(u_bands[band], 0.0, 1.5) : 0.0;
-  // ZUR-GH-009: point-size pulse applies even when Oscillation amount == 0.
-  float sizePulse = 1.0 + 0.45 * u_reactivityGain * (u_bass * 0.5 + u_onset * 0.5);
+  if (pulse) v_band = float(band);
+  float sizePulse = 1.0 + 0.45 * u_reactivityGain * (u_bass * 0.5 + u_onset * 0.5) * cleanGate;
   float worldSize = 0.055 * u_size * u_densityScaleBoost * (0.65 + 0.7 * seed) * (1.0 + 0.45 * bandLevel) * sizePulse;
-  // ZUR-GH-010: zoom damps the sprite sub-linearly (1 / zoom^0.35 above 1x) and a hard pixel ceiling bounds it
-  // (14 px standard, 28 px blood splatters) so 256k swarms at 3.5x zoom never fuse into a white fireball.
-  bool bloodStyle = u_particleStyle == 1 || u_kineticMode == 1;
-  float maxRadiusPx = bloodStyle ? 28.0 : 14.0;
   float zoomDamp = u_cameraZoom > 1.0 ? 1.0 / pow(u_cameraZoom, 0.35) : 1.0;
-  float radiusPx = min(worldSize * pxPerUnit * zoomDamp, maxRadiusPx);
-  // ZUR-GH-012: logo glyph sprites never shrink below 2.6 px, whatever the tier, zoom or particle size.
+  float radiusPx = min(worldSize * pxPerUnit * zoomDamp, 14.0);
   if (u_formationType == 5) radiusPx = max(radiusPx, LOGO_MIN_RADIUS_PX);
   worldSize = radiusPx / max(pxPerUnit, 1e-4);
   float floorScale = radiusPx < u_minRadiusPx ? u_minRadiusPx / max(radiusPx, 1e-4) : 1.0;
 
-  uint group = hash32(iid ^ 0x5bd1e995u) % 5u;
-  vec3 base = paletteAt(group);
-  vec3 accent = paletteAt((group + 2u) % 5u);
-  float shimmer = 1.0 + u_high * 0.9 * sin(phase * 43.0 + u_time * 27.0 + seed * 11.0);
+  // Brightness: energy * depth cue * intensity, then the reactivity emission. Beats explode the brightness.
   float energy = 0.55 + 0.35 * clamp(speed * 0.25, 0.0, 1.0) + 0.35 * u_rms;
+  float shimmer = 1.0 + u_high * 0.9 * sin(a_vel.w * 43.0 + u_time * 27.0 + seed * 11.0);
   float depthCue = clamp(1.25 - w * 0.045, 0.35, 1.15);
-  float tint = energy * shimmer * depthCue * u_intensity;
-  float tintScalar = tint;
-  v_group = float(group) * 0.2 + 0.1 * fract(seed * 7.0);
-  float hueHash = float(hash32(iid ^ 0x2545f491u) >> 8u) * (1.0 / 16777216.0);
-  v_hue = (hueHash - 0.5) * 0.028;
-  v_worldPos = center;
-  v_axon = float(hash32(iid ^ 0xb5297a4du) >> 8u) * (1.0 / 16777216.0) < 0.8 ? 0.0 : 1.0;
+  // sustained bass / RMS -> brightness (the structured formations no longer swell with them)
+  float beatBoost = u_reactivityMode == 2 ? 1.0 : 1.0 + cleanGate * (0.9 * u_onset + 0.5 * u_bass + 0.35 * u_rms);
+  float tint = energy * shimmer * depthCue * u_intensity * emission * beatBoost;
+  if (pulse) tint = (0.45 + 2.6 * bandLevel) * depthCue * u_intensity * emission;
   if (u_formationType == 8) {
-    // Doppler beaming: the disk side rotating toward the camera-right brightens (screen-x component of the velocity)
+    // Doppler beaming: the disk side rotating toward camera-right brightens
     vec3 camRight = vec3(u_viewProj[0][0], u_viewProj[1][0], u_viewProj[2][0]);
     float rightLen = length(camRight);
     camRight = rightLen > 1e-5 ? camRight / rightLen : vec3(1.0, 0.0, 0.0);
-    tintScalar *= max(0.25, 1.0 + 0.65 * dot(normalize(vel + vec3(1e-4)), camRight));
-  }
-  if (u_formationType == 6) {
-    // 80% cortical soma gold / 20% white-matter axon tracts (same split as sim.vert.glsl isCorticalSoma)
-    bool soma = float(hash32(iid ^ 0xb5297a4du) >> 8u) * (1.0 / 16777216.0) < 0.8;
-    v_formColor = soma ? mix(vec3(1.0, 0.6795, 0.0), vec3(1.0, 0.4508, 0.0), fract(seed * 5.0)) : vec3(1.0, 0.8714, 0.4342);
-    v_formMix = 1.0;
-  }
-  v_color = mix(base, accent, clamp(speed * 0.18, 0.0, 0.6)) * tint;
-  v_colorAlt = accent * tint;
-  if (pulse) {
-    // each band owns one palette color; its level drives the flash
-    tintScalar = (0.45 + 2.6 * bandLevel) * depthCue * u_intensity;
-    v_group = float(band) * 0.2 + 0.1;
-    v_color = mix(paletteAt(uint(band)), paletteAt(uint(band + 2) % 5u), 0.2) * (0.45 + 2.6 * bandLevel) * depthCue * u_intensity;
-    v_colorAlt = paletteAt(uint(band + 2) % 5u) * (0.45 + 2.6 * bandLevel) * depthCue * u_intensity;
+    tint *= max(0.25, 1.0 + 0.65 * dot(normalize(vel + vec3(1e-4)), camRight));
   }
   if (u_trailType == 1) {
     float flick = float(hash32(iid + uint(u_time * 30.0)) & 255u) * (1.0 / 255.0);
-    v_color *= 0.55 + 0.95 * flick;
-    v_colorAlt *= 0.55 + 0.95 * flick;
-    tintScalar *= 0.55 + 0.95 * flick;
+    tint *= 0.55 + 0.95 * flick;
   } else if (u_trailType == 2) {
-    float strobe = mix(0.35, 1.7, step(0.5, fract(u_time * (3.0 + 5.0 * u_trailLength) + seed)));
-    v_color *= strobe;
-    v_colorAlt *= strobe;
-    tintScalar *= strobe;
+    tint *= mix(0.35, 1.7, step(0.5, fract(u_time * (3.0 + 5.0 * u_trailLength) + seed)));
   }
-  v_tint = tintScalar;
+  v_tint = tint;
 
-  if (u_shape == 0 && u_particleStyle == 0) {
+  if (u_shape == 0 && u_particleStyle == 1) {
+    // dart3d: 12-vertex cone, 0.55x scale
     int face = gl_VertexID / 3;
     int corner = gl_VertexID - face * 3;
     mat3 frame = velocityFrame(vel);
@@ -239,12 +237,10 @@ void main() {
     vec3 b = dartVertex(dartIndex(face, 1));
     vec3 c = dartVertex(dartIndex(face, 2));
     int vertexIndex = dartIndex(face, corner);
-    float s = worldSize * 2.2 * floorScale;
-    // Same expression for every face sharing this vertex index -> bit-identical shared-edge positions.
+    float s = worldSize * 2.2 * floorScale * DART_SCALE;
     vec3 world = center + frame * (dartVertex(vertexIndex) * s);
     v_normal = normalize(frame * cross(b - a, c - a));
     v_view = normalize(u_camPos - world);
-    // glow radius: 0 at the nose, 1 at the base (render.frag.glsl core/halo falloff)
     v_local = vec2(corner == 0 ? 0.0 : 1.0, 0.0);
     gl_Position = u_viewProj * vec4(world, 1.0);
     gl_Position.xy *= u_cameraZoom;
@@ -252,86 +248,46 @@ void main() {
     return;
   }
 
-  // Velocity-stretched screen-space capsule (4-vertex strip).
+  // Screen-space quads (4-vertex strip).
   vec2 corner = vec2((gl_VertexID & 1) == 0 ? -1.0 : 1.0, (gl_VertexID & 2) == 0 ? -1.0 : 1.0);
   vec4 clipAhead = u_viewProj * vec4(center + vel * 0.05, 1.0);
   vec2 ndc0 = clipCenter.xy / w * u_cameraZoom;
   vec2 ndc1 = clipAhead.xy / max(clipAhead.w, 0.05) * u_cameraZoom;
   vec2 deltaPx = (ndc1 - ndc0) * 0.5 * u_resolution;
-  float pixelSpeed = length(deltaPx) / 0.05;
+  vec2 vScreen = (ndc1 - ndc0) / 0.05 * 0.5;            // projected 2D screen velocity (half-screens / s)
   vec2 dir = length(deltaPx) > 1e-3 ? normalize(deltaPx) : vec2(1.0, 0.0);
   vec2 perp = vec2(-dir.y, dir.x);
   float radius = max(radiusPx, u_minRadiusPx);
+  vec2 offsetPx;
   if (u_shape == 2) {
-    // ZUR-GH-012: >= 131072 agents draw each dart as one velocity-oriented screen-space quad (4 verts) whose dart
-    // silhouette is shaded per fragment (render.frag.glsl u_shape == 2). Same size as the 12-vertex cone.
-    float lengthPx = radius * 2.2 * 1.55;
+    // dart3d >= 131072 agents: one velocity-oriented quad, dart silhouette shaded per fragment (0.55x).
+    float lengthPx = radius * 2.2 * 1.55 * DART_SCALE;
     float halfL = lengthPx * 0.5 + 1.0;
-    float halfW = radius * 2.2 * 0.5 + 1.0;
-    float centerShift = lengthPx * 0.5 - radius * 2.2 * 0.55 ; // nose sits 1.0 s ahead of the centre, tail 0.55 s behind
-    vec2 dartOffset = dir * (corner.x * halfL + centerShift) + perp * corner.y * halfW;
+    float halfW = radius * 2.2 * 0.5 * DART_SCALE + 1.0;
+    float centerShift = lengthPx * 0.5 - radius * 2.2 * 0.55 * DART_SCALE;
+    offsetPx = dir * (corner.x * halfL + centerShift) + perp * corner.y * halfW;
     v_local = corner;
-    v_style = vec4(halfL, halfW, 0.0, 0.0);
-    vec2 dartNdc = ndc0 + dartOffset * 2.0 / u_resolution + vec2(0.0, u_viewportYOffset);
-    gl_Position = vec4(dartNdc * w, clipCenter.z, w);
-    return;
-  }
-  if (u_particleStyle != 0) {
-    // ZUR-GH-009 particle styles: one screen-space quad whose shape is drawn per-fragment (render.frag.glsl).
-    float areaNorm = clamp((radiusPx * radiusPx) / max(radius * radius, 1e-4), 0.35, 1.0);
-    v_tint *= areaNorm;
-    float headX = 0.0;
-    float centerShift = 0.0;
-    float halfL;
-    float halfW;
-    float headR = radius;
-    if (u_particleStyle == 1) {
-      // blood-drop: teardrop head + arterial comet tail; a pinned drop is a short fat splat
-      bool wallSplat = pinned > 0.5;
-      headR = clamp(radius * (wallSplat ? 2.1 : 1.35), BLOOD_MIN_RUNNER_PX, 28.0); // ZUR-GH-012: >= 3.2 px glass runner
-      // pinned drops keep a vertical streak: tail length follows the downward run speed
-      float tailPx = u_trailType == 4 ? 0.0
-        : headR * (0.8 + clamp(pixelSpeed * 0.045, 0.0, 6.0) * (0.5 + u_trailLength));
-      headX = tailPx * 0.5;
-      centerShift = -tailPx * 0.5;
-      halfL = headR * 1.3 + tailPx * 0.5;
-      halfW = headR * 1.3;
-    } else if (u_particleStyle == 2) {
-      headR = min(radius * 1.2, 14.0);
-      halfL = headR * 4.0;
-      halfW = halfL;
-    } else {
-      // star-streak: razor-thin ~1.5 px core, anisotropic velocity-stretched needle, zero halo
-      float needleStretch = clamp(speed * 14.0, 1.0, 6.5);
-      headR = u_formationType == 5 ? LOGO_MIN_RADIUS_PX : 1.5;
-      halfL = min(radius, 14.0) * 2.0 * needleStretch * clamp(65536.0 / max(u_activeCount, 65536.0), 0.15, 1.0) + 2.0;
-      halfW = 2.5 * clamp(pow(65536.0 / max(u_activeCount, 65536.0), 0.3), 0.6, 1.0);
-      if (u_formationType == 5) halfW = max(halfW, LOGO_MIN_RADIUS_PX);
+    v_style = vec4(halfL, halfW, 1.0, halfW);
+  } else {
+    // crisp-dot head shared by every quad style: razor pinpoint radius (exp(-r2 * 16) core, hard cutoff at r = 1)
+    float headR = clamp(radius * 1.5, 2.5, CRISP_DOT_MAX_PX);
+    if (u_formationType == 5) headR = max(headR, LOGO_MIN_RADIUS_PX * 1.5);
+    bool spark = u_particleStyle == 2 && sparkHash < SYNAPSE_SPARK_FRACTION;
+    v_spark = spark ? 1.0 : 0.0;
+    float stretch = 1.0;
+    if (u_particleStyle == 3 || spark) {
+      // star-streak: stretches along the projected 2D screen velocity, crisp head at rest (stretch == 1)
+      stretch = 1.0 + clamp(length(vScreen) * (16.0 + 45.0 * u_bass + 60.0 * u_onset), 0.0, 18.0);
+      stretch = min(stretch + 2.5 * (u_bass + u_rms) * cleanGate, 19.0);  // sustained bass / RMS -> streak stretch
+      if (spark) stretch = 1.0 + clamp(length(vScreen) * 40.0 + 8.0 * u_onset, 0.0, 18.0);
     }
-    vec2 styleDir = u_particleStyle == 2 ? vec2(1.0, 0.0) : (pinned > 0.5 ? vec2(0.0, -1.0) : dir);
-    vec2 stylePerp = vec2(-styleDir.y, styleDir.x);
-    vec2 styleExtent = vec2(halfL, halfW);
-    vec2 styleOffset = styleDir * (corner.x * styleExtent.x + centerShift) + stylePerp * corner.y * styleExtent.y;
-    v_local = corner * styleExtent;
-    v_style = vec4(headX, headR, halfL, halfW);
-    vec2 styleNdc = ndc0 + styleOffset * 2.0 / u_resolution + vec2(0.0, u_viewportYOffset);
-    gl_Position = vec4(styleNdc * w, clipCenter.z, w);
-    return;
+    float tailPx = headR * (stretch - 1.0);
+    float halfL = headR + tailPx * 0.5;
+    float centerShift = -tailPx * 0.5;                   // tail trails behind the head
+    offsetPx = dir * (corner.x * halfL + centerShift) + perp * corner.y * headR;
+    v_local = vec2(corner.x * halfL + centerShift, corner.y * headR);
+    v_style = vec4(headR, tailPx, stretch, headR);
   }
-  float stretch = 1.0;
-  if (u_trailType == 0) stretch = 1.0 + 2.0 * u_trailLength;
-  else if (u_trailType == 1) stretch = 1.0 + 1.2 * u_trailLength;
-  else if (u_trailType == 3) stretch = 1.0 + 5.0 * u_trailLength;
-  else if (u_trailType == 4) stretch = 0.0;
-  float halfSeg = min(0.5 * pixelSpeed * u_exposure * stretch, 18.0 * u_size * (1.0 + 2.0 * u_trailLength));
-  float glowRadius = radius * 2.4;
-  vec2 extent = vec2(halfSeg + glowRadius + 1.0, glowRadius + 1.0);
-  vec2 offsetPx = dir * corner.x * extent.x + perp * corner.y * extent.y;
-  v_local = corner * extent;
-  v_halfSeg = halfSeg;
-  v_radius = glowRadius;
-  // keep brightness per area roughly constant when the floor enlarges tiny capsules
-  v_color *= clamp((radiusPx * radiusPx) / max(radius * radius, 1e-4), 0.35, 1.0);
-  gl_Position = vec4((ndc0 + offsetPx * 2.0 / u_resolution) * w, clipCenter.z, w);
-  gl_Position.y += u_viewportYOffset * gl_Position.w;
+  vec2 quadNdc = ndc0 + offsetPx * 2.0 / u_resolution + vec2(0.0, u_viewportYOffset);
+  gl_Position = vec4(quadNdc * w, clipCenter.z, w);
 }

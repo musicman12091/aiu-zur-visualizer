@@ -11,20 +11,27 @@ import {
   REACTIVITY_GAIN_RANGE,
   TRAIL_LENGTH_RANGE,
 } from "../render/particleMath.js";
-import { PARTICLE_SIZE_HUD_MAX, enforceTabConstraints, flattenPreset, switchPresetTab } from "../app/AppState.js";
-import {
-  CONTROL_LAYOUT,
-  HUD_TABS,
-  SHADER_SCENES,
-  SHADER_SCENE_LABELS,
-  SWARM_MODES,
-  SWARM_MODE_LABELS,
-  TAB_LABELS,
-  fillSelect,
-  layoutKey,
-  optionsFor,
-  paletteTarget,
-} from "./hudTabs.js";
+import { DEFAULT_PARTICLES } from "../render/particleMath.js";
+import { ENGINES, PARTICLE_SIZE_HUD_MAX, QUICK_PRESETS, engineForScene } from "../app/AppState.js";
+import { TRACK_ACCEPT } from "../audio/AudioEngine.js";
+import { DECK_LAYOUT, fillSelect, optionsFor } from "./hudTabs.js";
+
+/** Flat read-only view of the preset for the deck (no constraints: what is stored is what is shown). */
+function deckView(preset) {
+  const particles = { ...DEFAULT_PARTICLES, ...(preset?.particles || {}) };
+  const visual = preset?.visual || {};
+  return {
+    ...particles,
+    sceneId: preset?.sceneId,
+    formation: particles.formationType,
+    paletteId: visual.paletteId ?? "neon-tunnel",
+    hueShift: visual.hueShift ?? 0,
+    cameraMode: visual.cameraMode ?? "orbit-3d",
+    chromaticAberration: visual.chromaticAberration ?? 0.30,
+    godRays: visual.godRays ?? 0.35,
+    quickPreset: preset?.deck?.quickPreset ?? null,
+  };
+}
 
 const METERS = [
   ["sub", "Sub"],
@@ -46,6 +53,7 @@ const SELECT_CONTROLS = {
   trailType: ["sel-trail-type", "particles", "trailType"],
   pulseLayout: ["sel-pulse-layout", "particles", "pulseLayout"],
   logoText: ["sel-attractor-preset", "particles", "attractorText"],
+  reactivityMode: ["sel-reactivity-mode", "particles", "reactivityMode"],
 };
 
 function el(tag, className, text) {
@@ -94,7 +102,7 @@ export class ControlHUD {
     this.hideButton.type = "button";
     this.hideButton.id = "btn-hide-hud";
     this.hideButton.addEventListener("click", () => this.setHidden(true));
-    // ZUR-GH-011: Hide HUD + the 6-tab bar share one solid sticky header, so they can never overlap while scrolling.
+    // ZUR-GH-013: Hide HUD + the Quick Presets strip share one solid sticky header (they never overlap while scrolling).
     this.stickyHeader = el("div", "hud-sticky");
     this.stickyHeader.id = "hud-sticky-header";
     this.stickyHeader.append(this.hideButton);
@@ -153,32 +161,42 @@ export class ControlHUD {
     this.error.setAttribute("role", "status");
     this.body.append(this.error);
 
-    // Sticky, horizontally scrollable tab bar.
-    this.tabBar = el("div", "hud-tabs");
-    this.tabBar.id = "hud-tabs";
-    this.tabBar.setAttribute("role", "tablist");
-    this.tabButtons = {};
-    for (const tab of HUD_TABS) {
-      const button = el("button", "hud-tab", TAB_LABELS[tab]);
+    // (a) Quick Presets strip: sticky, horizontally scrollable, one-tap non-locking patches.
+    this.quickBar = el("div", "hud-tabs hud-quick-presets");
+    this.quickBar.id = "hud-quick-presets";
+    this.quickBar.setAttribute("role", "toolbar");
+    this.quickBar.setAttribute("aria-label", "Quick Presets");
+    this.quickButtons = {};
+    for (const entry of QUICK_PRESETS) {
+      const button = el("button", "hud-tab", entry.label);
       button.type = "button";
-      button.id = `tab-${tab}`;
-      button.dataset.hudTab = tab;
-      button.setAttribute("role", "tab");
-      button.addEventListener("click", () => this._switch(tab));
-      this.tabButtons[tab] = button;
-      this.tabBar.append(button);
+      button.id = `quick-${entry.id}`;
+      button.dataset.quickPreset = entry.id;
+      button.addEventListener("click", () => this.handlers.quickPreset?.(entry.id));
+      this.quickButtons[entry.id] = button;
+      this.quickBar.append(button);
     }
-    this.stickyHeader.append(this.tabBar);
+    this.stickyHeader.append(this.quickBar);
 
-    this.swarmPills = this._pillGroup("swarm-pills", "swarmMode", SWARM_MODES, SWARM_MODE_LABELS, (mode) => {
-      this._switch("blood-swarm", { swarmMode: mode });
-    });
-    this.shaderPills = this._pillGroup("shader-pills", "shaderScene", SHADER_SCENES, SHADER_SCENE_LABELS, (scene) => {
-      this._switch("canyon-pulse", { shaderScene: scene });
-    });
-    this.body.append(this.swarmPills.group, this.shaderPills.group);
+    // (b) Engine Selector.
+    this.engineBar = el("div", "hud-subpills hud-engines");
+    this.engineBar.id = "hud-engines";
+    this.engineBar.setAttribute("role", "radiogroup");
+    this.engineBar.setAttribute("aria-label", "Engine");
+    this.engineButtons = {};
+    for (const engine of ENGINES) {
+      const button = el("button", "hud-subpill", engine.label);
+      button.type = "button";
+      button.id = `engine-${engine.id}`;
+      button.dataset.engine = engine.id;
+      button.setAttribute("role", "radio");
+      button.addEventListener("click", () => this.handlers.engine?.(engine.id));
+      this.engineButtons[engine.id] = button;
+      this.engineBar.append(button);
+    }
+    this.body.append(this.engineBar);
 
-    // Visual controls: every row is built once; the layout of the active tab decides which are visible.
+    // (c) Unlocked deck: every row is built once and always visible.
     const visual = el("div", "hud-visual");
     visual.id = "hud-visual-controls";
     this.visual = visual;
@@ -190,7 +208,7 @@ export class ControlHUD {
     this._buildRig();
     this.body.append(this.rig);
 
-    this.hint = el("p", "hint", "H hides the panel. 1 / 2 load Mode A / B. T starts the silent test oscillator. P cycles visual tabs, F cycles flow mode, K cycles kaleidoscope.");
+    this.hint = el("p", "hint", "H hides the panel. 1 / 2 load Mode A / B. T starts the silent test oscillator. P cycles engines, F cycles flow mode, K cycles kaleidoscope.");
     this.body.append(this.hint);
     panel.append(this.body);
     this.root.append(panel);
@@ -201,7 +219,7 @@ export class ControlHUD {
     const add = (name, control) => {
       control.wrap.id = `row-${name}`;
       control.wrap.dataset.control = name;
-      control.wrap.hidden = true;
+      control.wrap.hidden = false;
       control.labelEl = control.wrap.querySelector(".field-label") || null;
       this.controls[name] = control;
       this.visual.append(control.wrap);
@@ -212,14 +230,14 @@ export class ControlHUD {
       const label = name;
       add(name, this._select(id, label, [], (value) => particles({ [key]: value })));
     }
-    add("palette", this._select("sel-palette", "Palette", [], (value) => {
-      if (this._paletteTarget === "scene") this._commit((draft) => { draft.visual.paletteId = value; });
-      else particles({ colorPalette: value });
+    add("palette", this._select("sel-palette", "Palette", [], (value) => particles({ colorPalette: value })));
+    add("scenePalette", this._select("sel-scene-palette", "Scene Palette", [], (value) => {
+      this._commit((draft) => { draft.visual.paletteId = value; });
     }));
-    add("cameraMode", this._select("sel-camera-mode", "Camera Mode", optionsFor("cameraMode", "deep-space"), (value) => {
+    add("cameraMode", this._select("sel-camera-mode", "Camera Mode", optionsFor("cameraMode"), (value) => {
       this._commit((draft) => { draft.visual.cameraMode = value; });
     }));
-    add("kaleido", this._select("sel-kaleido", "Kaleidoscope Mirrors", optionsFor("kaleido", "deep-space"), (value) => {
+    add("kaleido", this._select("sel-kaleido", "Kaleidoscope Mirrors", optionsFor("kaleido"), (value) => {
       particles({ kaleidoSegments: Number(value) });
     }));
     add("kaleidoSpin", this._checkbox("chk-kaleido-spin", "Beat Spin", (checked) => particles({ kaleidoSpin: checked })));
@@ -279,6 +297,34 @@ export class ControlHUD {
       this.meters[key] = fill;
       meterBlock.append(row);
     }
+
+    // ZUR-GH-013 audio track loader: AudioElement -> MediaElementAudioSourceNode -> AnalyserNode (silent unless
+    // Speaker Monitor is checked; mic / tab capture never reach the speakers).
+    const track = section("Audio Track");
+    track.id = "rig-audio-track";
+    const trackLabel = el("label", "file-button track-file", "Load Audio Track (WAV/MP3/OGG)");
+    this.trackFile = document.createElement("input");
+    this.trackFile.id = "file-audio-track";
+    this.trackFile.type = "file";
+    this.trackFile.accept = TRACK_ACCEPT;
+    this.trackFile.addEventListener("change", () => {
+      const file = this.trackFile.files?.[0];
+      if (file) this.handlers.trackFile?.(file, this.speakerMonitor.input.checked);
+    });
+    trackLabel.append(this.trackFile);
+    const trackRow = el("div", "row");
+    this.trackPlay = this._button("btn-track-play", "Play / Pause", () => this.handlers.trackPlay?.());
+    this.trackPlay.disabled = true;
+    trackRow.append(trackLabel, this.trackPlay);
+    track.append(trackRow);
+    this.speakerMonitor = this._checkbox("chk-speaker-monitor", "Speaker Monitor (loaded file only)", (checked) => {
+      this.handlers.speakerMonitor?.(checked);
+    });
+    track.append(this.speakerMonitor.wrap);
+    this.trackStatus = el("p", "track-status", "No track loaded");
+    this.trackStatus.id = "track-status";
+    this.trackStatus.setAttribute("role", "status");
+    track.append(this.trackStatus);
 
     const capture = section("Capture");
     const captureRow = el("div", "row");
@@ -388,27 +434,18 @@ export class ControlHUD {
     rig.append(this._button("btn-import", "Apply JSON", () => this.handlers.importPreset?.(this.json.value)));
   }
 
-  _pillGroup(id, dataKey, ids, labels, onPick) {
-    const group = el("div", "hud-subpills");
-    group.id = id;
-    group.hidden = true;
-    const buttons = {};
-    for (const value of ids) {
-      const button = el("button", "hud-subpill", labels[value]);
-      button.type = "button";
-      button.dataset[dataKey === "swarmMode" ? "swarmMode" : "shaderScene"] = value;
-      button.addEventListener("click", () => onPick(value));
-      buttons[value] = button;
-      group.append(button);
+  /** ZUR-GH-013: loaded-track status (name, play state, Speaker Monitor routing). */
+  setTrackState(track) {
+    const loaded = Boolean(track?.loaded);
+    this.trackPlay.disabled = !loaded;
+    const text = loaded
+      ? `${track.playing ? "▶ Playing" : "⏸ Paused"} · ${track.name}${track.monitorConnected ? " · Speaker Monitor ON" : " · silent analysis"}`
+      : "No track loaded";
+    if (this.trackStatus.textContent !== text) this.trackStatus.textContent = text;
+    this.trackStatus.dataset.playing = String(Boolean(track?.playing));
+    if (typeof track?.speakerMonitor === "boolean" && this.speakerMonitor.input.checked !== track.speakerMonitor) {
+      this.speakerMonitor.input.checked = track.speakerMonitor;
     }
-    return { group, buttons };
-  }
-
-  _switch(hudTab, options) {
-    const result = this.state.replacePreset(switchPresetTab(this.state.preset, hudTab, options));
-    if (!result.ok) this.setError(result.errors[0]);
-    else this.setError("");
-    return result;
   }
 
   _pill(id, label) {
@@ -622,47 +659,31 @@ export class ControlHUD {
     const preset = this.state.preset;
     const audio = preset.audio;
     const visual = preset.visual;
-    const flat = enforceTabConstraints(flattenPreset(preset));
-    const key = layoutKey(flat);
-    const layout = CONTROL_LAYOUT[key] || [];
-    const onRig = flat.hudTab === "audio-rig";
-    this._paletteTarget = paletteTarget(key);
+    const flat = deckView(preset);
     this.title.textContent = preset.name || preset.sceneId;
 
-    for (const tab of HUD_TABS) {
-      const active = tab === flat.hudTab;
-      if (this.tabButtons[tab].getAttribute("aria-selected") !== String(active)) this.tabButtons[tab].setAttribute("aria-selected", String(active));
-      this.tabButtons[tab].classList.toggle("is-active", active);
+    // Quick Presets strip + Engine Selector: highlight only (never re-built, never constraining).
+    for (const [id, button] of Object.entries(this.quickButtons)) {
+      const active = id === flat.quickPreset;
+      if (button.getAttribute("aria-pressed") !== String(active)) button.setAttribute("aria-pressed", String(active));
+      button.classList.toggle("is-active", active);
     }
-    const swarmShown = flat.hudTab === "blood-swarm" || (onRig && flat.visualTab === "blood-swarm");
-    const shaderShown = flat.hudTab === "canyon-pulse" || (onRig && flat.visualTab === "canyon-pulse");
-    this._setHidden(this.swarmPills.group, !(flat.hudTab === "blood-swarm"));
-    this._setHidden(this.shaderPills.group, !(flat.hudTab === "canyon-pulse"));
-    for (const mode of SWARM_MODES) this.swarmPills.buttons[mode].classList.toggle("is-active", swarmShown && mode === flat.swarmMode);
-    for (const scene of SHADER_SCENES) this.shaderPills.buttons[scene].classList.toggle("is-active", shaderShown && scene === flat.shaderScene);
-    if (this.visual.hidden !== onRig) this.visual.hidden = onRig;
-    this._setHidden(this.rig, !onRig);
-    if (this.visual.dataset.layout !== key) this.visual.dataset.layout = key;
-    if (this.rig.dataset.tab !== flat.hudTab) this.rig.dataset.tab = flat.hudTab;
+    const engine = engineForScene(preset.sceneId);
+    for (const [id, button] of Object.entries(this.engineButtons)) {
+      const active = id === engine;
+      if (button.getAttribute("aria-checked") !== String(active)) button.setAttribute("aria-checked", String(active));
+      button.classList.toggle("is-active", active);
+    }
+    if (this.visual.dataset.activeEngine !== engine) this.visual.dataset.activeEngine = engine;
 
-    // Order, labels and slider bounds change only with the layout key; visibility, options and values are diffed.
-    // ZUR-GH-011: the control list is only re-laid-out when the structural key (tab | swarm sub-mode | shader scene)
-    // changes; every other update patches the existing <select> / range / button nodes in place and keeps scrollTop.
-    const structuralKey = `${flat.hudTab}|${flat.swarmMode}|${flat.shaderScene}`;
-    const previousLayout = this._layoutKey;
-    const scrollTop = this.panel ? this.panel.scrollTop : 0;
-    this._applyLayout(structuralKey, layout);
-    if (previousLayout !== this._layoutKey && this.panel && this.panel.scrollTop !== scrollTop) this.panel.scrollTop = scrollTop;
-    const shown = new Set();
-    for (const [name] of layout) {
+    // ZUR-GH-011 / 013: the deck is laid out exactly once; every later update diffs options and values in place, so
+    // the focused select / dragged slider is never moved, rebuilt or snapped back.
+    this._applyLayout("deck", DECK_LAYOUT);
+    for (const [name] of DECK_LAYOUT) {
       const control = this.controls[name];
       if (!control) continue;
-      shown.add(name);
-      this._setHidden(control.wrap, onRig);
-      if (control.select) this._syncSelect(control, optionsFor(name, key), this._valueFor(name, flat));
-    }
-    for (const [name, control] of Object.entries(this.controls)) {
-      if (!shown.has(name)) this._setHidden(control.wrap, true);
+      this._setHidden(control.wrap, false);
+      if (control.select) this._syncSelect(control, optionsFor(name), this._valueFor(name, flat));
     }
 
     this._setSlider(this.controls.zoom, flat.cameraZoom, `${Number(flat.cameraZoom).toFixed(2)}×`);
@@ -716,7 +737,9 @@ export class ControlHUD {
       case "logoText": return flat.attractorText;
       case "cameraMode": return flat.cameraMode;
       case "kaleido": return String(flat.kaleidoSegments);
-      case "palette": return this._paletteTarget === "scene" ? (PALETTES[flat.paletteId] ? flat.paletteId : PALETTE_IDS[0]) : flat.colorPalette;
+      case "palette": return flat.colorPalette;
+      case "reactivityMode": return flat.reactivityMode;
+      case "scenePalette": return PALETTES[flat.paletteId] ? flat.paletteId : PALETTE_IDS[0];
       default: return "";
     }
   }

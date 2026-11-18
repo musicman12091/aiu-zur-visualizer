@@ -85,6 +85,7 @@ export class SpectralCanyon3D {
       rms: gl.getUniformLocation(this.program, "u_rms"),
       silent: gl.getUniformLocation(this.program, "u_silent"),
       bands: gl.getUniformLocation(this.program, "u_bands"),
+      emission: gl.getUniformLocation(this.program, "u_emission"),
     };
     this.bands = new Float32Array(5);
     this.rowIndex = 0;
@@ -96,7 +97,7 @@ export class SpectralCanyon3D {
     this.height = Math.max(2, height);
   }
 
-  render(frame, palette, canvasWidth, canvasHeight, viewportYOffset = 0) {
+  render(frame, palette, canvasWidth, canvasHeight, viewportYOffset = 0, emission = 1) {
     if (!this.ready) return;
     const gl = this.gl;
     this.time += Math.max(0, frame.delta || 0);
@@ -118,6 +119,7 @@ export class SpectralCanyon3D {
     gl.uniform1f(this.locations.viewportYOffset, viewportYOffset);
     gl.uniform1f(this.locations.rms, frame.rms || 0);
     gl.uniform1f(this.locations.silent, silent ? 1 : 0);
+    gl.uniform1f(this.locations.emission, Number.isFinite(emission) ? emission : 1);
     gl.uniform3fv(this.locations.palette, palette);
     // ZUR-GH-007: multi-band audio height (sub, bass, lowMid, highMid, treble) for the canyon ridges.
     const bandValues = [frame.sub, frame.bass, frame.lowMid, frame.highMid, frame.treble];

@@ -25,6 +25,11 @@ import {
   PARTICLE_STYLES,
   COLOR_PALETTES,
   KINETIC_MODES,
+  REACTIVITY_MODES,
+  cleanGate,
+  gatedTrailKeep,
+  maxBandEnergy,
+  reactivityEmission,
   clampCameraZoom,
   normalizeParticles,
   projectionScales,
@@ -180,7 +185,7 @@ const SIM_UNIFORMS = [
   "u_onset", "u_waveSpeed", "u_shock", "u_neighbors", "u_useNeighbors",
   "u_particleStyle", "u_kineticMode", "u_reactivityGain",
   "u_formationType", "u_oscillationType", "u_oscillationAmount", "u_oscillationSpeed", "u_pulseLayout", "u_megastructure", "u_bands",
-  "u_billboardRight", "u_billboardUp",
+  "u_billboardRight", "u_billboardUp", "u_cleanGate", "u_reactivityMode",
 ];
 const RENDER_UNIFORMS = [
   "u_viewProj", "u_camPos", "u_resolution", "u_projScale", "u_shape", "u_size", "u_minRadiusPx",
@@ -190,6 +195,7 @@ const RENDER_UNIFORMS = [
   "u_particleSize", "u_activeCount", "u_viewportYOffset", "u_trailEnergyNorm",
   "u_cameraZoom", "u_particleStyle", "u_colorPalette", "u_formationType", "u_reactivityGain",
   "u_bass", "u_onset", "u_treble", "u_spectralCentroid", "u_kineticMode", "u_megastructure",
+  "u_reactivityMode", "u_highMid",
 ];
 const POST_UNIFORMS = [
   "u_scene", "u_resolution", "u_kaleidoSegments", "u_kaleidoAngle", "u_kaleidoZoom",
@@ -263,7 +269,7 @@ export class ParticleSystem3D {
       this.postLoc = locations(gl, this.postProgram, POST_UNIFORMS);
       this.coreLoc = locations(gl, this.coreProgram, [
         "u_resolution", "u_eye", "u_forward", "u_right", "u_up", "u_palette", "u_time", "u_bass", "u_steps",
-        "u_cameraZoom", "u_colorPalette", "u_spectralCentroid", "u_viewportYOffset",
+        "u_cameraZoom", "u_colorPalette", "u_spectralCentroid", "u_viewportYOffset", "u_emission",
       ]);
 
       // Ping-pong interleaved Float32 state: [a_pos vec4 | a_vel vec4] x MAX_PARTICLES.
@@ -454,12 +460,21 @@ export class ParticleSystem3D {
     const viewportYOffset = extras.viewportYOffset || 0;
     const densityBoost = densityScaleBoost(count, particles.densityAutoScale);
     for (let i = 0; i < 5; i += 1) this.bands[i] = Math.max(0, extras.bands?.[i] || 0);
+    // ZUR-GH-013 true silence-to-peak gate (render.vert.glsl recomputes the same smoothstep from u_bands).
+    const reactivityMode = REACTIVITY_MODES.includes(particles.reactivityMode) ? particles.reactivityMode : "true-gate";
+    const reactivityIndex = REACTIVITY_MODES.indexOf(reactivityMode);
+    const gate = frame.isSilent ? 0 : cleanGate(maxBandEnergy(this.bands), particles.reactivityGain);
+    const emission = reactivityEmission(reactivityMode, gate);
+    this.cleanGate = gate;
+    this.emission = emission;
+    this.reactivityMode = reactivityMode;
 
     // Predator shockwave ring buffer: audio onset rising edge, or an ambient pulse in silence.
     const onset = frame.onset || 0;
     if (onset > 0.55 && this.prevOnset <= 0.55 && this.simTime - this.lastShockAt > 0.25) {
       this._pushShock(this.simTime, frame.rms || 0);
-    } else if ((frame.rms || 0) < 0.01 && this.simTime - this.lastShockAt > 7) {
+    } else if (reactivityMode === "ambient-vj" && (frame.rms || 0) < 0.01 && this.simTime - this.lastShockAt > 7) {
+      // ambient-vj only: idle shockwave in silence (true-gate / ember-floor stay still and dark)
       this._pushShock(this.simTime, 0);
     }
     this.prevOnset = onset;
@@ -497,6 +512,8 @@ export class ParticleSystem3D {
       gl.uniform1i(L.u_pulseLayout, pulseLayout);
       gl.uniform1i(L.u_megastructure, extras.megastructure ? 1 : 0);
       gl.uniform1fv(L.u_bands, this.bands);
+      gl.uniform1f(L.u_cleanGate, gate);
+      gl.uniform1i(L.u_reactivityMode, reactivityIndex);
       // ZUR-GH-007: logo glyph plane billboards onto the active camera (previous frame's eye; slow orbit).
       billboardBasis(this.eye, this.origin, this.billboardRight, this.billboardUp);
       gl.uniform3fv(L.u_billboardRight, this.billboardRight);
@@ -577,7 +594,9 @@ export class ParticleSystem3D {
     this.lastKeep60 = keep60;
     this.lastTrailEnergyNorm = energyNorm;
     const tau = tauFromKeep60(keep60);
-    const keep = keepForDt(keep60, dt);
+    // ZUR-GH-013: with the gate closed the trail fades with a 120 ms time constant (silence goes black fast).
+    const keep = gatedTrailKeep(keepForDt(keep60, dt), dt, gate, reactivityMode);
+    this.lastKeep = keep;
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.scene.framebuffer);
     gl.viewport(0, 0, this.width, this.height);
     gl.disable(gl.DEPTH_TEST);
@@ -624,22 +643,22 @@ export class ParticleSystem3D {
       gl.uniform1i(C.u_steps, visual?.qualityTier === "safe" ? 16 : 24);
       // ZUR-GH-007: core, swarm (u_viewportYOffset in render.vert) and kaleido fold share one optical centre.
       gl.uniform1f(C.u_viewportYOffset, viewportYOffset);
+      gl.uniform1f(C.u_emission, emission);
       gl.bindVertexArray(this.emptyVao);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     }
 
-    // ZUR-GH-010: only dart3d draws the 12-vertex cone (TRIANGLES); blood-drop / synapse-spark / star-streak bind the
-    // 4-vertex billboard quad (TRIANGLE_STRIP).
-    const dart = styleIndex === 0;
+    // ZUR-GH-013: only dart3d (PARTICLE_STYLES index 1) draws the 12-vertex cone (TRIANGLES); crisp-dot / synapse-node /
+    // star-streak bind the 4-vertex billboard quad (TRIANGLE_STRIP).
+    const dart = styleIndex === 1;
     const dartVerts = dart ? dartVertexCount(count) : 4;
     this.dartVerts = dartVerts;
     // ZUR-GH-008: particle splatting never depth-tests. Additive darts / premultiplied capsules are order-independent,
     // and a depth test against stale or sibling-dart depth punched dark dotted seams through bright dart3d spheres.
     gl.disable(gl.DEPTH_TEST);
     gl.depthMask(false);
-    // Darts add; capsules are premultiplied so dense 16k–64k crowds saturate instead of whiting out.
-    if (dart) gl.blendFunc(gl.ONE, gl.ONE);
-    else gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    // ZUR-GH-013: every style is additive; crisp pinpoints are bounded by crispDotExposure(), darts by crowdNorm.
+    gl.blendFunc(gl.ONE, gl.ONE);
     gl.useProgram(this.renderProgram);
     const R = this.renderLoc;
     gl.uniformMatrix4fv(R.u_viewProj, false, this.viewProj);
@@ -657,6 +676,8 @@ export class ParticleSystem3D {
     gl.uniform1f(R.u_bass, frame.bass || 0);
     gl.uniform1f(R.u_onset, onset);
     gl.uniform1f(R.u_treble, extras.bands?.[4] || frame.high || 0);
+    gl.uniform1f(R.u_highMid, this.bands[3]);
+    gl.uniform1i(R.u_reactivityMode, reactivityIndex);
     gl.uniform1f(R.u_spectralCentroid, centroid);
     gl.uniform1f(R.u_size, particles.particleSize);
     gl.uniform1f(R.u_particleSize, particles.particleSize);
@@ -733,6 +754,10 @@ export class ParticleSystem3D {
       stepsLastFrame: this.stepsLastFrame,
       simSteps: this.stepsLastFrame,
       dartVerts: this.dartVerts,
+      cleanGate: this.cleanGate ?? 0,
+      emission: this.emission ?? 0,
+      reactivityMode: this.reactivityMode || "true-gate",
+      trailKeep: this.lastKeep ?? 0,
       coreEye: this.coreEye,
       coreForward: this.coreForwardOut,
       eye: Array.from(this.eye),

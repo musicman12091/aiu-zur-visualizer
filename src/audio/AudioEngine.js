@@ -1,6 +1,9 @@
 /**
  * Analysis-only capture. The graph ends at AnalyserNode.
  * Deliberately absent: source.connect(context.destination);
+ * ZUR-GH-013: the ONE exception is a user-loaded audio file (mode "file-track") with Speaker Monitor checked:
+ * AudioElement -> MediaElementAudioSourceNode -> AnalyserNode, plus source -> destination through monitorConnect().
+ * Tab capture, microphone, Demo Beat and the test oscillator always stay at destinationConnections === 0.
  *
  * resume() and getDisplayMedia()/getUserMedia() are invoked synchronously
  * inside the start functions, before either promise is awaited.
@@ -29,6 +32,14 @@ export const MIC_STAGE_LABELS = Object.freeze({
   shared: "Mic opened in shared mode (raw processing unavailable)",
   demo: "Mic locked by another app — Demo Beat 124 BPM (silent)",
 });
+// ZUR-GH-013 loaded audio track (WAV / MP3 / OGG) + Speaker Monitor.
+export const TRACK_ACCEPT = ".wav,.mp3,.ogg,audio/wav,audio/x-wav,audio/mpeg,audio/ogg";
+let trackElement = null;
+let trackUrl = "";
+let trackName = "";
+let speakerMonitor = false;
+let monitorConnected = false;
+let destinationConnections = 0;
 let micStage = "idle";
 let micAttempts = [];
 let demoBeat = { running: false, bpm: 0 };
@@ -116,6 +127,8 @@ function releaseVideoSink() {
 
 async function failStart(nextCapture, nextContext, error) {
   stopDemoBeat();
+  monitorDisconnect();
+  releaseTrack();
   micStage = "idle";
   const nodes = liveNodes;
   liveNodes = [];
@@ -147,6 +160,54 @@ async function failStart(nextCapture, nextContext, error) {
   throw error;
 }
 
+// The only code path allowed to reach AudioContext.destination: a loaded file track with Speaker Monitor checked.
+function monitorConnect() {
+  if (currentMode !== "file-track" || !source || !context || monitorConnected) return false;
+  source.connect(context.destination);
+  monitorConnected = true;
+  destinationConnections = 1;
+  return true;
+}
+
+function monitorDisconnect() {
+  if (!monitorConnected) return false;
+  try {
+    source?.disconnect(context.destination);
+  } catch {
+    // Already disconnected.
+  }
+  monitorConnected = false;
+  destinationConnections = 0;
+  return true;
+}
+
+function applySpeakerMonitor() {
+  if (currentMode === "file-track" && speakerMonitor) monitorConnect();
+  else monitorDisconnect();
+}
+
+function releaseTrack() {
+  if (trackElement) {
+    try {
+      trackElement.pause();
+    } catch {
+      // Not playing.
+    }
+    trackElement.removeAttribute?.("src");
+    try {
+      trackElement.load?.();
+    } catch {
+      // Detached element.
+    }
+  }
+  if (trackUrl) URL.revokeObjectURL(trackUrl);
+  trackElement = null;
+  trackUrl = "";
+  trackName = "";
+  monitorConnected = false;
+  destinationConnections = 0;
+}
+
 export function setVideoSink(element) {
   videoSink = element;
 }
@@ -164,6 +225,8 @@ function stopDemoBeat() {
 export async function stopCapture() {
   session += 1;
   stopDemoBeat();
+  monitorDisconnect();
+  releaseTrack();
   micStage = "idle";
   const oldCapture = capture;
   const oldContext = context;
@@ -462,6 +525,85 @@ async function finishTestOscillator(nextContext, resumePromise, { frequencies, p
   }
 }
 
+/**
+ * ZUR-GH-013 "Load Audio Track (WAV/MP3/OGG)": AudioElement -> MediaElementAudioSourceNode -> AnalyserNode.
+ * The element's own output is captured by the source node, so the track is silent unless Speaker Monitor is checked.
+ */
+export function startFileTrack({ file, fftSize = 2048, speakerMonitor: monitor = speakerMonitor } = {}) {
+  if (!file) return Promise.reject(new Error("Choose a WAV, MP3 or OGG file first."));
+  const nextContext = new AudioContext({ latencyHint: "interactive" });
+  const resumePromise = nextContext.resume();
+  speakerMonitor = Boolean(monitor);
+  return enqueue(() => finishFileTrack(nextContext, resumePromise, file, fftSize));
+}
+
+async function finishFileTrack(nextContext, resumePromise, file, fftSize) {
+  await stopCapture();
+  const token = ++session;
+  try {
+    await resumePromise;
+    if (token !== session) {
+      if (nextContext.state !== "closed") await nextContext.close();
+      return null;
+    }
+    context = nextContext;
+    trackUrl = URL.createObjectURL(file);
+    trackName = file.name || "audio track";
+    trackElement = new Audio();
+    trackElement.preload = "auto";
+    trackElement.loop = true;
+    trackElement.src = trackUrl;
+    source = remember(context.createMediaElementSource(trackElement));
+    attachAnalyser(context, source, fftSize, 1);
+    currentMode = "file-track";
+    applySpeakerMonitor();
+    let playing = true;
+    try {
+      await trackElement.play();
+    } catch {
+      playing = false; // autoplay refused: the Play button starts it
+    }
+    return { context, source, analyser, track: getTrackState(), playing, audioSettings: { fileTrack: true, name: trackName } };
+  } catch (error) {
+    if (token !== session) throw error;
+    return failStart(null, nextContext, error);
+  }
+}
+
+export async function playPauseTrack() {
+  if (!trackElement) return getTrackState();
+  if (context?.state === "suspended") await context.resume();
+  if (trackElement.paused) {
+    try {
+      await trackElement.play();
+    } catch {
+      // Still paused.
+    }
+  } else {
+    trackElement.pause();
+  }
+  return getTrackState();
+}
+
+/** Speaker Monitor checkbox: only a loaded file track is ever routed to the speakers. */
+export function setSpeakerMonitor(enabled) {
+  speakerMonitor = Boolean(enabled);
+  applySpeakerMonitor();
+  return getTrackState();
+}
+
+export function getTrackState() {
+  return {
+    loaded: Boolean(trackElement),
+    name: trackName,
+    playing: Boolean(trackElement && !trackElement.paused),
+    currentTime: trackElement?.currentTime ?? 0,
+    duration: Number.isFinite(trackElement?.duration) ? trackElement.duration : 0,
+    speakerMonitor,
+    monitorConnected,
+  };
+}
+
 export async function setSuppressLocalAudioPlayback(enabled) {
   const track = capture?.getAudioTracks?.()[0];
   if (!track?.applyConstraints) return null;
@@ -523,11 +665,12 @@ export function getDiagnostics() {
     contextState: context?.state ?? "closed",
     sampleRate: context?.sampleRate ?? null,
     fftSize: analyser?.fftSize ?? null,
-    silent: true,
-    destinationConnections: 0,
+    silent: destinationConnections === 0,
+    destinationConnections,
     destinationRefusals,
     micStage,
     demoBeat: { ...demoBeat },
+    track: getTrackState(),
     videoTrackLive: videoTracks.some((track) => track.readyState === "live"),
     audioSettings: audioTrack?.getSettings?.() ?? null,
     trackCount: capture?.getTracks?.().length ?? 0,

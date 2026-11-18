@@ -27,7 +27,7 @@ uniform float u_waveSpeed;
 uniform vec4 u_shock[4];     // xyz origin, w birth time (< 0 = empty)
 uniform sampler2D u_neighbors; // RGBA32F, 2 texels per agent, 256 agents per row
 uniform int u_useNeighbors;
-uniform int u_formationType;     // 0 free-3d, 1 neon-tunnel, 2 polygon-rings, 3 supernova-shell, 4 fractal-core, 5 logo-attractor, 6 neural-brain, 7 living-galaxy, 8 supermassive-blackhole, 9 wormhole
+uniform int u_formationType;     // 0 free-3d, 1 neon-tunnel, 2 polygon-rings, 3 supernova-shell, 4 fractal-core, 5 logo-attractor, 6 neural-brain, 7 living-galaxy, 8 supermassive-blackhole, 9 wormhole, 10 harmonic-ferrofluid
 uniform int u_oscillationType;   // 0 off, 1 wave, 2 helix, 3 bounce, 4 pulse
 uniform float u_oscillationAmount;
 uniform float u_oscillationSpeed;
@@ -36,9 +36,11 @@ uniform int u_megastructure;
 uniform float u_bands[5];        // sub, bass, lowMid, highMid, treble
 uniform vec3 u_billboardRight;   // ZUR-GH-007: active camera right (logo-attractor billboard XY)
 uniform vec3 u_billboardUp;      // ZUR-GH-007: active camera up
-uniform int u_particleStyle;     // ZUR-GH-009: 0 dart3d, 1 blood-drop, 2 synapse-spark, 3 star-streak
-uniform int u_kineticMode;       // ZUR-GH-009: 0 off, 1 splatter-run, 2 synapse-cascade, 3 accretion-warp, 4 ribbon-curtain, 5 shock-shatter
+uniform int u_particleStyle;     // ZUR-GH-013: 0 crisp-dot, 1 dart3d, 2 synapse-node, 3 star-streak
+uniform int u_kineticMode;       // ZUR-GH-013: 0 off, 1 synapse-cascade, 2 accretion-warp, 3 ribbon-curtain, 4 shock-shatter
 uniform float u_reactivityGain;  // ZUR-GH-009: Reactivity Punch 0.5..5.0
+uniform float u_cleanGate;       // ZUR-GH-013: smoothstep(0.018, 0.13, maxBandEnergy * u_reactivityGain), 0 in silence
+uniform int u_reactivityMode;    // ZUR-GH-013: 0 true-gate, 1 ember-floor, 2 ambient-vj
 
 const float BOUND_RADIUS = 7.2;
 // Spawn / formation volume: the normalized [-1.25, +1.25] cube scaled to world units.
@@ -353,35 +355,152 @@ bool isCorticalSoma(uint uid) {
   return hashf(uid ^ 0xb5297a4du) < 0.8;
 }
 
-// Bilobed hemispheres: theta polar 0..PI, phi azimuth 0..TAU; the 0.12 floor leaves the longitudinal fissure.
-vec3 brainSurface(float u, float v) {
-  float theta = acos(clamp(1.0 - 2.0 * u, -1.0, 1.0));
-  float phi = v * TAU;
-  return vec3(
-    sign(cos(phi)) * (0.12 + 0.58 * abs(cos(phi)) * sin(theta)),
-    0.46 * cos(theta),
-    0.72 * sin(theta) * sin(phi)
-  );
+// ---- ZUR-GH-013 Anatomical 3D Brain (replaces the lung / egg ovals). Brain frame: +x lateral (right), +y up,
+// +z anterior (frontal pole). Region split (render.vert.glsl mirrors it with the same hash): 82% cerebral lobes,
+// 11% striated cerebellum, 7% brainstem. Mirrored in particleMath.js BRAIN_*.
+const float BRAIN_CEREBRUM_FRAC = 0.82;
+const float BRAIN_CEREBELLUM_FRAC = 0.11;   // cumulative 0.93; the last 7% is the brainstem
+const float BRAIN_GAP = 0.045;              // dark longitudinal fissure width (no central egg)
+const float BRAIN_HEMI_WIDTH = 0.46;
+const float BRAIN_VIEW_YAW = 0.5585053606;  // 32 degrees: 3/4 lateral view
+
+float brainRegion(uint uid) {
+  return hashf(uid ^ 0x68e31da4u);
+}
+
+vec3 unitSphere(vec2 h) {
+  float z = 1.0 - 2.0 * h.x;
+  float rr = sqrt(max(0.0, 1.0 - z * z));
+  float a = h.y * TAU;
+  return vec3(cos(a) * rr, sin(a) * rr, z);
+}
+
+// Asymmetric cerebral hemisphere surface for side s (+1 right / -1 left) and unit direction d.
+vec3 cerebrumSurface(vec3 d, float s) {
+  float lateral = s * d.x;                                   // > 0 on the outer (lateral) face
+  float medialHalf = BRAIN_HEMI_WIDTH * 0.18;                // flattened medial wall
+  float lateralHalf = BRAIN_HEMI_WIDTH * 0.82;
+  float cx = s * (BRAIN_GAP * 0.5 + medialHalf);
+  float x = cx + d.x * (lateral > 0.0 ? lateralHalf : medialHalf);
+  float y = d.y * (d.y > 0.0 ? 0.44 : 0.26);                 // domed top, flatter base
+  float z = d.z * 0.70;
+  // tapered frontal pole (anterior) and a narrower, pointed occipital pole (posterior)
+  float front = max(d.z, 0.0);
+  float back = max(-d.z, 0.0);
+  float taper = 1.0 - 0.34 * front * front - 0.22 * back * back * back;
+  x = cx + (x - cx) * taper;
+  y *= 1.0 - 0.18 * front * front;
+  z += 0.05 * back * back;                                   // occipital pole extends backward
+  // temporal lobe: lower lateral bulge pushed forward and down, below the Sylvian fissure
+  float temporal = smoothstep(0.15, 0.6, lateral) * smoothstep(0.05, -0.45, d.y) * smoothstep(-0.55, 0.15, d.z) * smoothstep(0.85, 0.35, d.z);
+  y -= 0.11 * temporal;
+  z += 0.07 * temporal;
+  x += s * 0.045 * temporal;
+  // Sylvian (lateral) fissure: a groove rising backward along the lateral face; dots are parted away from its line
+  float fissureY = -0.04 + 0.20 * clamp(-d.z + 0.15, 0.0, 1.0) * 0.6;
+  float fd = y - fissureY;
+  float onLateral = smoothstep(0.25, 0.55, lateral) * smoothstep(0.7, 0.2, d.z) * smoothstep(-0.75, -0.2, d.z);
+  float part = onLateral * (1.0 - smoothstep(0.0, 0.045, abs(fd)));
+  y += sign(fd + 1e-4) * 0.035 * part;
+  x -= s * 0.03 * part;                                      // the fissure is recessed into the surface
+  vec3 p = vec3(x, y, z);
+  // surface-locked +/-0.03 gyri / sulci ridges (driven by the parametric direction, so they ride with the surface)
+  float ridge = sin(d.x * 21.0 + 2.2 * sin(d.z * 15.0 + d.y * 4.0)) * cos(d.y * 19.0 + 1.6 * sin(d.z * 11.0));
+  vec3 n = normalize(vec3((x - cx) / 0.36, y / 0.36, z / 0.70) + vec3(1e-4));
+  p += n * 0.03 * ridge;
+  p.x = s * max(s * p.x, BRAIN_GAP * 0.5);                  // the 0.045 longitudinal gap stays empty
+  return p;
+}
+
+// Horizontally striated cerebellum tucked under the occipital pole.
+vec3 cerebellumSurface(vec3 d) {
+  float folia = 0.5 + 0.5 * cos(d.y * 42.0);                 // horizontal folia grooves
+  vec3 r = vec3(0.34, 0.15, 0.19) * (1.0 - 0.10 * folia);
+  return vec3(0.0, -0.30, -0.46) + d * r;
+}
+
+// Brainstem descending from under the cerebrum (pons / medulla), slight forward curve, tapering.
+vec3 brainstemPoint(vec3 h) {
+  float t = h.x;                                             // 0 top .. 1 bottom
+  float a = h.y * TAU;
+  float radius = mix(0.095, 0.06, t) * (0.85 + 0.15 * h.z);
+  vec3 axis = vec3(0.0, mix(-0.16, -0.86, t), mix(-0.10, -0.20, t) + 0.05 * sin(t * 3.14159265));
+  return axis + vec3(cos(a) * radius, 0.0, sin(a) * radius);
+}
+
+vec3 brainView(vec3 p) {
+  // 32 degree 3/4 lateral view: rotate about Y so the right lateral face (temporal lobe, Sylvian fissure) shows.
+  float c = cos(BRAIN_VIEW_YAW + 1.5707963);
+  float s = sin(BRAIN_VIEW_YAW + 1.5707963);
+  return vec3(c * p.x + s * p.z, p.y, -s * p.x + c * p.z);
 }
 
 vec3 neuralBrainTarget(float seed, uint uid) {
   vec3 h = hash3(uid ^ 0x1b873593u);
-  vec3 pos = brainSurface(h.x, h.y);
-  if (isCorticalSoma(uid)) {
-    // gyri / sulci displacement along the surface normal (~ radial for this ellipsoidal shell)
-    float disp = 0.06 * sin(pos.x * 18.0 + sin(pos.z * 14.0)) * cos(pos.y * 16.0);
-    pos += normalize(pos + vec3(1e-4)) * disp;
-    pos *= 1.0 + 0.05 * u_bass;
+  float region = brainRegion(uid);
+  vec3 pos;
+  if (region < BRAIN_CEREBRUM_FRAC) {
+    float side = hashf(uid ^ 0x2f6b1a7du) < 0.5 ? -1.0 : 1.0;
+    vec3 d = unitSphere(h.xy);
+    if (isCorticalSoma(uid)) {
+      pos = cerebrumSurface(d, side) * (1.0 + 0.04 * u_onset * u_cleanGate);
+    } else {
+      // white-matter tract: arcs from a cortical site down toward the brainstem (stays inside one hemisphere)
+      float s = fract(seed * 9.0 + u_time * 0.22);
+      vec3 cortex = cerebrumSurface(d, side);
+      vec3 core = vec3(side * 0.14, -0.08, -0.04);
+      pos = mix(cortex, core, s * 0.85);
+    }
+  } else if (region < BRAIN_CEREBRUM_FRAC + BRAIN_CEREBELLUM_FRAC) {
+    pos = cerebellumSurface(unitSphere(h.xy));
   } else {
-    // white-matter tract: arcs from a cortical site through the interior to its contralateral partner
-    vec3 a = pos;
-    vec3 b = vec3(-a.x, a.y * 0.8, a.z * 0.9);
-    float s = fract(seed * 9.0 + u_time * 0.22);
-    float arch = sin(s * 3.14159265);
-    pos = mix(a, b, s) * (0.38 + 0.22 * arch);
-    pos.y += 0.16 * arch;
+    pos = brainstemPoint(h);
   }
-  return pos * BRAIN_SCALE;
+  return brainView(pos) * BRAIN_SCALE;
+}
+
+// ---- ZUR-GH-013 Harmonic Ferrofluid (replaces Blood): 70% spherical-harmonic spike shell on 5 FFT bands + 30% EQ rings.
+const float FERRO_SHELL_FRAC = 0.70;
+const float FERRO_SCALE = 2.4;
+
+vec3 harmonicFerrofluidTarget(float seed, uint uid) {
+  vec3 h = hash3(uid ^ 0x51ed270bu);
+  float kind = hashf(uid ^ 0x0ab1c2d3u);
+  float b0 = clamp(u_bands[0], 0.0, 1.5);
+  float b1 = clamp(u_bands[1], 0.0, 1.5);
+  float b2 = clamp(u_bands[2], 0.0, 1.5);
+  float b3 = clamp(u_bands[3], 0.0, 1.5);
+  float b4 = clamp(u_bands[4], 0.0, 1.5);
+  if (kind < FERRO_SHELL_FRAC) {
+    vec3 d = unitSphere(h.xy);
+    float ct = d.y;                                          // cos(theta)
+    float st = sqrt(max(0.0, 1.0 - ct * ct));
+    float phi = atan(d.z, d.x + 1e-6);                       // geometry only (continuous through cos/sin below)
+    float spin = u_time * 0.25;
+    // real spherical harmonics, one per band (l = 2, 3, 4, 6, 8)
+    float y2 = 0.5 * (3.0 * ct * ct - 1.0);
+    float y3 = st * st * st * sin(3.0 * (phi + spin));
+    float y4 = st * st * st * st * cos(4.0 * (phi - spin));
+    float y6 = st * st * st * st * st * st * cos(6.0 * phi + spin * 2.0);
+    float y8 = pow(st, 8.0) * sin(8.0 * phi - spin * 3.0);
+    float field = b0 * y2 * 0.55 + b1 * y3 * 0.75 + b2 * y4 * 0.7 + b3 * y6 * 0.8 + b4 * y8 * 0.9;
+    // ferrofluid spikes: sharpened positive lobes, dots spread along each spike
+    // sustained bass / RMS feed the spike amplitude (ZUR-GH-013 tightening)
+    float spike = pow(clamp(0.5 + 0.5 * field, 0.0, 1.0), 6.0) * (0.25 + 0.55 * (b1 + b4) + 0.30 * u_bass + 0.35 * u_rms);
+    float r = 0.62 + 0.10 * field + spike * h.z;
+    return d * r * FERRO_SCALE;
+  }
+  // concentric 3D live EQ waveform rings (one per band), tilted toward the camera
+  int ring = int(uid % 5u);
+  float level = clamp(u_bands[ring], 0.0, 1.5);
+  float a = h.x * TAU;
+  float radius = 0.92 + 0.13 * float(ring);
+  float wave = sin(a * (5.0 + 2.0 * float(ring)) + u_time * (1.5 + 0.4 * float(ring))) * (0.04 + 0.22 * level);
+  vec3 ringPos = vec3(cos(a) * radius, wave + (h.y - 0.5) * 0.015, sin(a) * radius);
+  float tilt = 0.42 + 0.08 * float(ring);
+  float c = cos(tilt);
+  float s = sin(tilt);
+  return vec3(ringPos.x, ringPos.y * c - ringPos.z * s, ringPos.y * s + ringPos.z * c) * FERRO_SCALE;
 }
 
 float galaxyOmega(float r) {
@@ -508,15 +627,28 @@ vec3 blackHoleExclude(vec3 pos) {
   return pos;
 }
 
+// ZUR-GH-013 Spherical Wormhole — Funnel in Sphere: a closed horned torus. theta = u * TAU sweeps the meridian:
+// theta = 0 is the outer R = 0.94 equator of the dot shell, theta = PI the tight r = 0.08 throat inside it; both poles
+// fold the shell smoothly inward. Streams flow along the meridian (shell -> pole -> throat -> pole -> shell).
+const float WORMHOLE_TILT = 0.3839724354;  // 22 degrees toward the camera
 vec3 wormholeTarget(float seed, uint uid) {
   vec3 h = hash3(uid ^ 0x5be0cd19u);
-  float s = fract(h.x + u_time * 0.07);
-  float q = s * 2.0 - 1.0;
-  // geodesic streams: dz/ds is largest at the throat (z = 0), so the streams accelerate through it
-  float z = 1.35 * sign(q) * pow(abs(q), 0.6);
-  float r = sqrt(0.18 * 0.18 + z * z * 1.4);
-  float psi = (float(uid % 48u) + (h.y - 0.5) * 0.3) / 48.0 * TAU + z * 0.8;
-  return vec3(cos(psi) * r, z, sin(psi) * r) * WORMHOLE_SCALE;
+  float u = fract(h.x + u_time * 0.035);
+  float theta = u * TAU;
+  float rxz = 0.51 + 0.43 * cos(theta);
+  float y = 0.76 * sin(theta) * mix(0.52, 1.0, 0.5 + 0.5 * cos(theta));
+  float psi = h.y * TAU + u_time * 0.12;
+  vec3 p = vec3(cos(psi) * rxz, y, sin(psi) * rxz);
+  float c = cos(WORMHOLE_TILT);
+  float s = sin(WORMHOLE_TILT);
+  p = vec3(p.x, p.y * c - p.z * s, p.y * s + p.z * c);
+  return p * WORMHOLE_SCALE;
+}
+
+// ZUR-GH-013: formations whose silhouette must stay readable under loud sustained audio.
+const float STRUCTURED_ONSET_PULSE = 0.08;  // max transient radial scale 1.08x (onset only, never bass / RMS)
+bool structuredFormation() {
+  return u_formationType == 5 || u_formationType == 6 || u_formationType == 8 || u_formationType == 9;
 }
 
 // Stage 3 formation target for one agent. free-3d returns pos (no pull).
@@ -558,6 +690,7 @@ vec3 formationTarget(vec3 pos, float seed, float phase, uint uid) {
   if (u_formationType == 7) return livingGalaxyTarget(seed, uid);
   if (u_formationType == 8) return blackHoleTarget(seed, uid);
   if (u_formationType == 9) return wormholeTarget(seed, uid);
+  if (u_formationType == 10) return harmonicFerrofluidTarget(seed, uid);
   return pos;
 }
 
@@ -625,18 +758,18 @@ vec3 pulseTarget(int id, vec3 pos, float seed, uint uid, out float stiffness) {
 }
 
 
-// ZUR-GH-009: one distinct motion per kinetic mode 2..5 (mode 1 is the blood splatter run, handled in main()).
+// ZUR-GH-013: one distinct motion per kinetic mode 1..4 (the blood splatter run was deleted).
 vec3 kineticForce(vec3 pos, vec3 vel, float seed, uint uid) {
   float r = length(pos);
   vec3 radial = pos / max(r, 1e-4);
-  if (u_kineticMode == 2) {
+  if (u_kineticMode == 1) {
     // synapse-cascade: an excitation front sweeps outward; agents on it fire along random dendrite branches
     float fd = (r - fract(u_time * 0.28) * 6.0) / 0.55;
     float front = exp(-fd * fd);
     vec3 branch = normalize(cross(radial, hash3(uid ^ 0x6d2b79f5u) - 0.5) + radial * 0.6 + vec3(1e-4));
     return branch * front * (10.0 + 14.0 * u_onset);
   }
-  if (u_kineticMode == 3) {
+  if (u_kineticMode == 2) {
     // accretion-warp: Keplerian swirl about Y, inward spiral, vertical flattening into a disk
     float rho = length(pos.xz) + 1e-3;
     vec3 tangent = vec3(-pos.z, 0.0, pos.x) / rho;
@@ -644,14 +777,14 @@ vec3 kineticForce(vec3 pos, vec3 vel, float seed, uint uid) {
     return tangent * (4.5 / (0.6 + 0.5 * rho)) * (1.0 + 0.8 * u_bass)
       + inward * (0.7 + 2.0 * u_onset) + vec3(0.0, -pos.y * 3.0, 0.0);
   }
-  if (u_kineticMode == 4) {
+  if (u_kineticMode == 3) {
     // ribbon-curtain: six lanes of sinusoidal ribbons sliding sideways in thin sheets
     float lane = floor(seed * 6.0) / 6.0;
     float wave = sin(pos.x * 1.1 + u_time * 1.4 + lane * TAU) * (0.8 + 1.5 * u_mid);
     float sheetZ = (lane - 0.42) * 5.0;
     return vec3(1.6 + 2.0 * u_rms, (wave * 1.2 - pos.y * 0.9) * 2.0, (sheetZ - pos.z) * 3.0);
   }
-  if (u_kineticMode == 5) {
+  if (u_kineticMode == 4) {
     // shock-shatter: space is cut into cells; each cell bursts away from its own centre on onsets
     vec3 cell = floor(pos * 0.45);
     uvec3 c = uvec3(ivec3(cell) + 64);
@@ -670,12 +803,9 @@ void main() {
   vec3 vel = a_vel.xyz;
   float seed = a_pos.w;
   float phase = a_vel.w;
-  // ZUR-GH-009: blood pin flag (aux.w == 2.6) rides in the phase channel as phase + 2.6; split it off here.
-  bool bloodActive = u_particleStyle == 1 || u_kineticMode == 1;
-  // ZUR-GH-010: 40% of the swarm ((gl_VertexID % 5) < 2) bypasses the formation tether, rushes at the front glass and runs down it.
-  bool bloodRoute = bloodActive && (gl_VertexID % 5) < 2;
-  float pinFlag = phase >= 2.0 ? 2.6 : 0.0;
-  phase -= pinFlag;
+  // ZUR-GH-013: legacy states may still carry the deleted blood pin flag (phase + 2.6); drop it.
+  if (phase >= 2.0) phase -= 2.6;
+  phase = clamp(phase, 0.0, 1.0);
   float dt = u_dt;
   float k = u_damping;
   vec3 F = vec3(0.0);
@@ -818,6 +948,10 @@ void main() {
     // Stage 3 formations + oscillation layer on top of the active flow mode. ZUR-GH-009: runs for free-3d too so the
     // audio radial kick below applies even when Oscillation amount == 0 (kick == 1 in silence => no force).
     float kick = u_formationType == 5 ? 1.0 : 1.0 + 0.28 * u_reactivityGain * (u_sub * 0.65 + u_bass * 0.35);
+    // ZUR-GH-013 tightening: structured shapes (logo, brain, black hole, wormhole) never balloon on sustained audio.
+    // The legacy sustained 1.42x swell becomes a <= 1.08x transient onset micro-pulse; sustained bass / RMS drive
+    // brightness, tracer speed, streak stretch and ferrofluid spikes instead.
+    if (structuredFormation()) kick = 1.0 + STRUCTURED_ONSET_PULSE * clamp(u_onset, 0.0, 1.0) * u_cleanGate;
     vec3 target = (formationTarget(pos, seed, phase, uid) + oscillationOffset(pos, seed, phase)) * kick;
     float pull = u_formationType == 0 ? 1.5 : (u_formationType == 5 ? 16.0 : 7.0);
     // ZUR-GH-010 formation confinement lock (Stage 5 formations, u_formation >= 6): tether never below 4.2 and the
@@ -830,18 +964,14 @@ void main() {
     if (u_formationType == 4) F *= 0.25;
     if (u_formationType >= 6) {
       F *= 0.25; // volumetric targets dominate the flow field
-      float curlMax = FORMATION_CURL_CAP * formationRadius * pull;
+      // ZUR-GH-013: structured shapes keep audio-driven turbulence to a third of the cap so loud flows cannot inflate them.
+      float curlMax = FORMATION_CURL_CAP * (structuredFormation() ? 0.33 : 1.0) * formationRadius * pull;
       float fl = length(F);
       if (fl > curlMax) F *= curlMax / fl;
     }
     float damp = u_formationType == 0 ? 0.0 : (u_formationType == 5 ? 5.5 : 2.6);
-    // Splatter run lets the stream flow: the formation spring only keeps a loose hold.
-    float hold = u_kineticMode == 1 ? 0.2 : 1.0;
-    if (bloodRoute) hold = 0.0;
-    F += ((target - pos) * pull - vel * damp) * hold;
-    if (bloodRoute) F.z += 7.0 * (1.0 + u_onset);
+    F += (target - pos) * pull - vel * damp;
     if (u_formationType == 1) F += tiltToWorld(vec3(0.0, 0.0, 1.8 + 3.0 * u_rms + 2.0 * u_bass));
-    if (u_formationType == 9) F.y += 1.2 + 7.0 * u_bass + 10.0 * u_onset; // streams accelerate through the throat
     // ZUR-GH-007: glyph agents must be able to come to rest on their targets. The murmuration / fish
     // minimum-speed clamp (lo > 0) kept them orbiting ~0.2 world units around each glyph pixel -> pink cloud.
     if (u_formationType == 5) { lo = 0.0; hi = 6.0; }
@@ -851,13 +981,29 @@ void main() {
   float over = max(length(pos) - BOUND_RADIUS, 0.0);
   F += -normalize(pos + 1e-5) * over * over * 6.0;
 
-  if (u_kineticMode >= 2) F += kineticForce(pos, vel, seed, uid);
+  if (u_kineticMode >= 1) F += kineticForce(pos, vel, seed, uid);
   // ZUR-GH-009: onset velocity impulse (kept even when Oscillation amount == 0); glyph targets only feel 15%.
   float onsetKick = u_onset * 2.2 * u_reactivityGain * (u_formationType == 5 ? 0.15 : 1.0);
   vec3 kickDir = normalize(radial + (hash3(uid ^ 0x7f4a7c15u) - 0.5) * 0.9 + vec3(1e-4));
-  vel += kickDir * onsetKick * dt * 3.0;
-  // Blood-drop / splatter-run: drops fall toward the wall at +Z.
-  if (bloodActive) vel.z += (1.1 + 2.2 * u_onset) * dt;
+  // ZUR-GH-013: structured shapes take onset impulses at 0.35x so a transient pulse stays a micro-pulse (<= ~1.08x).
+  float structuredImpulse = structuredFormation() ? 0.35 : 1.0;
+  vel += kickDir * onsetKick * dt * 3.0 * structuredImpulse;
+  // ZUR-GH-013 true-gate: beats (gate open) add an explosive radial displacement + velocity burst; silence damps motion.
+  float glyphScale = u_formationType == 5 ? 0.1 : 1.0;
+  if (u_reactivityMode != 2) {
+    // Onset-dominated so the burst is transient: a sustained bass bed only breathes the shape (equilibrium offset
+    // ~ burst / pull), while each transient throws agents outward before the formation spring snaps them back.
+    float sustainedBurst = structuredFormation() ? 0.0 : u_bass * 1.6;  // structured: onset-only (transient)
+    float burst = u_cleanGate * (sustainedBurst + u_onset * 9.0) * (u_reactivityGain / 2.5) * glyphScale;
+    vel += radial * burst * dt * structuredImpulse;
+    pos += radial * u_cleanGate * u_onset * 1.4 * dt * (u_reactivityGain / 2.5) * glyphScale * structuredImpulse;
+    k += (1.0 - u_cleanGate) * 5.0;  // damped motion between beats
+  }
+  // ZUR-GH-013 synapse-node: 15% axon tracer sparks race along the formation surface on onsets / high-mids.
+  if (u_particleStyle == 2 && hashf(uid ^ 0x9c1f4e3bu) < 0.15) {
+    vec3 along = normalize(cross(radial, vec3(0.0, 1.0, 0.0)) + cross(radial, vec3(1.0, 0.0, 0.0)) * 0.35 + vec3(1e-4));
+    vel += along * (u_onset * 9.0 + u_high * 6.0 + u_bass * 4.0 + u_rms * 3.0) * u_cleanGate * dt * 6.0;  // sustained bass / RMS -> tracer speed
+  }
 
   integrateFrozenDrag(pos, vel, F, k, dt);
   if (u_formationType == 4 || u_megastructure == 1) {
@@ -884,42 +1030,6 @@ void main() {
   // ZUR-GH-010 black hole: nothing may sit inside the event horizon or the camera-facing shadow cylinder.
   if (u_pulseLayout < 0 && u_formationType == 8) pos = blackHoleExclude(pos);
 
-  // Blood-drop wall splat + respawn (constants are in normalised +/-1.25 units; world = normalised * WORLD_SCALE).
-  // ZUR-GH-010: the ticket's pin flag "oVelocityAux.w = 2.8" maps onto this sim's only auxiliary channel, the phase
-  // channel (v_vel.w = phase + 2.6, outAuxW below); render.vert.glsl treats a_vel.w >= 2.0 as pinned. The streak speed
-  // keeps the ticket's 2.8 ceiling in vel.y instead.
-  float outAuxW = 0.0;
-  if (bloodRoute) {
-    if (pos.z >= 0.78 * WORLD_SCALE) {
-      pos.z = 0.79 * WORLD_SCALE;
-      vel.z = 0.0;
-      vel.x *= 0.85;
-      outAuxW = 2.6;
-      vel.y = -clamp(0.55 + 1.55 * fract(seed * 13.1) + 1.2 * u_bass, 0.55, 2.8);
-    }
-    if (pos.y < -1.18 * WORLD_SCALE) {
-      vec3 hr = hash3(uid ^ hash32(uint(u_time * 60.0) + 13u));
-      pos = vec3((hr.x * 2.0 - 1.0) * 0.9 * WORLD_SCALE, (0.3 + 0.7 * hr.y) * WORLD_SCALE, -0.65 * WORLD_SCALE);
-      vel = vec3(0.0, 0.0, 1.35 + 1.8 * u_onset);
-      outAuxW = 0.0;
-    }
-  } else if (bloodActive) {
-    if (pos.z >= 0.78 * WORLD_SCALE) {
-      pos.z = 0.79 * WORLD_SCALE;
-      vel.z = 0.0;
-      vel.x *= 0.85;
-      outAuxW = 2.6;
-      vel.y -= (1.8 + 2.4 * u_bass) * dt;
-    }
-    if (pos.y < -1.18 * WORLD_SCALE) {
-      vec3 formationPos = (u_formationType != 0 && u_pulseLayout < 0) ? formationTarget(pos, seed, phase, uid) : pos;
-      pos = formationPos * 0.25;
-      pos.z = -0.65 * WORLD_SCALE;
-      vel = vec3(0.0, 0.0, 1.35 + 1.8 * u_onset);
-      outAuxW = 0.0;
-    }
-  }
-
   // neon-tunnel streams toward the camera (+Z in the tilted formation frame) and re-enters at the far end.
   if (u_pulseLayout < 0 && u_formationType == 1) {
     vec3 local = tiltToFormation(pos);
@@ -937,5 +1047,5 @@ void main() {
   if (any(isnan(vel)) || any(isinf(vel))) vel = vec3(0.0);
 
   v_pos = vec4(pos, seed);
-  v_vel = vec4(vel, phase + outAuxW); // outAuxW (2.6) marks a wall-pinned blood drop for render.vert.glsl
+  v_vel = vec4(vel, phase);
 }

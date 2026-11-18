@@ -381,3 +381,24 @@ When `u_kaleidoSegments > 1`: mirrored polar radius `r = 1.0 - abs(fract(r · 0.
   God rays 0.35 over free-3d / supernova-shell × murmuration / fish / gas / fluid: `whiteClip < 1%`, `nearWhite < 1%`,
   `meanSat >= 0.55`; megastructure whiteClip < 1%; GPU readback fish Y balance and gas spread; keep ≤ 0.45 inside the
   250 ms window and released after; console.error / pageerror / WebGL warnings 0; `destinationConnections` 0.
+
+## ZUR-GH-013 — v6.0 (zur-shell-v11 / zur_state_v6_0)
+
+- **Reactivity**: `reactivityMode` ∈ {true-gate (default), ember-floor, ambient-vj}. `cleanGate = smoothstep(0.018, 0.13,
+  maxBandEnergy * u_reactivityGain)` (0 when the extractor reports `isSilent`). Emission: true-gate = gate (0.00 in
+  silence), ember-floor = max(gate, 0.06), ambient-vj = 1. Emission multiplies the particle tint (agents go off-screen at
+  0), the megastructure core alpha, the spectral canyon output and the ShaderHost present pass (aurora). Closed gate:
+  trail keep ≤ exp(-dt / 0.120 s), drag +5. No constant idle brightness or time-only pulses outside ambient-vj.
+- **Audio**: `startFileTrack()` (WAV/MP3/OGG): AudioElement → MediaElementSource → Analyser. `monitorConnect()` is the only
+  `.connect(context.destination)` in the engine and refuses any mode but `file-track`; Speaker Monitor unchecked, stop,
+  mic, tab, demo beat and oscillator keep `destinationConnections === 0`. Auto-gain: 4 s / 16-bucket rolling peak,
+  gain = clamp(0.9 / peak, 1, 8) (1 below peak 0.02), only for the shared Android mic stage.
+- **HUD**: no tabs. Sticky Quick Presets strip (`#hud-quick-presets`, `[data-quick-preset]`), Engine Selector
+  (`#hud-engines`, `[data-engine]`), one deck laid out once (`_layoutKey === "deck"`). Quick presets / engines /
+  palettes / formations / reactivity modes never change `particleStyle`.
+- **Styles**: crisp-dot (index 0, default), dart3d (0.55x), synapse-node (15% axon sparks on onset / highMid),
+  star-streak (`1 + clamp(|vScreen| (16 + 45 bass + 60 onset), 0, 18)`, energy-conserving `1 / (1 + 0.35 (s - 1))`).
+- **Palettes**: no `atan` / `floor` in render.frag; smooth gradients over radial, depth, speed and spectral centroid.
+  blood-red → crimson-pulse (index 3).
+- **Formations**: wormhole (index 9, default), neural-brain (6), harmonic-ferrofluid (10).
+- **Storage**: `zur_state_v6_0` / schema 6.0; legacy v5_3 → v4 keys migrate; `hud` is deleted.

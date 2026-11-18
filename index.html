@@ -217,6 +217,13 @@
     .mic-status { margin: 4px 0; color: #ffd27a; font-size: 13px; font-weight: 600; }
     .mic-status[hidden] { display: none; }
     .hint { color: var(--muted); font-size: 12px; }
+    /* ZUR-GH-013 v6.0 deck: Engine Selector + Audio Track loader */
+    .hud-engines { margin-top: 8px; }
+    .hud-engines .hud-subpill[aria-checked="true"] { outline: 1px solid var(--teal); }
+    .track-file { flex: 2; }
+    .track-status { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
+    .track-status[data-playing="true"] { color: #9ff5d6; }
+    .hud-button:disabled { opacity: 0.45; cursor: not-allowed; }
     @media (max-width: 720px) {
       #hud-root { inset: auto 8px 8px 8px; }
       .hud { width: 100%; max-height: 46dvh; }
