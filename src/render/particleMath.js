@@ -117,7 +117,11 @@ export const FLOATS_PER_AGENT = 8;
 /** Neighbor texture: two RGBA32F texels per agent, 256 agents per row. */
 export const AGENTS_PER_ROW = 256;
 export const SIM_STEP = 1 / 60;
-export const MAX_STEPS_PER_FRAME = 4;
+/** ZUR-GH-012: exactly one transform-feedback step per frame (no multi-step catch-up, so 256k cannot death-spiral). */
+export const MAX_STEPS_PER_FRAME = 1;
+export const MAX_SIM_DT = 1 / 30;
+/** ZUR-GH-012: active agent count from which dart3d draws the 4-vertex velocity-oriented dart SDF quad. */
+export const DART_QUAD_MIN_COUNT = 131072;
 
 /** Per-60 Hz-step velocity retention from the ticket, converted to a rate. */
 export const FLOW_DAMPING_PER_STEP = Object.freeze({
@@ -183,6 +187,17 @@ export function integrateFrozenDrag(position, velocity, forcing, damping, dt) {
     position: position + velocity * A + forcing * B,
     velocity: velocity * E + forcing * A,
   };
+}
+
+/** ZUR-GH-012: one sim step per rendered frame with dt = min(frameDt, 1/30); skipped only when frameDt <= 0. */
+export function planSimStep(frameDt) {
+  if (!(frameDt > 0)) return { steps: 0, simDt: 0 };
+  return { steps: 1, simDt: Math.min(frameDt, MAX_SIM_DT) };
+}
+
+/** Number of vertices dart3d draws per instance: 4 (quad strip) from 128k agents, else the 12-vertex cone. */
+export function dartVertexCount(activeCount) {
+  return activeCount >= DART_QUAD_MIN_COUNT ? 4 : 12;
 }
 
 /** Fixed-step accumulator. Drops backlog beyond maxSteps so a stall cannot spiral. */

@@ -1,4 +1,4 @@
-const CACHE = "zur-shell-v9";
+const CACHE = "zur-shell-v10";
 const ASSETS = [
   "./",
   "./index.html",

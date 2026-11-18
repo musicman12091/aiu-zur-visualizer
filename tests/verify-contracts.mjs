@@ -546,24 +546,24 @@ test("ticket damping factors become exact per-step retention at 60 Hz", () => {
   }
 });
 
-test("fixed-step accumulator runs 1/60 s steps with a 4-step cap", () => {
+test("fixed-step accumulator runs 1/60 s steps with a 4-step cap (generic helper; ZUR-GH-012 frames use 1 step)", () => {
   assert.equal(SIM_STEP, 1 / 60);
-  assert.equal(MAX_STEPS_PER_FRAME, 4);
-  assert.equal(planFixedSteps(0, 1 / 60).steps, 1);
-  assert.equal(planFixedSteps(0, 1 / 30).steps, 2);
-  const slow = planFixedSteps(0, 0.2);
+  assert.equal(MAX_STEPS_PER_FRAME, 1, "ZUR-GH-012: strictly one transform-feedback step per frame");
+  assert.equal(planFixedSteps(0, 1 / 60, SIM_STEP, 4).steps, 1);
+  assert.equal(planFixedSteps(0, 1 / 30, SIM_STEP, 4).steps, 2);
+  const slow = planFixedSteps(0, 0.2, SIM_STEP, 4);
   assert.deepEqual([slow.steps, slow.accumulator], [4, 0]);
   let acc = 0;
   let total = 0;
   for (let i = 0; i < 90; i += 1) {
-    const r = planFixedSteps(acc, 1 / 90);
+    const r = planFixedSteps(acc, 1 / 90, SIM_STEP, 4);
     acc = r.accumulator;
     total += r.steps;
   }
   assert.ok(total >= 59 && total <= 60, `90 frames @90 Hz → ${total} steps`);
   const src = read("src/render/ParticleSystem3D.js");
   assert.match(src, /MAX_STEPS_PER_FRAME/);
-  assert.match(src, /SIM_STEP/);
+  assert.match(src, /planSimStep/);
 });
 
 test("hash32 thinning is deterministic and matches the GLSL constants", () => {
@@ -1079,9 +1079,10 @@ function hexSaturation(hex) {
 const frag32 = () => stripComments(read("src/shaders/render.frag.glsl"));
 const sim32 = () => stripComments(read("src/shaders/sim.vert.glsl"));
 
-test("ZUR-GH-011 storage key and schema are zur_state_v5_2 / 5.2 (v5.1, v5.0 + v4 keys kept as legacy)", () => {
-  assert.equal(STORAGE_KEY, "zur_state_v5_2");
-  assert.equal(STORAGE_SCHEMA, 5.2);
+test("ZUR-GH-011 storage key and schema are zur_state_v5_3 / 5.3 (v5.2, v5.1, v5.0 + v4 keys kept as legacy)", () => {
+  assert.equal(STORAGE_KEY, "zur_state_v5_3");
+  assert.equal(STORAGE_SCHEMA, 5.3);
+  assert.ok(LEGACY_STORAGE_KEYS.includes("zur_state_v5_2"));
   assert.ok(LEGACY_STORAGE_KEYS.includes("zur_state_v5_1"));
   assert.ok(LEGACY_STORAGE_KEYS.includes("zur_state_v5_0"));
   assert.ok(LEGACY_STORAGE_KEYS.includes("zur_state_v4_0"));
@@ -1255,7 +1256,7 @@ test("Stage 3.2 HUD: Scene, Palette, Hue shift on top; Hide HUD button; pulse la
 
 test("ZUR-GH-011 sw.js cache is v9, claims clients and precaches new shaders", () => {
   const sw = read("sw.js");
-  assert.match(sw, /const CACHE = "zur-shell-v9"/);
+  assert.match(sw, /const CACHE = "zur-shell-v10"/);
   assert.match(sw, /self\.skipWaiting\(\)/);
   assert.match(sw, /self\.clients\.claim\(\)/);
   assert.match(sw, /\.(html|js|glsl)/);
@@ -1626,7 +1627,7 @@ test("ZUR-GH-007 fractal-core is a 3D multi-orbital golden-spiral shell + lobe s
   assert.match(sim, /float lobeAz = \(1\.5707963 - u_time \* 0\.7 \+ TAU \* k\) \/ 7\.0/); // 7 sdCore lobes
   assert.match(sim, /float valley = max\(-lobes, 0\.0\)/);
   assert.match(sim, /valley \* \(0\.25 \+ 0\.35 \* band\)/); // audio-reactive breathing into the SDF valleys
-  assert.match(sim, /max\(R, coreRadius \+ 0\.12\)/);
+  assert.match(sim, /max\(R, coreRadius \+ MEGA_SWARM_INNER_R\)/);
   assert.match(sim, /if \(u_formationType == 4\) F \*= 0\.25;/);
 });
 
@@ -1795,7 +1796,7 @@ test("ZUR-GH-008 caps keepFactor at 0.90 for >= 16k agents and bounds steady-sta
   const frag = stripComments(read("src/shaders/render.frag.glsl"));
   assert.match(frag, /uniform float u_trailEnergyNorm;/);
   assert.match(frag, /float sizeNorm = u_particleSize > 1\.5 \? 1\.0 \/ pow\(max\(u_particleSize, 1\.0\), 0\.65\) : 1\.0;/);
-  assert.match(frag, /\* sqrt\(crowdNorm\) \* energyNorm, 1\.0\)/, "dart radiance scaled by u_trailEnergyNorm");
+  assert.match(frag, /\* sqrt\(crowdNorm\) \* energyNorm \* logoBoost, 1\.0\)/, "dart radiance scaled by u_trailEnergyNorm");
   assert.match(frag, /float capsuleAlpha = 0\.40 \* crowdNorm \* energyNorm \*/, "premultiplied capsule radiance + alpha scaled");
   const kaleido = stripComments(read("src/shaders/kaleido.frag.glsl"));
   assert.match(kaleido, /uniform vec3 u_paletteHue;/);
@@ -1895,10 +1896,10 @@ const g009 = {
   ps: () => read("src/render/ParticleSystem3D.js"),
 };
 
-test("ZUR-GH-011 sw.js cache is zur-shell-v9 and storage key zur_state_v5_2 with v5.1 + v4 migration", () => {
-  assert.match(read("sw.js"), /const CACHE = "zur-shell-v9"/);
-  assert.equal(STORAGE_KEY, "zur_state_v5_2");
-  assert.deepEqual(LEGACY_STORAGE_KEYS.slice(0, 3), ["zur_state_v5_1", "zur_state_v5_0", "zur_state_v4_0"]);
+test("ZUR-GH-011 sw.js cache is zur-shell-v10 and storage key zur_state_v5_3 with v5.2 + v5.1 + v4 migration", () => {
+  assert.match(read("sw.js"), /const CACHE = "zur-shell-v10"/);
+  assert.equal(STORAGE_KEY, "zur_state_v5_3");
+  assert.deepEqual(LEGACY_STORAGE_KEYS.slice(0, 4), ["zur_state_v5_2", "zur_state_v5_1", "zur_state_v5_0", "zur_state_v4_0"]);
   const old = structuredClone(MODE_A_PRESET);
   old.particles = { ...old.particles, particleCountTier: "16k", particleStyle: "orb" };
   const loaded = loadStoredState(mockStorage({ zur_state_v4_0: JSON.stringify({ storageSchema: 4.0, preset: old }) }));
@@ -1989,13 +1990,13 @@ test("ZUR-GH-009 particleStyle options exclude orb everywhere (state, HUD, shade
 test("ZUR-GH-009 particle style shading: blood-drop teardrop, synapse-spark, star-streak needle", () => {
   const f = g009.frag();
   assert.match(f, /length\(vec2\(uv\.x \* \(1\.0 \+ 0\.65 \* uv\.y\), uv\.y\)\)/);
-  assert.match(f, /mix\(vec3\(0\.18, 0\.0, 0\.02\), vec3\(0\.92, 0\.02, 0\.08\), core\)/);
-  assert.match(f, /vec3\(1\.0, 0\.35, 0\.35\)/);
+  assert.match(f, /mix\(vec3\(0\.18, 0\.0, 0\.02\), BLOOD_CORE, core\)/);
+  assert.match(f, /BLOOD_SPECULAR/); // ZUR-GH-012: wet highlight #FF8A96 replaces the old pink glint
   assert.match(f, /sin\(atan\(uv\.y, uv\.x\) \* 7\.0 \+ v_seed \* 19\.0\)/);
   assert.match(f, /v_neuralPulse > 0\.5/);
   assert.match(f, /vec3\(0\.7454, 1\.0, 1\.0\)/, "#E0FFFF in linear light");
   assert.match(g009.vert(), /clamp\(speed \* 14\.0, 1\.0, 6\.5\)/);
-  assert.match(g009.vert(), /headR = 1\.5/);
+  assert.match(g009.vert(), /headR = u_formationType == 5 \? LOGO_MIN_RADIUS_PX : 1\.5/);
 });
 
 test("ZUR-GH-009 colorPalette options + u_colorPalette in render.frag, core.frag and kaleido", () => {
@@ -2004,7 +2005,7 @@ test("ZUR-GH-009 colorPalette options + u_colorPalette in render.frag, core.frag
   assert.match(g009.frag(), /uniform int u_colorPalette;/);
   assert.match(g009.core(), /uniform int u_colorPalette;/);
   assert.match(stripComments(read("src/shaders/kaleido.frag.glsl")), /uniform int u_colorPalette;/);
-  assert.match(g009.frag(), /hsv2rgb\(vec3\(v_hue, 0\.95, 1\.0\)\)/);
+  assert.match(g009.frag(), /hsv2rgb\(vec3\(spatialHue\(\), 0\.95, 1\.0\)\)/);
   assert.match(g009.frag(), /step\(0\.35, fract\(sin\(dot\(gl_FragCoord\.xy, vec2\(12\.9898, 78\.233\)\) \+ u_time \* 43\.0\) \* 43758\.5453\)\) \* u_treble/);
   assert.match(g009.frag(), /\* u_trailEnergyNorm|energyNorm/);
   assert.match(g009.ps(), /gl\.uniform1i\(R\.u_colorPalette, paletteIndex\)/);
@@ -2266,7 +2267,7 @@ test("ZUR-GH-011 golden-cortex palette: index 4, 80% gold soma alpha 0.52 x1.85,
   assert.equal(gh010Math.GOLDEN_CORTEX_PULSE_THRESHOLD, 0.55);
   // (ZUR-GH-010 pulse boost 2.8 superseded by ZUR-GH-011 3.2.)
   const f = frag32();
-  assert.match(f, /u_colorPalette == 4 && v_neuralPulse > 0\.55/);
+  assert.match(f, /u_formationType == 6 && v_neuralPulse > 0\.55/);
   assert.match(stripComments(read("src/shaders/render.vert.glsl")), /uniform int u_colorPalette;/, "vertex stage sees the palette for the thalamic baseline");
   assert.match(f, /CORTEX_SOMA_ALPHA \/ 0\.40 \* 1\.5/, "capsule soma uses the same 0.52 floor");
 });
@@ -2280,7 +2281,7 @@ test("ZUR-GH-010 multi-hue spatial palettes: hue driven by position/hash, not a 
 
 test("ZUR-GH-010 draw path: dart3d TRIANGLES x12, other styles TRIANGLE_STRIP x4", () => {
   const ps = read("src/render/ParticleSystem3D.js");
-  assert.match(ps, /if \(dart\) gl\.drawArraysInstanced\(gl\.TRIANGLES, 0, 12, count\);/);
+  assert.match(ps, /if \(dart && dartVerts === 12\) gl\.drawArraysInstanced\(gl\.TRIANGLES, 0, 12, count\);/);
   assert.match(ps, /else gl\.drawArraysInstanced\(gl\.TRIANGLE_STRIP, 0, 4, count\);/);
 });
 
@@ -2539,7 +2540,7 @@ test("ZUR-GH-011 sticky header: Hide HUD + tab bar share one solid z-20 sticky c
 
 test("ZUR-GH-011 golden-cortex idle thalamic baseline fires above 0.55 with no audio", () => {
   const vert = stripComments(read("src/shaders/render.vert.glsl"));
-  assert.match(vert, /if \(u_colorPalette == 4\) \{/);
+  assert.match(vert, /if \(u_formationType == 6\) \{/);
   assert.match(vert, /float thalamic = sin\(length\(a_pos\.xyz\) \* 6\.0 - u_time \* 3\.8 \+ seed \* 1\.7\);/);
   assert.match(vert, /v_neuralPulse = max\(v_neuralPulse, smoothstep\(0\.55, 0\.95, thalamic\) \* 0\.78\);/);
   let audioIdleMax = 0;
@@ -2611,6 +2612,178 @@ test("ZUR-GH-012 linux default renderer + software calibration", () => {
     'process.platform === "linux" && !process.env.ZUR_ANGLE', 'ZUR_LINUX_ANGLE || "gl"', "ZUR_SW_DENSE_BLACK_MIN || 0.35",
     "ZUR_SW_BRAIN_LUMA_MIN || 0.36", "software ? SW_DENSE_BLACK_MIN : (process.env.ZUR_ANGLE === 'd3d11' ? 0.30 : 0.38)",
   ]) assert.ok(smoke.includes(needle), needle);
+});
+
+// ---------------------------------------------------------------- ZUR-GH-012
+const gh012 = {
+  vert: () => stripComments(read("src/shaders/render.vert.glsl")),
+  frag: () => stripComments(read("src/shaders/render.frag.glsl")),
+  sim: () => stripComments(read("src/shaders/sim.vert.glsl")),
+  audio: () => stripComments(read("src/audio/AudioEngine.js")),
+};
+const gh012App = await import("../src/app/AppState.js");
+const gh012Math = await import("../src/render/particleMath.js");
+
+test("ZUR-GH-012 sceneId is derived from hudTab for every HUD tab", () => {
+  const expected = { "deep-space": "particle-swarm-3d", "brain-3d": "particle-swarm-3d", "blood-swarm": "particle-swarm-3d", megastructure: "megastructure-3d" };
+  for (const tab of gh012App.VISUAL_HUD_TABS) {
+    const flat = gh012App.enforceTabConstraints({ ...gh012App.flattenPreset(gh012App.STAGE2_DEFAULT_PRESET), hudTab: tab, sceneId: "megastructure-3d" });
+    if (expected[tab]) assert.equal(flat.sceneId, expected[tab], tab);
+    else assert.equal(flat.sceneId, flat.shaderScene, tab);
+    assert.equal(gh012App.sceneForHud(tab, flat.shaderScene), flat.sceneId, tab);
+  }
+});
+
+test("ZUR-GH-012 Mode B applies deep-space / particle-swarm-3d / wormhole / 64k / 1.0; Mode A is consistent", () => {
+  const b = gh012App.applyModeKeepingScene(MODE_B_PRESET, gh012App.STAGE2_DEFAULT_PRESET);
+  assert.equal(b.hud.hudTab, "deep-space");
+  assert.equal(b.sceneId, "particle-swarm-3d");
+  assert.equal(b.particles.formationType, "wormhole");
+  assert.equal(b.particles.particleCountTier, "64k");
+  assert.equal(b.particles.particleSize, 1.0);
+  const desynced = { ...gh012App.STAGE2_DEFAULT_PRESET, sceneId: "megastructure-3d", hud: { ...gh012App.STAGE2_DEFAULT_PRESET.hud, hudTab: "deep-space" } };
+  assert.equal(gh012App.applyModeKeepingScene(MODE_B_PRESET, desynced).sceneId, "particle-swarm-3d");
+  const a = gh012App.applyModeKeepingScene(MODE_A_PRESET, gh012App.STAGE2_DEFAULT_PRESET);
+  assert.equal(a.sceneId, gh012App.sceneForHud(a.hud.hudTab, a.hud.shaderScene, a.hud.visualTab));
+});
+
+test("ZUR-GH-012 zur_state_v5_2 migrates to v5_3 and a desynced hudTab/sceneId is repaired", () => {
+  assert.equal(gh012App.STORAGE_KEY, "zur_state_v5_3");
+  assert.equal(gh012App.STORAGE_SCHEMA, 5.3);
+  assert.ok(gh012App.LEGACY_STORAGE_KEYS.includes("zur_state_v5_2"));
+  assert.equal(typeof gh012App.upgradeToV53, "function");
+  const bad = { ...gh012App.STAGE2_DEFAULT_PRESET, sceneId: "megastructure-3d", hud: { ...gh012App.STAGE2_DEFAULT_PRESET.hud, hudTab: "deep-space" } };
+  const loaded = loadStoredState(mockStorage({ zur_state_v5_2: JSON.stringify({ storageSchema: 5.2, preset: bad }) }));
+  assert.equal(loaded.migrated, true);
+  assert.equal(loaded.preset.hud.hudTab, "deep-space");
+  assert.equal(loaded.preset.sceneId, "particle-swarm-3d");
+  const current = loadStoredState(mockStorage({ zur_state_v5_3: JSON.stringify({ storageSchema: 5.3, preset: bad }) }));
+  assert.equal(current.preset.sceneId, "particle-swarm-3d", "even a current-schema desync is repaired");
+  assert.equal(new AppState(bad).preset.sceneId, "particle-swarm-3d");
+});
+
+test("ZUR-GH-012 one transform-feedback step per frame: planSimStep, MAX_STEPS_PER_FRAME 1, simSteps stat", () => {
+  assert.equal(gh012Math.MAX_STEPS_PER_FRAME, 1);
+  assert.equal(gh012Math.MAX_SIM_DT, 1 / 30);
+  assert.deepEqual(gh012Math.planSimStep(0), { steps: 0, simDt: 0 });
+  assert.deepEqual(gh012Math.planSimStep(-1), { steps: 0, simDt: 0 });
+  assert.deepEqual(gh012Math.planSimStep(1 / 60), { steps: 1, simDt: 1 / 60 });
+  assert.deepEqual(gh012Math.planSimStep(0.5), { steps: 1, simDt: 1 / 30 });
+  const ps = read("src/render/ParticleSystem3D.js");
+  assert.match(ps, /planSimStep\(/);
+  assert.match(ps, /simSteps/);
+  assert.match(ps, /stepsLastFrame/);
+  assert.doesNotMatch(ps, /planFixedSteps|this\.accumulator/);
+});
+
+test("ZUR-GH-012 dart3d uses a 4-vertex velocity dart quad from 131072 agents", () => {
+  assert.equal(gh012Math.DART_QUAD_MIN_COUNT, 131072);
+  assert.equal(gh012Math.dartVertexCount(131071), 12);
+  assert.equal(gh012Math.dartVertexCount(131072), 4);
+  assert.equal(gh012Math.dartVertexCount(262144), 4);
+  const ps = read("src/render/ParticleSystem3D.js");
+  assert.match(ps, /dartVerts/);
+  assert.match(ps, /gl\.TRIANGLE_STRIP, 0, 4, count/);
+  assert.match(gh012.vert(), /u_shape == 2/);
+  assert.match(gh012.frag(), /u_shape == 2/);
+});
+
+test("ZUR-GH-012 full-spectrum / true-neon hue uses coherent spatial bands, not per-particle v_seed", () => {
+  const f = gh012.frag();
+  const fn = f.slice(f.indexOf("float spatialHue()"), f.indexOf("vec3 palettePick"));
+  assert.match(fn, /atan\(v_worldPos\.y, v_worldPos\.x/);
+  assert.match(fn, /v_worldPos\.z/);
+  assert.doesNotMatch(fn, /v_seed/);
+  assert.match(f, /hsv2rgb\(vec3\(spatialHue\(\), 0\.95, 1\.0\)\)/);
+  assert.match(f, /float g = spatialHue\(\) \* 4\.0;/);
+  assert.match(gh012.vert(), /flat out vec3 v_worldPos/);
+  assert.match(gh012.vert(), /\(hueHash - 0\.5\) \* 0\.028/);
+});
+
+test("ZUR-GH-012 Gargantua: edge-on disk plane normal (0.08, 0.96, -0.26) + 28% photon ring + 12% jets", () => {
+  const sim = gh012.sim();
+  assert.match(sim, /diskNormal = normalize\(vec3\(0\.08, 0\.96, -0\.26\)\)/);
+  assert.match(sim, /jetN = normalize\(vec3\(0\.08, 0\.96, -0\.26\)\)/);
+  assert.ok(Math.abs(Math.hypot(0.08, 0.96, -0.26) - 1) < 0.01, "stated normal is unit length");
+  assert.match(gh012.vert(), /u_formationType == 8/);
+});
+
+test("ZUR-GH-012 logo-attractor bypasses crowdNorm: 2.6 px, alpha >= 0.88, 1.9x neon", () => {
+  const f = gh012.frag();
+  const v = gh012.vert();
+  assert.match(f, /const float LOGO_ALPHA_FLOOR = 0\.88;/);
+  assert.match(f, /const float LOGO_NEON_RADIANCE = 1\.9;/);
+  assert.match(v, /const float LOGO_MIN_RADIUS_PX = 2\.6;/);
+  assert.match(f, /if \(logo\) crowdNorm = max\(crowdNorm, 1\.0\);/);
+  assert.match(f, /bool logo = u_formationType == 5;/);
+  assert.match(v, /radiusPx = max\(radiusPx, LOGO_MIN_RADIUS_PX\)/);
+  assert.equal(FORMATION_TYPES_GH012().indexOf("logo-attractor"), 5);
+});
+function FORMATION_TYPES_GH012() { return gh012Math.FORMATION_TYPES; }
+
+test("ZUR-GH-012 blood glass runners 2.6x with #FF0A22 core, #FF8A96 specular, >= 3.2 px; brain 0.52/0.78/3.2 on all palettes", () => {
+  const f = gh012.frag();
+  assert.match(f, /const float BLOOD_RUNNER_RADIANCE = 2\.6;/);
+  const rawFrag = read("src/shaders/render.frag.glsl");
+  assert.match(rawFrag, /BLOOD_CORE = vec3\(1\.0, 0\.003, 0\.016\); *\/\/ #FF0A22/);
+  assert.match(rawFrag, /BLOOD_SPECULAR = vec3\(1\.0, 0\.254, 0\.305\); *\/\/ #FF8A96/);
+  assert.match(gh012.vert(), /const float BLOOD_MIN_RUNNER_PX = 3\.2;/);
+  assert.match(f, /const float CORTEX_SOMA_ALPHA = 0\.52;/);
+  assert.match(f, /const float CORTEX_PULSE_BOOST = 3\.2;/);
+  assert.match(f, /bool cortexFiring = u_formationType == 6 && v_neuralPulse > 0\.55;/);
+  assert.doesNotMatch(f.match(/bool cortexSoma[^\n]*/)[0], /u_colorPalette/, "not golden-cortex only");
+  const v = gh012.vert();
+  assert.match(v, /if \(u_formationType == 6\) \{/);
+  assert.match(v, /\* 0\.78\)/);
+  assert.equal(gh012Math.FORMATION_TYPES.indexOf("neural-brain"), 6);
+});
+
+test("ZUR-GH-012 Option B: blood-red 3D Brain stays crimson (#FF0818/#C8000A), #FF5566 only on peak flashes; smoke gates luma >= 0.12 + R > 2.2G", () => {
+  const f = gh012.frag();
+  const rawFrag = read("src/shaders/render.frag.glsl");
+  assert.doesNotMatch(f, /mix\(c, BLOOD_SPECULAR, 0\.75\)/, "no pink blend on the blood-red brain");
+  assert.match(rawFrag, /BRAIN_CRIMSON = vec3\(1\.0, 0\.0024, 0\.0090\); *\/\/ #FF0818/);
+  assert.match(rawFrag, /BRAIN_CRIMSON_DEEP = vec3\(0\.578, 0\.0, 0\.0030\); *\/\/ #C8000A/);
+  assert.match(rawFrag, /BRAIN_SCARLET_FLASH = vec3\(1\.0, 0\.0908, 0\.1329\); *\/\/ #FF5566/);
+  assert.match(f, /v_neuralPulse > 0\.65 \? BRAIN_SCARLET_FLASH : mix\(BRAIN_CRIMSON_DEEP, BRAIN_CRIMSON,/);
+  assert.match(f, /if \(u_colorPalette == 3 && u_formationType == 6\) flashC = v_neuralPulse > 0\.65 \? BRAIN_SCARLET_FLASH : base;/, "no cyan dendrite flash on the crimson brain");
+  const smoke = read("tests/smoke-zur-gh-010.mjs");
+  assert.match(smoke, /m\.activeMeanLuma >= 0\.12\)\) problems\.push\(`3D Brain blood-red/);
+  assert.match(smoke, /m\.meanR > 2\.2 \* m\.meanG/);
+  assert.match(smoke, /else if \(!\(m\.activeMeanLuma >= 0\.25\)\) problems\.push\(`3D Brain \$\{palette\}/, "other 4 palettes keep >= 0.25");
+});
+
+test("ZUR-GH-012 megastructure swarm r >= 0.62 at 0.35x alpha; canyon sky/floor clamp 0.03; hue only on emissive lines", () => {
+  assert.match(gh012.sim(), /const float MEGA_SWARM_INNER_R = 0\.62;/);
+  assert.match(gh012.frag(), /const float MEGA_SWARM_ALPHA = 0\.35;/);
+  assert.match(gh012.frag(), /u_megastructure == 1/);
+  const canyon = stripComments(read("src/shaders/spectral-canyon.frag.glsl"));
+  assert.match(canyon, /const float OBSIDIAN = 0\.03;/);
+  assert.match(canyon, /min\(col, vec3\(OBSIDIAN_LIN\)\)/);
+  const ps = read("src/render/ParticleSystem3D.js");
+  assert.match(ps, /coreEye/);
+  assert.match(ps, /u_megastructure/);
+});
+
+test("ZUR-GH-012 Android mic fallback: raw -> {audio:true} -> silent 124 BPM Demo Beat, gesture order kept", () => {
+  const raw = read("src/audio/AudioEngine.js");
+  const a = gh012.audio();
+  assert.match(a, /export const DEMO_BEAT_BPM = 124;/);
+  assert.match(a, /getUserMedia\(\{ audio: true \}\)/);
+  assert.match(a, /micStage = "demo"/);
+  assert.match(a, /Mic locked by another app — Demo Beat 124 BPM \(silent\)/);
+  const start = raw.slice(raw.indexOf("export function startMicCapture"));
+  assert.ok(start.indexOf("resume()") !== -1 && start.indexOf("resume()") < start.indexOf("getUserMedia"), "resume() is invoked before getUserMedia");
+  assert.ok(start.indexOf("getUserMedia") < start.indexOf("await "), "getUserMedia is invoked synchronously, before any await");
+  const demo = a.slice(a.indexOf("function startDemoBeat"), a.indexOf("export function startTestOscillator"));
+  assert.doesNotMatch(demo, /context\.destination/, "demo beat is analysed, never connected to the destination");
+  for (const n of ["kick", "bass", "lead"]) assert.match(demo, new RegExp(`const ${n} = voice`));
+  assert.match(read("src/controls/ControlHUD.js"), /setMicStatus/);
+  assert.match(read("src/app/main.js"), /setMicStatus\(mode === "microphone"/);
+});
+
+test("ZUR-GH-012 service worker cache zur-shell-v10", () => {
+  assert.match(read("sw.js"), /const CACHE = "zur-shell-v10"/);
 });
 
 for (const entry of tests) {

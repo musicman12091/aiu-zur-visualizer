@@ -114,7 +114,7 @@ const consoleErrors = [];
 const pageErrors = [];
 const webglWarnings = [];
 const problems = [];
-const results = { tabs: {}, blank: {}, hues: {}, density: {}, blackhole: {} };
+const results = { tabs: {}, blank: {}, hues: {}, density: {}, blackhole: {}, gh012: {} };
 
 try {
   let target = null;
@@ -191,6 +191,9 @@ try {
   if (hudError) throw new Error(`HUD error after boot: ${hudError}`);
   if (!(await evaluate("Boolean(window.__ZUR_DEBUG__.particleSystem?.ready)"))) throw new Error("particle system not ready after boot");
 
+  const bootSync = await evaluate(`import("/src/app/AppState.js").then((m) => { const p = window.__ZUR_DEBUG__.state.preset; return { hudTab: p.hud?.hudTab, sceneId: p.sceneId, derived: m.sceneForHud(p.hud?.hudTab, p.hud?.shaderScene, p.hud?.visualTab) }; })`);
+  results.gh012.bootSync = bootSync;
+
   const rendererInfo = await evaluate(`(() => {
     const gl = window.__ZUR_DEBUG__.shaderHost.gl;
     const ext = gl.getExtension("WEBGL_debug_renderer_info");
@@ -257,8 +260,9 @@ try {
         gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, buf);
         let total = 0; let black = 0; let white = 0; let colored = 0;
         let inTotal = 0; let inBlack = 0;
-        let lit = 0; let litLuma = 0; let lumaSum = 0;
+        let lit = 0; let litLuma = 0; let lumaSum = 0; let litR = 0; let litG = 0; let litB = 0;
         const sectors = new Array(12).fill(0);
+        let satSum = 0; let bn = 0; let sx = 0; let sy = 0; let sxx = 0; let syy = 0;
         for (let y = 0; y < h; y += 2) {
           for (let x = 0; x < w; x += 2) {
             const i = (y * w + x) * 4;
@@ -268,9 +272,11 @@ try {
             if (mx <= 0.03) black += 1;
             const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
             lumaSum += luma;
-            if (mx > 0.03) { lit += 1; litLuma += luma; }
+            if (mx > 0.03) { lit += 1; litLuma += luma; litR += r; litG += g; litB += b; }
             if (buf[i] >= 245 && buf[i + 1] >= 245 && buf[i + 2] >= 245) white += 1;
             const [hh, ss, vv] = rgb2hsv(r, g, b);
+            if (mx > 0.03) satSum += ss;
+            if (rad > 0 && mx > 0.25 && Math.abs(x - cx) > 1.5 * rad && Math.abs(x - cx) < 4 * rad && Math.abs(y - cy) < 4 * rad) { bn += 1; sx += x - cx; sy += y - cy; sxx += (x - cx) ** 2; syy += (y - cy) ** 2; }
             if (ss > 0.25 && vv > 0.15) { colored += 1; sectors[Math.min(11, Math.floor(hh * 12))] += 1; }
             if (rad > 0 && Math.hypot(x - cx, y - cy) < rad) { inTotal += 1; if (mx <= 0.03) inBlack += 1; }
           }
@@ -280,7 +286,10 @@ try {
           hueSectorCount: sectors.filter((n) => colored > 0 && n / colored >= 0.01).length,
           coloredFraction: colored / total,
           centerBlackRatio: inTotal ? inBlack / inTotal : null, centerSamples: inTotal,
+          meanSat: lit ? satSum / lit : 0,
+          barN: bn, barSpreadX: bn ? Math.sqrt(Math.max(sxx / bn - (sx / bn) ** 2, 0)) : 0, barSpreadY: bn ? Math.sqrt(Math.max(syy / bn - (sy / bn) ** 2, 0)) : 0,
           activeMeanLuma: lit ? litLuma / lit : 0, activeFraction: lit / total, frameMeanLuma: lumaSum / total,
+          meanR: lit ? litR / lit : 0, meanG: lit ? litG / lit : 0, meanB: lit ? litB / lit : 0,
         };
     };
     window.__zurMetrics = (cx, cy, rad) => new Promise((resolve) => requestAnimationFrame(() => resolve(analyse(cx, cy, rad))));
@@ -297,6 +306,8 @@ try {
   })()`);
 
   const denseBlackMin = software ? SW_DENSE_BLACK_MIN : (process.env.ZUR_ANGLE === 'd3d11' ? 0.30 : 0.38);
+  const BH_DISK_FRAMES = Number(process.env.ZUR_BH_FRAMES || 80); // deliberate exception to the 4-6 frame rule: the underdamped formation spring needs ~2.7 s of sim time (80 x 34 ms) before the disk plane is visible
+  const BH_ASPECT_MIN = Number(process.env.ZUR_BH_ASPECT_MIN || 1.5);
   const brainMin = software ? SW_BRAIN_LUMA_MIN : Number(process.env.ZUR_BRAIN_LUMA_MIN || 0.36);
 
 
@@ -619,6 +630,37 @@ try {
   if (!(bh.centerBlackRatio >= 0.9)) problems.push(`blackhole centerBlackRatio ${bh.centerBlackRatio} < 0.90`);
   if (!(bh.whiteClip === 0)) problems.push(`blackhole whiteClip ${bh.whiteClip}`);
   phase("blackhole gate", { gateMs: Date.now() - gbh, metrics: results.blackhole });
+  // ---- ZUR-GH-012 edge-on Gargantua: disk pixels around the void form a horizontal bar (equatorial wings vs polar columns, lit-pixel density).
+  // Runs at 64k with short trails and extra frames so the formation has time to converge (the 256k void gate above only
+  // needs the horizon discard).
+  {
+    const g0 = Date.now();
+    await goTab("deep-space");
+    await set("sel-formation", "supermassive-blackhole");
+    await set("sel-kinetic-mode", "accretion-warp");
+    await set("sel-count", "64k");
+    await set("sel-particle-style", "dart3d");
+    await evaluate("window.__zurSetRange('rng-trail-length', 0.1)").catch(() => {});
+    await evaluate("window.__zurSetRange('rng-size', 0.6)").catch(() => {});
+    let d;
+    if (software) {
+      d = await evaluate(`(() => { window.__zurSw.step(${BH_DISK_FRAMES}, ${SW_FRAME_DT_MS}); return window.__zurReadNow(${cx}, ${cy}, ${rad}); })()`);
+    } else {
+      await sleep(5000);
+      d = await evaluate(`window.__zurMetrics(${cx}, ${cy}, ${rad})`);
+    }
+    // Vertical spread of the lit pixels in the left/right wing columns (1.5R < |dx| < 4R, |dy| < 4R; the face-on photon ring and
+    // the polar jets stay out of them). A uniform face-on disk has sigma_y = 4R / sqrt(3); the edge-on bar is much thinner.
+    const aspect = (4 * rad / Math.sqrt(3)) / Math.max(d.barSpreadY, 1);
+    results.gh012.blackholeDisk = { frames: software ? BH_DISK_FRAMES : undefined, litPixels: d.barN, spreadX: +d.barSpreadX.toFixed(1), spreadY: +d.barSpreadY.toFixed(1), aspect: +aspect.toFixed(2), centerBlackRatio: +(d.centerBlackRatio ?? 0).toFixed(3), min: BH_ASPECT_MIN };
+    await shot("gh012-blackhole-disk");
+    phase("blackhole disk orientation gate", { gateMs: Date.now() - g0, metrics: results.gh012.blackholeDisk });
+    if (!(d.barN > 200)) problems.push(`blackhole disk lit pixels ${d.barN} <= 200`);
+    if (!(aspect >= BH_ASPECT_MIN)) problems.push(`blackhole disk aspect ${aspect.toFixed(2)} < ${BH_ASPECT_MIN}`);
+    if (!(d.centerBlackRatio >= 0.9)) problems.push(`blackhole disk run centerBlackRatio ${d.centerBlackRatio}`);
+    if (!(d.whiteClip === 0)) problems.push(`blackhole disk whiteClip ${d.whiteClip}`);
+    await evaluate("window.__zurSetRange('rng-size', 1)").catch(() => {});
+  }
   if (software) {
     // ZUR-GH-012: SwiftShader runs the 256k gates from the deep-space wormhole state, then golden-cortex (64k).
     await evaluate("window.__zurSetRange('rng-trail-length', " + trailLength0 + ")").catch(() => {});
@@ -665,10 +707,214 @@ try {
     phase("brain luma gate", { gateMs: Date.now() - gbr, metrics: results.brainLuma });
   }
 
+
+  // ================= ZUR-GH-012 gates =================
+  // ---- tab/scene sync: boot, Mode B, Mode A
+  {
+    const g0 = Date.now();
+    const sync = () => evaluate(`import("/src/app/AppState.js").then((m) => { const s = window.__ZUR_DEBUG__.state.preset; return { hudTab: s.hud?.hudTab, sceneId: s.sceneId, derived: m.sceneForHud(s.hud?.hudTab, s.hud?.shaderScene, s.hud?.visualTab), formation: s.particles.formationType, tier: s.particles.particleCountTier, size: s.particles.particleSize, activeTab: document.querySelector('.hud-tab[aria-selected="true"], .hud-tab.is-active')?.dataset.hudTab }; })`);
+    await goTab("megastructure");
+    const mega = await sync();
+    await click("#btn-mode-b");
+    await sleep(300);
+    const modeB = await sync();
+    await click("#btn-mode-a");
+    await sleep(300);
+    const modeA = await sync();
+    results.gh012.tabSceneSync = { boot: bootSync, mega, modeB, modeA };
+    phase("tabSceneSync gate", { gateMs: Date.now() - g0, metrics: results.gh012.tabSceneSync });
+    if (bootSync.sceneId !== bootSync.derived) problems.push(`boot hudTab ${bootSync.hudTab} != sceneId ${bootSync.sceneId}`);
+    if (mega.sceneId !== "megastructure-3d" || mega.hudTab !== "megastructure") problems.push(`megastructure tab desync ${JSON.stringify(mega)}`);
+    if (modeB.hudTab !== "deep-space" || modeB.sceneId !== "particle-swarm-3d" || modeB.formation !== "wormhole" || modeB.tier !== "64k" || modeB.size !== 1) problems.push(`Mode B ${JSON.stringify(modeB)}`);
+    if (modeA.sceneId !== modeA.derived) problems.push(`Mode A tab/scene desync ${JSON.stringify(modeA)}`);
+    if (modeB.activeTab && modeB.activeTab !== "deep-space") problems.push(`Mode B highlighted tab ${modeB.activeTab}`);
+  }
+
+  const settleFrames = async (n, ms = 700) => {
+    if (software) await evaluate(`window.__zurSw.step(${n}, ${SW_FRAME_DT_MS})`);
+    else await sleep(ms);
+  };
+  const setParticles = (patch) => evaluate(`import("/src/render/particleMath.js").then((m) => { window.__ZUR_DEBUG__.state.updatePreset((draft) => { draft.particles = m.normalizeParticles({ ...draft.particles, ...${JSON.stringify(patch)} }); }); return true; })`);
+
+  // ---- 1 sim step per frame + 256k dart quad
+  {
+    const g0 = Date.now();
+    await goTab("deep-space");
+    await set("sel-formation", "wormhole");
+    await set("sel-particle-style", "dart3d");
+    await set("sel-palette", "true-neon");
+    const readStats = () => evaluate("(() => { const st = window.__ZUR_DEBUG__.particleSystem.stats(); return { stepsLastFrame: st.stepsLastFrame, simSteps: st.simSteps, dartVerts: st.dartVerts, count: st.count ?? window.__ZUR_DEBUG__.particleSystem.count }; })()");
+    const samples = {};
+    for (const tier of ["64k", "256k"]) {
+      await set("sel-count", tier);
+      const reads = [];
+      for (let i = 0; i < 4; i += 1) { await settleFrames(1, 120); reads.push(await readStats()); }
+      samples[tier] = reads;
+    }
+    results.gh012.simSteps = { at64k: samples["64k"].at(-1), at256k: samples["256k"].at(-1), allSteps: [...samples["64k"], ...samples["256k"]].map((r) => r.stepsLastFrame) };
+    phase("simSteps / dart quad gate", { gateMs: Date.now() - g0, metrics: results.gh012.simSteps });
+    for (const r of [...samples["64k"], ...samples["256k"]]) {
+      if (r.stepsLastFrame !== 1 || r.simSteps !== 1) problems.push(`stepsLastFrame ${r.stepsLastFrame} / simSteps ${r.simSteps} != 1`);
+    }
+    const last = samples["256k"].at(-1);
+    if (last.count !== 262144) problems.push(`simSteps gate count ${last.count}`);
+    if (last.dartVerts !== 4) problems.push(`256k dartVerts ${last.dartVerts} != 4`);
+    if (samples["64k"].at(-1).dartVerts !== 12) problems.push(`64k dartVerts ${samples["64k"].at(-1).dartVerts} != 12`);
+  }
+
+  // ---- 256k meanSat for the rainbow palettes
+  for (const palette of ["full-spectrum", "true-neon"]) {
+    const g0 = Date.now();
+    await set("sel-palette", palette);
+    const m = await measure(`256k meanSat ${palette}`, 7000);
+    const count = await evaluate("window.__ZUR_DEBUG__.particleSystem.count");
+    results.gh012[`meanSat_${palette}`] = { count, meanSat: +m.meanSat.toFixed(3), whiteClip: +m.whiteClip.toFixed(4), hueSectorCount: m.hueSectorCount, min: 0.55 };
+    phase(`256k meanSat ${palette}`, { gateMs: Date.now() - g0, metrics: results.gh012[`meanSat_${palette}`] });
+    if (count !== 262144) problems.push(`meanSat ${palette} count ${count}`);
+    if (!(m.meanSat >= 0.55)) problems.push(`256k ${palette} meanSat ${m.meanSat.toFixed(3)} < 0.55`);
+    if (m.whiteClip !== 0) problems.push(`256k ${palette} whiteClip ${m.whiteClip}`);
+  }
+
+  // ---- logo-attractor glyph luma at inherited particleSize 0.5
+  {
+    const g0 = Date.now();
+    await evaluate("document.getElementById('btn-stop')?.click()");
+    await goTab("blood-swarm", "logo-text");
+    await set("sel-count", "64k");
+    await set("sel-attractor-preset", "AI: UNDERGROUND");
+    await set("sel-palette", "true-neon");
+    await setParticles({ particleSize: 0.5 });
+    await sleep(400);
+    const m = await measure("logo AI: UNDERGROUND", 4500);
+    const f = (await flat()).flat;
+    results.gh012.logoLuma = { formation: f.formationType, text: f.attractorText, particleSize: f.particleSize, activeMeanLuma: +m.activeMeanLuma.toFixed(3), activeFraction: +m.activeFraction.toFixed(4), min: 0.12 };
+    await shot("gh012-logo");
+    phase("logo glyph luma gate", { gateMs: Date.now() - g0, metrics: results.gh012.logoLuma });
+    if (f.formationType !== "logo-attractor") problems.push(`logo formation ${f.formationType}`);
+    if (!(m.activeMeanLuma >= 0.12)) problems.push(`logo glyph luma ${m.activeMeanLuma.toFixed(3)} < 0.12`);
+    if (!(m.activeFraction > 0.0005)) problems.push(`logo glyph pixels ${m.activeFraction}`);
+  }
+
+  // ---- 3D Brain on all 5 palettes
+  {
+    const g0 = Date.now();
+    await goTab("brain-3d");
+    await setParticles({ formationType: "neural-brain", particleStyle: "synapse-spark", kineticMode: "synapse-cascade", particleCountTier: "64k", particleSize: 1.0 });
+    results.gh012.brainPalettes = {};
+    for (const palette of ["true-neon", "full-spectrum", "white-static", "blood-red", "golden-cortex"]) {
+      await set("sel-palette", palette);
+      const m = await measure(`brain ${palette}`, 4500);
+      results.gh012.brainPalettes[palette] = { activeMeanLuma: +m.activeMeanLuma.toFixed(3), activeFraction: +m.activeFraction.toFixed(3), whiteClip: +m.whiteClip.toFixed(4), meanR: +m.meanR.toFixed(3), meanG: +m.meanG.toFixed(3), meanB: +m.meanB.toFixed(3) };
+      if (palette === "blood-red") {
+        // Option B: deep arterial crimson. Pure #FF0000 caps at 0.2126 Rec.709 luma, so gate luma >= 0.12 + red dominance.
+        if (!(m.activeMeanLuma >= 0.12)) problems.push(`3D Brain blood-red luma ${m.activeMeanLuma.toFixed(3)} < 0.12`);
+        if (!(m.meanR > 2.2 * m.meanG)) problems.push(`3D Brain blood-red not red-dominant: meanR ${m.meanR.toFixed(3)} <= 2.2 * meanG ${m.meanG.toFixed(3)}`);
+      } else if (!(m.activeMeanLuma >= 0.25)) problems.push(`3D Brain ${palette} luma ${m.activeMeanLuma.toFixed(3)} < 0.25`);
+      if (m.whiteClip !== 0) problems.push(`3D Brain ${palette} whiteClip ${m.whiteClip}`);
+    }
+    phase("brain all-palette luma gate", { gateMs: Date.now() - g0, metrics: results.gh012.brainPalettes });
+  }
+
+  // ---- spectral canyon obsidian at hueShift -0.83
+  {
+    const g0 = Date.now();
+    await goTab("canyon-pulse", "spectral-canyon-3d");
+    await evaluate("window.__zurSetRange('rng-hue', -0.83)");
+    const m = await measure("spectral canyon", 3000);
+    const scene = (await flat()).flat;
+    results.gh012.canyon = { sceneId: scene.sceneId, hueShift: scene.hueShift, blackRatio: +m.blackRatio.toFixed(3), whiteClip: +m.whiteClip.toFixed(4), min: 0.42 };
+    await shot("gh012-canyon");
+    phase("spectral canyon obsidian gate", { gateMs: Date.now() - g0, metrics: results.gh012.canyon });
+    if (scene.sceneId !== "spectral-canyon-3d") problems.push(`canyon sceneId ${scene.sceneId}`);
+    if (!(m.blackRatio >= 0.42)) problems.push(`canyon blackRatio ${m.blackRatio.toFixed(3)} < 0.42`);
+    await evaluate("window.__zurSetRange('rng-hue', 0)");
+  }
+
+  // ---- megastructure camera modes visibly move the raymarch eye
+  {
+    const g0 = Date.now();
+    await goTab("megastructure");
+    const out = {};
+    for (const mode of ["orbit-3d", "tunnel-fly"]) {
+      await set("sel-camera-mode", mode).catch(() => {});
+      await settleFrames(2, 300);
+      const a = await evaluate("(() => { const st = window.__ZUR_DEBUG__.particleSystem.stats(); return { eye: st.coreEye, fwd: st.coreForward }; })()");
+      await settleFrames(5, 1500);
+      const b = await evaluate("(() => { const st = window.__ZUR_DEBUG__.particleSystem.stats(); return { eye: st.coreEye, fwd: st.coreForward }; })()");
+      const dist = (p, q) => Math.hypot(...p.map((v, i) => v - q[i]));
+      out[mode] = { eyeDelta: +dist(a.eye, b.eye).toFixed(3), fwdDelta: +dist(a.fwd, b.fwd).toFixed(3) };
+      if (!(out[mode].eyeDelta > 0.05 || out[mode].fwdDelta > 0.01)) problems.push(`megastructure ${mode} camera did not move ${JSON.stringify(out[mode])}`);
+    }
+    results.gh012.megaCamera = out;
+    phase("megastructure camera gate", { gateMs: Date.now() - g0, metrics: out });
+  }
+
+  // ---- Android mic fallback: raw -> {audio:true} -> silent Demo Beat
+  {
+    const g0 = Date.now();
+    await evaluate("document.getElementById('btn-stop')?.click()");
+    await goTab("deep-space");
+    await evaluate(`(() => { window.__zurGum = []; navigator.mediaDevices.getUserMedia = (c) => { window.__zurGum.push(JSON.stringify(c)); const e = new Error("Could not start audio source"); e.name = "NotReadableError"; return Promise.reject(e); }; return true; })()`);
+    await evaluate("document.getElementById('btn-mic').click()");
+    await sleep(900);
+    await settleFrames(5, 800);
+    const mic = await evaluate(`(() => { const d = window.__ZUR_DEBUG__; const diag = d.getDiagnostics(); const ms = d.getMicState();
+      const snap = d.readSnapshot ? d.readSnapshot() : null; const f = d.extractor?.update ? null : null;
+      return { attempts: window.__zurGum.map((s) => JSON.parse(s)), micStage: ms.micStage, demoBeat: ms.demoBeat, destinationConnections: diag.destinationConnections,
+        capture: d.state.status.capture, label: document.getElementById('mic-status')?.textContent || '', labelVisible: !!document.getElementById('mic-status') && !document.getElementById('mic-status').hidden && document.getElementById('mic-status').offsetParent !== null,
+        hudError: document.getElementById('hud-error')?.textContent || '', rms: diag.rms ?? null }; })()`);
+    const feat = await evaluate("(() => { const f = window.__ZUR_DEBUG__.extractor.last || window.__ZUR_DEBUG__.extractor.frame || null; return f ? { rms: f.rms, bass: f.bass, mid: f.mid, treble: f.treble } : null; })()");
+    // sample analysed features over several frames (beat is periodic; take the max)
+    let maxRms = 0; let maxBass = 0;
+    for (let i = 0; i < 24 && !(maxRms > 0.001 && maxBass > 0.001); i += 1) {
+      await settleFrames(1, 120);
+      const v = await evaluate("(() => { const d = window.__ZUR_DEBUG__; const a = d.readSnapshot(); const fr = d.extractor.update(a); return { rms: fr.rms, bass: fr.bass, mid: fr.mid, treble: fr.treble }; })()").catch(() => null);
+      if (v) { maxRms = Math.max(maxRms, v.rms || 0); maxBass = Math.max(maxBass, v.bass || 0); }
+      await sleep(150); // audio runs in real time, even when the renderer is stepped deterministically
+    }
+    results.gh012.mic = { ...mic, feat, maxRms: +maxRms.toFixed(4), maxBass: +maxBass.toFixed(4) };
+    phase("mic fallback gate", { gateMs: Date.now() - g0, metrics: results.gh012.mic });
+    if (mic.attempts.length !== 2) problems.push(`mic getUserMedia attempts ${mic.attempts.length} != 2`);
+    else {
+      if (mic.attempts[0]?.audio?.echoCancellation !== false) problems.push(`mic first attempt not raw ${JSON.stringify(mic.attempts[0])}`);
+      if (JSON.stringify(mic.attempts[1]) !== JSON.stringify({ audio: true })) problems.push(`mic second attempt ${JSON.stringify(mic.attempts[1])}`);
+    }
+    if (mic.micStage !== "demo") problems.push(`micStage ${mic.micStage}`);
+    if (!(mic.demoBeat?.running && mic.demoBeat?.bpm === 124)) problems.push(`demo beat ${JSON.stringify(mic.demoBeat)}`);
+    if (mic.destinationConnections !== 0) problems.push(`demo beat destinationConnections ${mic.destinationConnections}`);
+    if (!/Demo Beat 124 BPM \(silent\)/.test(mic.label) || !mic.labelVisible) problems.push(`mic label ${JSON.stringify([mic.label, mic.labelVisible])}`);
+    if (!(maxRms > 0.001) || !(maxBass > 0.001)) problems.push(`demo beat analysed rms ${maxRms} bass ${maxBass} not > 0`);
+    await evaluate("document.getElementById('btn-stop')?.click()");
+  }
+
   if (software) await evaluate("window.__ZUR_DEBUG__.renderHost.start()");
 
   const diag = await evaluate("window.__ZUR_DEBUG__.getDiagnostics()");
   results.destinationConnections = diag.destinationConnections;
+
+  // ---- reload from a stored desynced zur_state_v5_2 -> repaired by the v5_3 migration
+  {
+    const g0 = Date.now();
+    await send("Page.navigate", { url: `${base}/sw.js` });
+    await sleep(500);
+    await evaluate(`import("/src/app/AppState.js").then((m) => { localStorage.clear(); const p = JSON.parse(JSON.stringify(m.STAGE2_DEFAULT_PRESET)); p.hud.hudTab = "deep-space"; p.sceneId = "megastructure-3d";
+      localStorage.setItem("zur_state_v5_2", JSON.stringify({ storageSchema: 5.2, preset: p })); return true; })`).catch(async () => {
+      // 404 document has no module base: write the raw envelope instead
+      await evaluate(`localStorage.setItem("zur_state_v5_2", JSON.stringify({ storageSchema: 5.2, preset: { __raw: true } }))`);
+    });
+    await send("Page.navigate", { url: `${base}/?debug=1` });
+    let boot2 = "";
+    for (let attempt = 0; attempt < 150; attempt += 1) {
+      boot2 = await evaluate("window.__ZUR_BOOT__ || ''").catch(() => "");
+      if (boot2 === "ok" || boot2 === "error") break;
+      await sleep(100);
+    }
+    const after = await evaluate(`(() => { const p = window.__ZUR_DEBUG__?.state.preset; return p ? { hudTab: p.hud?.hudTab, sceneId: p.sceneId, key: !!localStorage.getItem("zur_state_v5_3") } : null; })()`);
+    results.gh012.reloadMigration = { boot: boot2, ...after };
+    phase("v5_2 -> v5_3 reload migration gate", { gateMs: Date.now() - g0, metrics: results.gh012.reloadMigration });
+    if (boot2 !== "ok" || !after) problems.push(`reload boot ${boot2}`);
+    else if (after.hudTab !== "deep-space" || after.sceneId !== "particle-swarm-3d") problems.push(`reload migration ${JSON.stringify(after)}`);
+  }
   phase("suite done", { totalSeconds: +((Date.now() - T0) / 1000).toFixed(1) });
   ws.close();
 } catch (error) {

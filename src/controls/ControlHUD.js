@@ -138,6 +138,13 @@ export class ControlHUD {
     this.audioPrompt.append(this.btnMicPrompt, this.btnOscPrompt);
     this.body.append(this.audioPrompt);
 
+    // ZUR-GH-012: mic fallback status (shared mode / silent Demo Beat) stays visible outside the tabs.
+    this.micStatus = el("p", "mic-status", "");
+    this.micStatus.id = "mic-status";
+    this.micStatus.setAttribute("role", "status");
+    this.micStatus.hidden = true;
+    this.body.append(this.micStatus);
+
     this.title = el("p", "preset-name", "");
     this.body.append(this.title);
 
@@ -507,6 +514,12 @@ export class ControlHUD {
 
   selectedDeviceId() {
     return this.device.select.value || null;
+  }
+
+  setMicStatus(text) {
+    const label = text || "";
+    if (this.micStatus.textContent !== label) this.micStatus.textContent = label;
+    this.micStatus.hidden = !label;
   }
 
   setError(message) {

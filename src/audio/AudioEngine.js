@@ -22,6 +22,18 @@ let destinationRefusals = 0;
 let session = 0;
 let tail = Promise.resolve();
 
+// ZUR-GH-012 Android mic fallback: "raw" (echo/noise processing off) -> "shared" ({ audio: true }) -> silent "demo" beat.
+export const DEMO_BEAT_BPM = 124;
+export const MIC_STAGE_LABELS = Object.freeze({
+  raw: "",
+  shared: "Mic opened in shared mode (raw processing unavailable)",
+  demo: "Mic locked by another app — Demo Beat 124 BPM (silent)",
+});
+let micStage = "idle";
+let micAttempts = [];
+let demoBeat = { running: false, bpm: 0 };
+let demoTimer = null;
+
 function enqueue(task) {
   const run = tail.then(task, task);
   tail = run.then(() => {}, () => {});
@@ -103,6 +115,8 @@ function releaseVideoSink() {
 }
 
 async function failStart(nextCapture, nextContext, error) {
+  stopDemoBeat();
+  micStage = "idle";
   const nodes = liveNodes;
   liveNodes = [];
   capture = null;
@@ -141,8 +155,16 @@ export function getAudioContext() {
   return context;
 }
 
+function stopDemoBeat() {
+  if (demoTimer !== null) clearInterval(demoTimer);
+  demoTimer = null;
+  demoBeat = { running: false, bpm: 0 };
+}
+
 export async function stopCapture() {
   session += 1;
+  stopDemoBeat();
+  micStage = "idle";
   const oldCapture = capture;
   const oldContext = context;
   const nodes = liveNodes;
@@ -246,6 +268,7 @@ export function startMicCapture({ deviceId = null, fftSize = 2048 } = {}) {
     sampleRate: { ideal: 48000 },
   };
   if (deviceId) audio.deviceId = { exact: deviceId };
+  micAttempts = [{ stage: "raw", constraints: { video: false, audio } }];
   const capturePromise = navigator.mediaDevices.getUserMedia({
     video: false,
     audio,
@@ -257,8 +280,27 @@ async function finishMicCapture(nextContext, resumePromise, capturePromise, fftS
   await stopCapture();
   const token = ++session;
   let nextCapture = null;
+  let stage = "raw";
   try {
-    nextCapture = await capturePromise;
+    try {
+      nextCapture = await capturePromise;
+    } catch (rawError) {
+      if (token !== session) throw rawError;
+      // Stage 2: some Android builds refuse the raw constraint set (or hand the mic to another app): plain { audio: true }.
+      try {
+        micAttempts.push({ stage: "shared", constraints: { audio: true }, rawError: rawError?.name || String(rawError) });
+        nextCapture = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stage = "shared";
+      } catch {
+        if (token !== session) throw rawError;
+        await resumePromise;
+        if (token !== session) {
+          if (nextContext.state !== "closed") await nextContext.close();
+          return null;
+        }
+        return startDemoBeat(nextContext, fftSize);
+      }
+    }
     await resumePromise;
     if (token !== session) {
       nextCapture?.getTracks().forEach((track) => track.stop());
@@ -269,6 +311,7 @@ async function finishMicCapture(nextContext, resumePromise, capturePromise, fftS
     if (!audioTrack) throw new Error("No microphone audio track was opened.");
     capture = nextCapture;
     context = nextContext;
+    micStage = stage;
     const channelCount = audioTrack.getSettings?.().channelCount ?? 1;
     source = context.createMediaStreamSource(new MediaStream([audioTrack]));
     remember(source);
@@ -279,11 +322,92 @@ async function finishMicCapture(nextContext, resumePromise, capturePromise, fftS
         if (token === session) void stopCapture();
       }, { once: true });
     }
-    return { context, source, analyser, audioSettings: audioTrack.getSettings() };
+    return { context, source, analyser, micStage: stage, audioSettings: audioTrack.getSettings() };
   } catch (error) {
     if (token !== session) throw error;
     return failStart(nextCapture, nextContext, error);
   }
+}
+
+/**
+ * Built-in silent Demo Beat: 124 BPM kick + bass + synth oscillators that feed the analyser only. Nothing here is ever
+ * connected to AudioContext.destination (connectNode refuses it), so the beat is analysed but never heard.
+ */
+function startDemoBeat(nextContext, fftSize) {
+  context = nextContext;
+  const master = remember(context.createGain());
+  master.gain.value = 0.8;
+  master.channelCount = 1;
+  master.channelCountMode = "explicit";
+  const voice = (type, frequency) => {
+    const osc = remember(context.createOscillator());
+    osc.type = type;
+    osc.frequency.value = frequency;
+    const gain = remember(context.createGain());
+    gain.gain.value = 0;
+    return { osc, gain };
+  };
+  const kick = voice("sine", 50);
+  const bass = voice("sawtooth", 55);
+  const bassFilter = remember(context.createBiquadFilter());
+  bassFilter.type = "lowpass";
+  bassFilter.frequency.value = 240;
+  const lead = voice("square", 220);
+  connectNode(kick.osc, kick.gain);
+  connectNode(kick.gain, master);
+  connectNode(bass.osc, bassFilter);
+  connectNode(bassFilter, bass.gain);
+  connectNode(bass.gain, master);
+  connectNode(lead.osc, lead.gain);
+  connectNode(lead.gain, master);
+  for (const part of [kick, bass, lead]) part.osc.start();
+
+  const sixteenth = 60 / DEMO_BEAT_BPM / 4;
+  const bassNotes = [55, 55, 73.42, 65.41];
+  const leadNotes = [220, 277.18, 329.63, 440, 329.63, 277.18, 246.94, 293.66];
+  let nextStep = 0;
+  let nextTime = context.currentTime + 0.05;
+  const pluck = (gain, t, peak, length) => {
+    gain.gain.cancelScheduledValues(t);
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.linearRampToValueAtTime(peak, t + 0.004);
+    gain.gain.exponentialRampToValueAtTime(0.0005, t + length);
+  };
+  const scheduleAhead = () => {
+    if (!context) return;
+    while (nextTime < context.currentTime + 1.2) {
+      const t = nextTime;
+      if (nextStep % 4 === 0) {
+        kick.osc.frequency.cancelScheduledValues(t);
+        kick.osc.frequency.setValueAtTime(150, t);
+        kick.osc.frequency.exponentialRampToValueAtTime(42, t + 0.14);
+        pluck(kick.gain, t, 0.95, 0.38);
+      }
+      if (nextStep % 2 === 1) {
+        bass.osc.frequency.setValueAtTime(bassNotes[(nextStep >> 1) % bassNotes.length], t);
+        pluck(bass.gain, t, 0.5, sixteenth * 1.9);
+      }
+      lead.osc.frequency.setValueAtTime(leadNotes[nextStep % leadNotes.length], t);
+      pluck(lead.gain, t, 0.14, sixteenth * 0.9);
+      nextStep += 1;
+      nextTime += sixteenth;
+    }
+  };
+  scheduleAhead();
+  demoTimer = setInterval(scheduleAhead, 200);
+  demoBeat = { running: true, bpm: DEMO_BEAT_BPM };
+  source = master;
+  attachAnalyser(context, master, fftSize, 1);
+  micStage = "demo";
+  currentMode = "demo-beat";
+  return {
+    context,
+    source,
+    analyser,
+    micStage: "demo",
+    label: MIC_STAGE_LABELS.demo,
+    audioSettings: { demoBeat: true, bpm: DEMO_BEAT_BPM },
+  };
 }
 
 export function startTestOscillator({
@@ -382,6 +506,15 @@ export function readSnapshot() {
   };
 }
 
+export function getMicState() {
+  return {
+    micStage,
+    label: MIC_STAGE_LABELS[micStage] || "",
+    demoBeat: { ...demoBeat },
+    attempts: micAttempts.map((entry) => entry.stage),
+  };
+}
+
 export function getDiagnostics() {
   const audioTrack = capture?.getAudioTracks?.()[0] ?? null;
   const videoTracks = capture?.getVideoTracks?.() ?? [];
@@ -393,6 +526,8 @@ export function getDiagnostics() {
     silent: true,
     destinationConnections: 0,
     destinationRefusals,
+    micStage,
+    demoBeat: { ...demoBeat },
     videoTrackLive: videoTracks.some((track) => track.readyState === "live"),
     audioSettings: audioTrack?.getSettings?.() ?? null,
     trackCount: capture?.getTracks?.().length ?? 0,

@@ -5,6 +5,7 @@ import {
   STAGE2_DEFAULT_PRESET,
   STORAGE_KEY,
   applyModeKeepingScene,
+  enforcePresetConstraints,
   loadStoredState,
   serializeStoredState,
   upgradeToV51,
@@ -15,6 +16,7 @@ import { FeatureExtractor } from "../audio/FeatureExtractor.js";
 import {
   getAudioContext,
   getDiagnostics,
+  getMicState,
   readSnapshot,
   resumeContext,
   setFftSize,
@@ -68,6 +70,8 @@ function loadInitialPreset() {
     if (!ownUrl) delete base.hud;
   }
   const result = validatePreset(decoded ? upgradeToV51(base) : base);
+  // ZUR-GH-012: hudTab is the single source of truth on boot; the scene (and HUD rows) are derived from it.
+  if (result.ok && result.preset.hud) return enforcePresetConstraints(result.preset);
   return result.ok ? result.preset : STAGE2_DEFAULT_PRESET;
 }
 
@@ -166,12 +170,16 @@ function publishDiagnostics() {
 function watchCapture(pending, mode) {
   pending.then((result) => {
     if (!result) return;
-    state.setStatus({ capture: mode });
+    // ZUR-GH-012: a locked Android mic falls back to the silent Demo Beat; say so instead of sitting at 0.0.
+    const demo = result.micStage === "demo";
+    state.setStatus({ capture: demo ? "demo-beat" : mode });
+    hud.setMicStatus(mode === "microphone" ? getMicState().label : "");
     hud.setError("");
     publishDiagnostics();
     if (mode === "microphone") void refreshDevices();
   }).catch((error) => {
     state.setStatus({ capture: "error" });
+    hud.setMicStatus("");
     hud.setError(error?.message || "Capture failed");
     publishDiagnostics();
   });
@@ -254,6 +262,7 @@ hud.setHandlers({
   stop: () => {
     void stopCapture().then(() => {
       state.setStatus({ capture: "idle" });
+      hud.setMicStatus("");
       hud.setError("");
       publishDiagnostics();
     });
@@ -365,6 +374,7 @@ async function boot() {
       renderHost: host,
       particleSystem,
       getDiagnostics,
+      getMicState,
       readSnapshot,
       getAudioContext,
     };

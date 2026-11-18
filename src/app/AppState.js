@@ -224,6 +224,14 @@ export const TAB_RULES = Object.freeze({
   "pulse-field-3d": { styles: ["dart3d"], kinetics: ["off"], palettes: NEON_PALETTES },
 });
 
+/** ZUR-GH-012: hudTab is the single source of truth; the scene is always derived from it (audio-rig uses its visualTab). */
+export function sceneForHud(hudTab, shaderScene = DEFAULT_HUD.shaderScene, visualTab = DEFAULT_HUD.visualTab) {
+  const tab = hudTab === "audio-rig" ? visualTab : hudTab;
+  if (tab === "megastructure") return MEGASTRUCTURE_SCENE_ID;
+  if (tab === "canyon-pulse") return SHADER_SCENES.includes(shaderScene) ? shaderScene : DEFAULT_HUD.shaderScene;
+  return PARTICLE_SCENE_ID;
+}
+
 const FLAT_DEFAULTS = Object.freeze({
   ...DEFAULT_HUD,
   sceneId: PARTICLE_SCENE_ID,
@@ -334,6 +342,8 @@ export function enforceTabConstraints(input) {
     }
   }
 
+  // hudTab (or its visualTab under Audio & Rig) always decides the scene, whatever sceneId came in.
+  sceneId = sceneForHud(hudTab, s.shaderScene, s.visualTab);
   const out = {
     ...s,
     sceneId,
@@ -489,12 +499,27 @@ export function stage3View(preset) {
   return out;
 }
 
-/** Applies a capture/visual mode preset while keeping the current scene and Stage 2 controls. */
+/** ZUR-GH-012: Mode B is the Galaxy A57 call-speaker preset: Deep Space tab, wormhole, 64k, size 1.0. */
+export const MODE_B_DEEP_SPACE = Object.freeze({ formationType: "wormhole", particleCountTier: "64k", particleSize: 1.0 });
+
+/**
+ * Applies a capture/visual mode preset. Mode A keeps the current tab (scene re-derived from it); Mode B lands on
+ * Deep Space / particle-swarm-3d / wormhole / 64k / size 1.0. The scene is always derived from hudTab.
+ */
 export function applyModeKeepingScene(modePreset, current) {
   const next = JSON.parse(JSON.stringify(modePreset));
-  if (current?.sceneId) next.sceneId = current.sceneId;
   next.particles = { ...DEFAULT_PARTICLES, ...(current?.particles || {}) };
-  if (current?.hud) next.hud = { ...current.hud };
+  if (modePreset?.name === MODE_B_PRESET.name) {
+    next.hud = { ...DEFAULT_HUD };
+    Object.assign(next.particles, MODE_B_DEEP_SPACE);
+  } else if (current?.hud) {
+    next.hud = { ...DEFAULT_HUD, ...current.hud };
+  } else if (current?.sceneId) {
+    next.hud = upgradeToV51({ ...JSON.parse(JSON.stringify(modePreset)), sceneId: current.sceneId, particles: next.particles }).hud;
+  } else {
+    next.hud = { ...DEFAULT_HUD };
+  }
+  next.sceneId = sceneForHud(next.hud.hudTab, next.hud.shaderScene, next.hud.visualTab);
   return next;
 }
 
@@ -502,12 +527,12 @@ function isObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-/** Stage 5.2 persisted state (ZUR-GH-011): `{ storageSchema, preset }` under this key. Older keys are migrated on load. */
-export const STORAGE_KEY = "zur_state_v5_2";
-export const STORAGE_SCHEMA = 5.2;
+/** Stage 5.3 persisted state (ZUR-GH-012): `{ storageSchema, preset }` under this key. Older keys are migrated on load. */
+export const STORAGE_KEY = "zur_state_v5_3";
+export const STORAGE_SCHEMA = 5.3;
 export const V4_NEON_FLAG = "zur_v4_neon_forced";
 export const LEGACY_STORAGE_KEYS = Object.freeze([
-  "zur_state_v5_1", "zur_state_v5_0", "zur_state_v4_0", "zur_state_v3_2", "zur_state_v3", "zur_state_v2", "zur_state_v1", "zur.preset.v2", "zur.preset.v1",
+  "zur_state_v5_2", "zur_state_v5_1", "zur_state_v5_0", "zur_state_v4_0", "zur_state_v3_2", "zur_state_v3", "zur_state_v2", "zur_state_v1", "zur.preset.v2", "zur.preset.v1",
 ]);
 /** Forced on any cached state older than v3.2 or still on copper-teal (grey-prone, small, dim). */
 export const V3_2_UPGRADE_DEFAULTS = Object.freeze({
@@ -582,6 +607,13 @@ export function upgradeToV51(preset) {
   return enforcePresetConstraints(next);
 }
 
+/** ZUR-GH-012: hudTab is the source of truth; a stored scene that disagrees with it is re-derived (v5_2 could persist both). */
+export function upgradeToV53(preset) {
+  const next = isObject(preset.hud) ? JSON.parse(JSON.stringify(preset)) : upgradeToV51(preset);
+  next.particles = normalizeParticles(next.particles);
+  return enforcePresetConstraints(next);
+}
+
 export function serializeStoredState(preset) {
   return JSON.stringify({ storageSchema: STORAGE_SCHEMA, preset });
 }
@@ -612,7 +644,7 @@ export function migrateStoredPayload(raw) {
   }
   if (schema < STORAGE_SCHEMA) {
     const upgraded = upgradeToV40(preset);
-    preset = upgradeToV51(upgradeToV50(upgraded.preset));
+    preset = upgradeToV53(upgradeToV51(upgradeToV50(upgraded.preset)));
     forcedNeon = upgraded.forcedNeon;
     migrated = true;
   } else {
@@ -627,7 +659,7 @@ export function migrateStoredPayload(raw) {
       },
       particles: normalizeParticles(preset.particles),
     };
-    if (!isObject(preset.hud)) preset = upgradeToV51(preset);
+    preset = upgradeToV53(preset);
   }
   return { preset, migrated, forcedNeon };
 }
@@ -831,7 +863,7 @@ export class AppState {
     if (!initial.ok) {
       throw new Error(initial.errors.join("; "));
     }
-    this.preset = initial.preset;
+    this.preset = initial.preset.hud ? enforcePresetConstraints(initial.preset) : initial.preset;
     this.status = {
       wakeLock: "off",
       capture: "idle",

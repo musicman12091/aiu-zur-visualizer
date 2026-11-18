@@ -8,7 +8,8 @@ import {
   FORMATION_TYPES,
   MAX_PARTICLES,
   MAX_STEPS_PER_FRAME,
-  SIM_STEP,
+  dartVertexCount,
+  planSimStep,
   createShockBuffer,
   dampingRateFromRetention,
   billboardBasis,
@@ -188,7 +189,7 @@ const RENDER_UNIFORMS = [
   "u_trailType", "u_trailLength", "u_densityScaleBoost", "u_pulseLayout", "u_bands",
   "u_particleSize", "u_activeCount", "u_viewportYOffset", "u_trailEnergyNorm",
   "u_cameraZoom", "u_particleStyle", "u_colorPalette", "u_formationType", "u_reactivityGain",
-  "u_bass", "u_onset", "u_treble", "u_spectralCentroid", "u_kineticMode",
+  "u_bass", "u_onset", "u_treble", "u_spectralCentroid", "u_kineticMode", "u_megastructure",
 ];
 const POST_UNIFORMS = [
   "u_scene", "u_resolution", "u_kaleidoSegments", "u_kaleidoAngle", "u_kaleidoZoom",
@@ -210,9 +211,11 @@ export class ParticleSystem3D {
     this.width = 0;
     this.height = 0;
     this.read = 0;
-    this.accumulator = 0;
     this.simTime = 0;
     this.stepsLastFrame = 0;
+    this.dartVerts = 12;
+    this.coreEye = null;
+    this.coreForwardOut = null;
     this.totalSteps = 0;
     this.framesRendered = 0;
     this.autoCount = resolveParticleCount("64k", mobile);
@@ -296,7 +299,6 @@ export class ParticleSystem3D {
 
       this.hdrSupported = Boolean(gl.getExtension("EXT_color_buffer_float") || gl.getExtension("EXT_color_buffer_half_float"));
       this.read = 0;
-      this.accumulator = 0;
       this.scene = null;
       this.ready = true;
       this.error = "";
@@ -462,23 +464,17 @@ export class ParticleSystem3D {
     }
     this.prevOnset = onset;
 
-    // Fixed-step accumulator (1/60 s, max 4 steps).
-    let acc = this.accumulator + dt;
-    let steps = Math.floor(acc / SIM_STEP + 1e-9);
-    if (steps > MAX_STEPS_PER_FRAME) {
-      steps = MAX_STEPS_PER_FRAME;
-      acc = 0;
-    } else {
-      acc -= steps * SIM_STEP;
-    }
-    this.accumulator = Math.max(0, acc);
+    // ZUR-GH-012: strictly one transform-feedback step per frame, dt = min(frameDt, 1/30). No catch-up accumulator.
+    const plan = planSimStep(frame.delta || 0);
+    const steps = Math.min(plan.steps, MAX_STEPS_PER_FRAME);
+    const simDt = plan.simDt;
     this.stepsLastFrame = steps;
 
     const useNeighbors = modeIndex >= 2 && modeIndex <= 3 && !pulse ? 1 : 0;
     if (steps > 0) {
       gl.useProgram(this.simProgram);
       const L = this.simLoc;
-      gl.uniform1f(L.u_dt, SIM_STEP);
+      gl.uniform1f(L.u_dt, simDt);
       gl.uniform1i(L.u_mode, modeIndex);
       gl.uniform1i(L.u_count, count);
       gl.uniform1f(L.u_damping, dampingRateFromRetention(FLOW_DAMPING_PER_STEP[FLOW_MODES[modeIndex]]));
@@ -516,7 +512,7 @@ export class ParticleSystem3D {
       }
       gl.enable(gl.RASTERIZER_DISCARD);
       for (let i = 0; i < steps; i += 1) {
-        this.simTime += SIM_STEP;
+        this.simTime += simDt;
         gl.uniform1f(L.u_time, this.simTime);
         const write = 1 - this.read;
         gl.bindVertexArray(this.updateVaos[this.read]);
@@ -541,13 +537,18 @@ export class ParticleSystem3D {
     const downZ = !pulse && (particles.formationType === "neon-tunnel" || particles.formationType === "polygon-rings");
     const waveGrid = pulse && particles.pulseLayout === "wave-grid";
     const cameraMode = visual?.cameraMode || "orbit-3d";
+    // ZUR-GH-012: the megastructure raymarch eye follows the camera mode visibly: Orbit 3D circles the core at 0.20 rad/s,
+    // Tunnel Fly dollies in and out along a swaying path (u_eye / u_forward in core.frag.glsl are built from this.eye).
+    const mega = Boolean(extras.megastructure);
     const orbit = cameraMode === "static" ? 0
-      : downZ ? Math.sin(t * 0.09) * 0.18 : t * 0.06;
-    const dist = 11.5 - (frame.bass || 0) * 1.2;
+      : downZ ? Math.sin(t * 0.09) * 0.18 : t * (mega ? 0.20 : 0.06);
+    let dist = 11.5 - (frame.bass || 0) * 1.2;
+    if (mega && cameraMode === "tunnel-fly") dist = 8.5 + Math.sin(t * 0.55) * 3.0 - (frame.bass || 0) * 1.2;
     this.eye[0] = Math.sin(orbit) * dist;
     this.eye[1] = waveGrid ? 0 : cameraMode === "static" ? (downZ ? 0 : 2.2)
       : downZ ? Math.sin(t * 0.07) * 0.4 : 2.2 + Math.sin(t * 0.07) * 1.6;
-    this.eye[2] = cameraMode === "tunnel-fly" ? 9.5 + Math.sin(t * 0.4) * 0.3 : Math.cos(orbit) * dist;
+    this.eye[2] = cameraMode === "tunnel-fly" && !mega ? 9.5 + Math.sin(t * 0.4) * 0.3 : Math.cos(orbit) * dist;
+    if (mega && cameraMode === "tunnel-fly") this.eye[0] += Math.sin(t * 0.8) * 1.2;
     const aspect = this.width / this.height;
     perspective(this.proj, ((waveGrid ? 36 : 50) * Math.PI) / 180, aspect, 0.1, 60);
     lookAt(this.view, this.eye, this.origin);
@@ -609,6 +610,8 @@ export class ParticleSystem3D {
       gl.useProgram(this.coreProgram);
       gl.uniform2f(C.u_resolution, this.width, this.height);
       gl.uniform3fv(C.u_eye, this.eye);
+      this.coreEye = Array.from(this.eye);
+      this.coreForwardOut = Array.from(forward);
       gl.uniform3fv(C.u_forward, forward);
       gl.uniform3fv(C.u_right, right);
       gl.uniform3fv(C.u_up, up);
@@ -628,6 +631,8 @@ export class ParticleSystem3D {
     // ZUR-GH-010: only dart3d draws the 12-vertex cone (TRIANGLES); blood-drop / synapse-spark / star-streak bind the
     // 4-vertex billboard quad (TRIANGLE_STRIP).
     const dart = styleIndex === 0;
+    const dartVerts = dart ? dartVertexCount(count) : 4;
+    this.dartVerts = dartVerts;
     // ZUR-GH-008: particle splatting never depth-tests. Additive darts / premultiplied capsules are order-independent,
     // and a depth test against stale or sibling-dart depth punched dark dotted seams through bright dart3d spheres.
     gl.disable(gl.DEPTH_TEST);
@@ -641,7 +646,8 @@ export class ParticleSystem3D {
     gl.uniform3fv(R.u_camPos, this.eye);
     gl.uniform2f(R.u_resolution, this.width, this.height);
     gl.uniform1f(R.u_projScale, this.proj[5]);
-    gl.uniform1i(R.u_shape, dart ? 0 : 1);
+    gl.uniform1i(R.u_shape, dart ? (dartVerts === 12 ? 0 : 2) : 1);
+    gl.uniform1i(R.u_megastructure, extras.megastructure ? 1 : 0);
     gl.uniform1f(R.u_cameraZoom, zoom);
     gl.uniform1i(R.u_particleStyle, styleIndex);
     gl.uniform1i(R.u_kineticMode, Math.max(0, KINETIC_MODES.indexOf(particles.kineticMode)));
@@ -677,7 +683,7 @@ export class ParticleSystem3D {
     this.rimColor[2] = palette[14];
     gl.uniform3fv(R.u_rimColor, this.rimColor);
     gl.bindVertexArray(this.renderVaos[this.read]);
-    if (dart) gl.drawArraysInstanced(gl.TRIANGLES, 0, 12, count);
+    if (dart && dartVerts === 12) gl.drawArraysInstanced(gl.TRIANGLES, 0, 12, count);
     else gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, count);
     gl.bindVertexArray(null);
     gl.depthMask(true);
@@ -725,6 +731,11 @@ export class ParticleSystem3D {
       sceneFormat: this.sceneFormat,
       totalSteps: this.totalSteps,
       stepsLastFrame: this.stepsLastFrame,
+      simSteps: this.stepsLastFrame,
+      dartVerts: this.dartVerts,
+      coreEye: this.coreEye,
+      coreForward: this.coreForwardOut,
+      eye: Array.from(this.eye),
       framesRendered: this.framesRendered,
       simTime: this.simTime,
       kaleidoAngle: this.kaleidoAngle,

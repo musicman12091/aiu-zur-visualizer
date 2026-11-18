@@ -253,6 +253,7 @@ vec3 rotateAxis(vec3 v, vec3 axis, float angle) {
 // Golden-spiral spherical distribution (theta azimuth = golden angle, phi polar = acos) per agent, split
 // across five tilted orbital planes that counter-rotate, layered in depth, with radial audio-reactive
 // breathing that dives into the sdCore() valleys. 30% of agents ride outward streams along the 7 lobes.
+const float MEGA_SWARM_INNER_R = 0.62;
 vec3 fractalCoreTarget(float seed, uint uid) {
   float n = float(max(u_count, 1));
   float i = float(uid) + 0.5;
@@ -282,8 +283,9 @@ vec3 fractalCoreTarget(float seed, uint uid) {
   float valley = max(-lobes, 0.0);
   float layer = fract(seed * 5.0 + i * 0.6180339887);
   float breathe = 0.18 * sin(u_time * 1.6 + fo * 1.3 + layer * 3.0) + 0.45 * band;
-  float R = coreRadius + 0.42 + 1.25 * layer + breathe * (1.0 - 0.5 * valley) - valley * (0.25 + 0.35 * band);
-  return dir * max(R, coreRadius + 0.12);
+  // ZUR-GH-012: the orbit swarm keeps a clear inner shell (r >= coreRadius + 0.62) so the Mandelbulb is never buried.
+  float R = coreRadius + MEGA_SWARM_INNER_R + 1.0 * layer + breathe * (1.0 - 0.5 * valley) - valley * (0.25 + 0.35 * band);
+  return dir * max(R, coreRadius + MEGA_SWARM_INNER_R);
 }
 
 vec4 fetchNeighbor(int id, int texel) {
@@ -437,6 +439,8 @@ const float BH_SHADOW = 0.36;                    // lateral shadow cylinder: len
 const float BH_PHOTON_RING = 0.42;
 const float BH_DISK_INNER = 0.46;
 const float BH_TILT = 0.2443461;                 // 14 degrees
+// ZUR-GH-012 Interstellar Gargantua: the disk is a nearly edge-on equatorial plane, tilted 14 degrees toward the camera.
+// diskNormal = normalize(vec3(0.08, 0.96, -0.26)) in (screen right, screen up, toward camera); it is also the jet axis.
 
 void blackHoleBasis(out vec3 right, out vec3 up, out vec3 toward) {
   right = length(u_billboardRight) > 0.5 ? normalize(u_billboardRight) : vec3(1.0, 0.0, 0.0);
@@ -451,14 +455,17 @@ vec3 blackHoleTarget(float seed, uint uid) {
   blackHoleBasis(right, up, toward);
   vec3 pos;
   if (kind < BH_DISK_FRAC) {
-    // spiral accretion disk: three log-spiral arms, Keplerian shear (Doppler beaming lives in render.vert.glsl)
+    // edge-on accretion disk: three log-spiral arms, Keplerian shear (Doppler beaming lives in render.vert.glsl)
     float rd = BH_DISK_INNER + 0.85 * pow(h.x, 1.25);
     int arm = int(uid % 3u);
     float spiral = log(rd / BH_DISK_INNER) * 2.4;
     float ang = spiral + float(arm) * 2.0943951 + (h.y - 0.5) * 0.5 + u_time * 0.20 / pow(rd + 0.15, 1.5);
-    vec3 planeUp = up * cos(BH_TILT) + toward * sin(BH_TILT);
-    vec3 normal = toward * cos(BH_TILT) - up * sin(BH_TILT);
-    pos = right * cos(ang) * rd + planeUp * sin(ang) * rd + normal * (h.z - 0.5) * 0.05 * rd;
+    vec3 diskNormal = normalize(vec3(0.08, 0.96, -0.26));
+    vec3 axisX = normalize(vec3(diskNormal.y, -diskNormal.x, 0.0));          // in-plane, ~screen horizontal
+    vec3 axisY = cross(diskNormal, axisX);                                    // in-plane, mostly along the view axis
+    vec3 inPlane = axisX * cos(ang) * rd + axisY * sin(ang) * rd;
+    vec3 local = inPlane + diskNormal * (h.z - 0.5) * 0.05 * rd;
+    pos = right * local.x + up * local.y + toward * local.z;
   } else if (kind < BH_DISK_FRAC + BH_RING_FRAC) {
     // Einstein photon ring: gravitationally lensed light wrapped through the full 360 degrees around the hole
     float phi = h.y * TAU;
@@ -470,7 +477,11 @@ vec3 blackHoleTarget(float seed, uint uid) {
     float s = fract(h.x + u_time * (0.30 + 0.5 * u_sub + 0.8 * u_onset));
     float width = (0.015 + 0.09 * s) * (0.4 + 0.6 * h.y);
     float ang = hashf(uid ^ 0x1f83d9abu) * TAU;
-    pos = up * dir * (0.46 + s * 1.15) + right * cos(ang) * width + toward * sin(ang) * width;
+    vec3 jetN = normalize(vec3(0.08, 0.96, -0.26));
+    vec3 jetA = normalize(vec3(jetN.y, -jetN.x, 0.0));
+    vec3 jetB = cross(jetN, jetA);
+    vec3 jetLocal = jetN * dir * (0.46 + s * 1.15) + jetA * cos(ang) * width + jetB * sin(ang) * width;
+    pos = right * jetLocal.x + up * jetLocal.y + toward * jetLocal.z;
   }
   if (length(pos) < BH_HORIZON) pos *= BH_HORIZON / max(length(pos), 1e-4);
   return pos * HOLE_SCALE;

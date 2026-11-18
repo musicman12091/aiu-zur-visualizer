@@ -26,6 +26,9 @@ const float FOV = 1.15;
 const float EYE_HEIGHT = 1.2;
 const float MAX_TRAVEL = 42.0;
 const float LUMA_CAP = 0.86;
+// ZUR-GH-012: sky + inter-grid floor never exceed output rgb 0.03 (OBSIDIAN); hue shift lives only in the emissive lines / sun.
+const float OBSIDIAN = 0.03;
+const float OBSIDIAN_LIN = 0.0023;  // linear value whose sRGB encoding is OBSIDIAN
 
 float spectrumAt(float x, float zs) {
   return texture(u_waterfallTex, vec2(fract(x * 0.065 + 0.5), fract(zs * 0.018))).r;
@@ -96,6 +99,7 @@ vec3 skyColor(vec2 q, vec3 ray) {
   vec3 mid = u_palette[2] * 0.16;
   vec3 col = mix(horizon, mid, smoothstep(0.0, 0.35, up));
   col = mix(col, vec3(0.0), smoothstep(0.35, 0.9, up)); // obsidian zenith
+  col = min(col, vec3(OBSIDIAN_LIN));                        // sky is obsidian; only the sun below is emissive
   // striped synthwave sun sitting on the horizon (palette 3 -> 4), never white
   vec2 sunP = vec2(q.x, q.y - 0.07);
   float sunR = length(sunP);
@@ -169,12 +173,12 @@ void main() {
   float edge = clamp(max(max(lineX * (1.0 - 0.7 * slope), lineZ), lineH), 0.0, 1.0);
 
   float heightN = clamp(h / (WALL_HEIGHT + 1.2), 0.0, 1.0);
-  vec3 fill = paletteRamp(0.15 + 0.55 * heightN + 0.2 * clamp(audio, 0.0, 1.0)) * (0.10 + 0.20 * diffuse + 0.10 * wall);
+  vec3 fill = min(paletteRamp(0.15 + 0.55 * heightN + 0.2 * clamp(audio, 0.0, 1.0)) * (0.10 + 0.20 * diffuse + 0.10 * wall), vec3(OBSIDIAN_LIN));
   vec3 line = mix(u_palette[0], u_palette[4], clamp(heightN * 1.4 + 0.25 * audio, 0.0, 1.0));
   line *= 0.55 + 0.30 * clamp(audio, 0.0, 1.2);
   vec3 color = mix(fill, line, edge);
 
   float fog = 1.0 - exp(-travel * 0.055);
-  color = mix(color, u_palette[1] * 0.32, fog * 0.85);
+  color = mix(color, min(u_palette[1] * 0.32, vec3(OBSIDIAN_LIN)), fog * 0.85);
   fragColor = vec4(linearToSRGB(guardNeon(color)), 1.0);
 }
