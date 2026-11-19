@@ -191,7 +191,8 @@ test("capture starts are synchronous and never reach destination", () => {
   assert.ok((code.match(/echoCancellation: false/g) || []).length >= 2);
   assert.ok((code.match(/noiseSuppression: false/g) || []).length >= 2);
   assert.ok((code.match(/autoGainControl: false/g) || []).length >= 2);
-  assert.match(code, /\[40, 120, 500, 2000, 8000\]/);
+  // ZUR-GH-014: the multi-tone oscillator is replaced by the staccato Test Beat (kick / silence / snare+arp / silence).
+  assert.match(code, /kind: "kick", ms: 85[\s\S]*kind: "silence", ms: 415[\s\S]*kind: "snare-arp", ms: 85[\s\S]*kind: "silence", ms: 415/);
   // ZUR-GH-013: exactly one destination connect in the whole engine, inside monitorConnect() (file track + Speaker
   // Monitor only); capture starts never reach it.
   assert.equal((code.match(/\.connect\([^)]*\.destination/g) || []).length, 1, "single destination path");
@@ -1087,9 +1088,10 @@ function hexSaturation(hex) {
 const frag32 = () => stripComments(read("src/shaders/render.frag.glsl"));
 const sim32 = () => stripComments(read("src/shaders/sim.vert.glsl"));
 
-test("ZUR-GH-013 storage key and schema are zur_state_v6_0 / 6.0 (v5.3, v5.2, v5.1, v5.0 + v4 keys kept as legacy)", () => {
-  assert.equal(STORAGE_KEY, "zur_state_v6_0");
-  assert.equal(STORAGE_SCHEMA, 6.0);
+test("ZUR-GH-014 storage key and schema are zur_state_v6_1 / 6.1 (v6.0, v5.3, v5.2, v5.1, v5.0 + v4 keys kept as legacy)", () => {
+  assert.equal(STORAGE_KEY, "zur_state_v6_1");
+  assert.equal(STORAGE_SCHEMA, 6.1);
+  assert.ok(LEGACY_STORAGE_KEYS.includes("zur_state_v6_0"));
   assert.ok(LEGACY_STORAGE_KEYS.includes("zur_state_v5_3"));
   assert.ok(LEGACY_STORAGE_KEYS.includes("zur_state_v5_2"));
   assert.ok(LEGACY_STORAGE_KEYS.includes("zur_state_v5_1"));
@@ -1265,9 +1267,9 @@ test("Stage 3.2 HUD: Scene, Palette, Hue shift on top; Hide HUD button; pulse la
   assert.match(read("index.html"), /\.hud-hide\s*\{[^}]*position:\s*sticky/);
 });
 
-test("ZUR-GH-013 sw.js cache is zur-shell-v11, claims clients and precaches new shaders", () => {
+test("ZUR-GH-014 sw.js cache is zur-shell-v12, claims clients and precaches new shaders", () => {
   const sw = read("sw.js");
-  assert.match(sw, /const CACHE = "zur-shell-v11"/);
+  assert.match(sw, /const CACHE = "zur-shell-v12"/);
   assert.match(sw, /self\.skipWaiting\(\)/);
   assert.match(sw, /self\.clients\.claim\(\)/);
   assert.match(sw, /\.(html|js|glsl)/);
@@ -1600,7 +1602,7 @@ test("ZUR-GH-007 core raymarcher shares the kaleido optical centre (0.0, u_viewp
   assert.match(vert, /\+ vec2\(0\.0, u_viewportYOffset\);/);
   const corePass = ps.slice(ps.indexOf("if (extras.megastructure)"), ps.indexOf("const dart"));
   assert.match(corePass, /gl\.uniform1f\(C\.u_viewportYOffset, viewportYOffset\)/);
-  assert.match(ps, /"u_viewportYOffset", "u_emission",\s*\]\);/);
+  assert.match(ps, /"u_viewportYOffset", "u_emission", "u_hueShift",\s*\]\);/);
   assert.match(ps, /gl\.uniform1f\(R\.u_viewportYOffset, viewportYOffset\)/);
   assert.match(ps, /gl\.uniform1f\(P\.u_viewportYOffset, viewportYOffset\)/);
 });
@@ -1671,7 +1673,7 @@ test("ZUR-GH-007 logo-attractor scales oscillation by 0.08, frees agents to sett
   assert.match(sim, /if \(u_formationType == 5\) amt \*= LOGO_OSCILLATION_SCALE;/);
   assert.match(sim, /uniform vec3 u_billboardRight;/);
   assert.match(sim, /uniform vec3 u_billboardUp;/);
-  assert.match(sim, /return right \* aLogoTarget\.x \+ up \* aLogoTarget\.y \+ toward \* aLogoTarget\.z;/);
+  assert.match(sim, /return \(right \* aLogoTarget\.x \+ up \* aLogoTarget\.y \+ toward \* aLogoTarget\.z\) \* LOGO_PRESENCE;/);
   assert.match(sim, /if \(u_formationType == 5\) \{ lo = 0\.0; hi = 6\.0; \}/);
   assert.equal(LOGO_OSCILLATION_SCALE, 0.08);
   assert.ok(Math.abs(effectiveOscillationAmount("logo-attractor", 3) - 0.24) < 1e-9);
@@ -1911,10 +1913,10 @@ const g009 = {
   ps: () => read("src/render/ParticleSystem3D.js"),
 };
 
-test("ZUR-GH-013 sw.js cache is zur-shell-v11 and storage key zur_state_v6_0 with v5.3 + v5.2 + v5.1 + v4 migration", () => {
-  assert.match(read("sw.js"), /const CACHE = "zur-shell-v11"/);
-  assert.equal(STORAGE_KEY, "zur_state_v6_0");
-  assert.deepEqual(LEGACY_STORAGE_KEYS.slice(0, 5), ["zur_state_v5_3", "zur_state_v5_2", "zur_state_v5_1", "zur_state_v5_0", "zur_state_v4_0"]);
+test("ZUR-GH-014 sw.js cache is zur-shell-v12 and storage key zur_state_v6_1 with v6.0 + v5.3 + v5.2 + v5.1 + v4 migration", () => {
+  assert.match(read("sw.js"), /const CACHE = "zur-shell-v12"/);
+  assert.equal(STORAGE_KEY, "zur_state_v6_1");
+  assert.deepEqual(LEGACY_STORAGE_KEYS.slice(0, 6), ["zur_state_v6_0", "zur_state_v5_3", "zur_state_v5_2", "zur_state_v5_1", "zur_state_v5_0", "zur_state_v4_0"]);
   const old = structuredClone(MODE_A_PRESET);
   old.particles = { ...old.particles, particleCountTier: "16k", particleStyle: "orb" };
   const loaded = loadStoredState(mockStorage({ zur_state_v4_0: JSON.stringify({ storageSchema: 4.0, preset: old }) }));
@@ -2144,7 +2146,8 @@ test("ZUR-GH-013 unlocked deck: no HUD tabs, no enforceTabConstraints, every con
   assert.doesNotMatch(stripComments(read("src/app/main.js")) + stripComments(read("src/controls/ControlHUD.js")), /enforceTabConstraints|\bhudTab\b/);
   const rows = gh010Tabs.DECK_LAYOUT.map(([name]) => name);
   assert.deepEqual(rows.slice(0, 4), ["formation", "style", "palette", "reactivityMode"], "Formation, Particle Style, Palette, Reactivity Mode lead the deck");
-  for (const name of ["kinetic", "count", "size", "zoom", "trailType", "trailLength", "oscillation", "logoText", "pulseLayout", "kaleido", "scenePalette"]) assert.ok(rows.includes(name), name);
+  for (const name of ["kinetic", "count", "size", "zoom", "trailType", "trailLength", "oscillation", "logoText", "pulseLayout", "kaleido"]) assert.ok(rows.includes(name), name);
+  assert.equal(rows.includes("scenePalette"), false, "ZUR-GH-014: the Scene Palette row is deleted (one universal Palette)");
   assert.equal(new Set(rows).size, rows.length, "no duplicate rows");
   assert.deepEqual(gh010Tabs.optionsFor("style").map((o) => o.value), ["crisp-dot", "dart3d", "synapse-node", "star-streak"], "full style list, never narrowed");
   assert.deepEqual(gh010Tabs.optionsFor("formation").map((o) => o.value), [...FORMATION_TYPES], "every formation selectable");
@@ -2200,7 +2203,7 @@ test("ZUR-GH-013 palette / formation / reactivity changes never reset particleSt
 
 test("ZUR-GH-010/013 zero blank <option> across every static option list (unlocked deck)", () => {
   const lists = gh010Tabs.allStaticOptionLists();
-  assert.equal(lists.length, 14, "every deck select (formation, flow, style, kinetic, palette, reactivityMode, scenePalette, ...)");
+  assert.equal(lists.length, 13, "every deck select (formation, flow, style, kinetic, palette, reactivityMode, ...; ZUR-GH-014 scenePalette deleted)");
   for (const { key, control, options } of lists) {
     assert.ok(options.length > 0, `${key}/${control} empty`);
     for (const o of gh010Tabs.normalizeOptions(options)) {
@@ -2218,7 +2221,7 @@ test("ZUR-GH-010/013 dark-mode select CSS, sticky quick-preset strip, no particl
   const hud = read("src/controls/ControlHUD.js");
   assert.ok(!/"sel-shape"/.test(hud) && !/3D shape/.test(hud), "no 3D shape row");
   assert.equal((hud.match(/"sel-palette"/g) || []).length, 1, "single particle palette select");
-  assert.equal((hud.match(/"sel-scene-palette"/g) || []).length, 1, "single scene palette select");
+  assert.equal((hud.match(/"sel-scene-palette"/g) || []).length, 0, "ZUR-GH-014: no scene palette select (universal Palette)");
   assert.doesNotMatch(hud + read("src/controls/hudTabs.js"), /data-hud-tab|dataset\.hudTab/);
 });
 
@@ -2585,9 +2588,9 @@ test("ZUR-GH-012/013 Mode B applies particle-swarm-3d / wormhole / 64k / 1.0; Mo
   assert.equal(validatePreset(a).ok, true);
 });
 
-test("ZUR-GH-013 zur_state_v5_3 / v5_2 Blood saves migrate to zur_state_v6_0 crisp-dot + wormhole, hud deleted", () => {
-  assert.equal(gh012App.STORAGE_KEY, "zur_state_v6_0");
-  assert.equal(gh012App.STORAGE_SCHEMA, 6.0);
+test("ZUR-GH-013 zur_state_v5_3 / v5_2 Blood saves migrate to zur_state_v6_1 crisp-dot + wormhole, hud deleted", () => {
+  assert.equal(gh012App.STORAGE_KEY, "zur_state_v6_1");
+  assert.equal(gh012App.STORAGE_SCHEMA, 6.1);
   assert.ok(gh012App.LEGACY_STORAGE_KEYS.includes("zur_state_v5_3") && gh012App.LEGACY_STORAGE_KEYS.includes("zur_state_v5_2"));
   assert.equal(typeof gh012App.upgradeToV60, "function");
   const blood = structuredClone(gh012App.STAGE2_DEFAULT_PRESET);
@@ -2617,7 +2620,7 @@ test("ZUR-GH-013 zur_state_v5_3 / v5_2 Blood saves migrate to zur_state_v6_0 cri
   assert.equal(kept.preset.particles.formationType, "neural-brain");
   assert.equal(kept.preset.hud, undefined);
   const serialized = JSON.parse(serializeStoredState(kept.preset));
-  assert.equal(serialized.storageSchema, 6.0);
+  assert.equal(serialized.storageSchema, 6.1);
 });
 
 test("ZUR-GH-012 one transform-feedback step per frame: planSimStep, MAX_STEPS_PER_FRAME 1, simSteps stat", () => {
@@ -2748,9 +2751,9 @@ test("ZUR-GH-012 Android mic fallback: raw -> {audio:true} -> silent 124 BPM Dem
   assert.match(read("src/app/main.js"), /setMicStatus\(mode === "microphone"/);
 });
 
-test("ZUR-GH-013 service worker cache zur-shell-v11", () => {
-  assert.match(read("sw.js"), /const CACHE = "zur-shell-v11"/);
-  assert.doesNotMatch(read("sw.js"), /zur-shell-v10"/);
+test("ZUR-GH-014 service worker cache zur-shell-v12", () => {
+  assert.match(read("sw.js"), /const CACHE = "zur-shell-v12"/);
+  assert.doesNotMatch(read("sw.js"), /zur-shell-v1[01]"/);
 });
 
 // ---------------------------------------------------------------- ZUR-GH-013 (zur-shell-v11 / zur_state_v6_0)
@@ -2918,8 +2921,8 @@ test("ZUR-GH-013 harmonic-ferrofluid: 70% spherical-harmonic spike shell on 5 ba
   assert.equal(gh010.QUICK_PRESETS.find((q) => q.id === "ferrofluid").particles.formationType, "harmonic-ferrofluid");
 });
 
-test("ZUR-GH-013 wormhole: horned torus tilted 22 deg, R 0.94 outer shell, 0.08 throat", () => {
-  assert.equal(pm009.WORMHOLE_TILT_DEG, 22);
+test("ZUR-GH-013/014 wormhole: horned torus tilted 38 deg (GH-014), R 0.94 outer shell, 0.08 throat", () => {
+  assert.equal(pm009.WORMHOLE_TILT_DEG, 38);
   assert.equal(pm009.WORMHOLE_SHELL_R, 0.94);
   assert.equal(pm009.WORMHOLE_THROAT_R, 0.08);
   const outer = pm009.wormholePoint(0, 0);
@@ -2937,8 +2940,8 @@ test("ZUR-GH-013 wormhole: horned torus tilted 22 deg, R 0.94 outer shell, 0.08 
   }
   assert.ok(shell / N > 0.3 && inner / N > 0.1, "both outer shell and throat are occupied");
   const sim = gh013.sim();
-  assert.match(sim, /const float WORMHOLE_TILT = 0\.3839724354;/);
-  assert.ok(Math.abs(0.3839724354 - (22 * Math.PI) / 180) < 1e-9);
+  assert.match(sim, /const float WORMHOLE_TILT = 0\.6632251158;/);
+  assert.ok(Math.abs(0.6632251158 - (38 * Math.PI) / 180) < 1e-9);
   assert.match(sim, /float rxz = 0\.51 \+ 0\.43 \* cos\(theta\);/, "R = 0.51 + 0.43 = 0.94, throat 0.51 - 0.43 = 0.08");
   assert.equal(DEFAULT_PARTICLES.formationType, "wormhole");
 });
@@ -3016,17 +3019,20 @@ test("ZUR-GH-013 tightening 1: brain / wormhole / logo / black hole swap the 1.4
   assert.match(smoke, /ratio <= 1\.10/);
 });
 
-test("ZUR-GH-013 tightening 2: particleStyle resets to crisp-dot only when migrating < v6_0; v6_0 saves keep it", () => {
+test("ZUR-GH-013 tightening 2 (GH-014 v6_1): particleStyle resets to crisp-dot only when migrating < v6_0; v6_0 / v6_1 saves keep it", () => {
   for (const style of ["crisp-dot", "star-streak", "synapse-node", "dart3d"]) {
     const p = structuredClone(gh010.STAGE2_DEFAULT_PRESET);
     p.particles.particleStyle = style;
-    const current = loadStoredState(mockStorage({ zur_state_v6_0: serializeStoredState(p) }));
-    assert.equal(current.key, "zur_state_v6_0");
-    assert.equal(current.migrated, false, `${style}: a v6_0 save is not a migration`);
-    assert.equal(current.preset.particles.particleStyle, style, `v6_0 keeps ${style}`);
+    const current = loadStoredState(mockStorage({ zur_state_v6_1: serializeStoredState(p) }));
+    assert.equal(current.key, "zur_state_v6_1");
+    assert.equal(current.migrated, false, `${style}: a v6_1 save is not a migration`);
+    assert.equal(current.preset.particles.particleStyle, style, `v6_1 keeps ${style}`);
+    const v60 = loadStoredState(mockStorage({ zur_state_v6_0: JSON.stringify({ storageSchema: 6.0, preset: p }) }));
+    assert.equal(v60.migrated, true, `${style}: v6_0 -> v6_1 is a migration`);
+    assert.equal(v60.preset.particles.particleStyle, style, `v6_0 -> v6_1 keeps ${style}`);
     assert.equal(new AppState(current.preset).preset.particles.particleStyle, style, `AppState keeps ${style}`);
     // round trip: save -> reload -> save is stable
-    const again = loadStoredState(mockStorage({ zur_state_v6_0: serializeStoredState(current.preset) }));
+    const again = loadStoredState(mockStorage({ zur_state_v6_1: serializeStoredState(current.preset) }));
     assert.equal(again.preset.particles.particleStyle, style);
     // the same style in an older envelope is migrated to the v6.0 default
     for (const [key, schema] of [["zur_state_v5_3", 5.3], ["zur_state_v5_2", 5.2], ["zur_state_v4_0", 4.0]]) {
@@ -3039,10 +3045,261 @@ test("ZUR-GH-013 tightening 2: particleStyle resets to crisp-dot only when migra
   }
   const src = stripComments(read("src/app/AppState.js"));
   const mig = src.slice(src.indexOf("export function migrateStoredPayload"), src.indexOf("export function loadStoredState"));
-  assert.match(mig, /if \(schema < STORAGE_SCHEMA\) \{[\s\S]*?upgradeToV60\(/, "the crisp-dot reset lives only in the < v6_0 branch");
+  assert.match(mig, /if \(schema < V60_STORAGE_SCHEMA\) \{[\s\S]*?upgradeToV60\(/, "the crisp-dot reset lives only in the < v6_0 branch");
   assert.equal((src.match(/upgradeToV60\(/g) || []).length, 2, "defined once, called once");
   const smoke = read("tests/smoke-zur-gh-010.mjs");
   assert.match(smoke, /v6_0 particleStyle reload gate/);
+});
+
+// ---------------------------------------------------------------- ZUR-GH-014 (zur-shell-v12 / zur_state_v6_1)
+const gh014App = await import("../src/app/AppState.js");
+const gh014Math = await import("../src/render/particleMath.js");
+const gh014Audio = await import("../src/audio/AudioEngine.js");
+const gh014Pal = await import("../src/controls/palettes.js");
+const gh014Src = (file) => stripComments(read(file));
+const gh014Preset = (sceneId, formationType, extra = {}) => {
+  const p = structuredClone(gh014App.STAGE2_DEFAULT_PRESET);
+  p.sceneId = sceneId;
+  p.particles = { ...p.particles, formationType, ...extra };
+  return p;
+};
+
+test("ZUR-GH-014 Formation choice always lands on particle-swarm-3d and never resets style / palette / flow", () => {
+  for (const scene of ["megastructure-3d", "spectral-canyon-3d", "pulse-field-3d", "aurora-ribbons"]) {
+    const before = gh014Preset(scene, "fractal-core", { particleStyle: "star-streak", colorPalette: "crimson-pulse", flowMode: "fluid" });
+    for (const formation of FORMATION_TYPES) {
+      const next = gh014App.applyFormation(before, formation);
+      assert.equal(next.sceneId, "particle-swarm-3d", `${scene} -> ${formation}`);
+      assert.equal(next.particles.formationType, formation);
+      assert.equal(next.particles.particleStyle, "star-streak");
+      assert.equal(next.particles.colorPalette, "crimson-pulse");
+      assert.equal(next.particles.flowMode, "fluid");
+    }
+    const viaPatch = gh014App.applyParticlePatch(before, { formationType: "neural-brain", size: 1.2 });
+    assert.equal(viaPatch.sceneId, "particle-swarm-3d");
+  }
+  // non-formation particle patches never move the scene
+  assert.equal(gh014App.applyParticlePatch(gh014Preset("megastructure-3d", "fractal-core"), { trailLength: 0.2 }).sceneId, "megastructure-3d");
+  for (const entry of gh014App.QUICK_PRESETS.filter((e) => e.particles.formationType && e.sceneId === "particle-swarm-3d")) {
+    const next = gh014App.applyQuickPreset(gh014Preset("megastructure-3d", "fractal-core", { particleStyle: "dart3d", colorPalette: "crimson-pulse" }), entry.id);
+    assert.equal(next.sceneId, "particle-swarm-3d", entry.id);
+    assert.equal(next.particles.particleStyle, "dart3d", `${entry.id} keeps style`);
+    assert.equal(next.particles.colorPalette, "crimson-pulse", `${entry.id} keeps palette`);
+  }
+  assert.match(gh014Src("src/app/main.js"), /applyParticlePatch\(state\.preset, partial\)/);
+});
+
+test("ZUR-GH-014 HUD visibility rules: particle-only rows, Logo Text on logo, Pulse Layout on pulse-field-3d", () => {
+  const { controlVisible, PARTICLE_ONLY_CONTROLS } = gh014App;
+  assert.deepEqual([...PARTICLE_ONLY_CONTROLS], ["formation", "style", "flow", "kinetic"]);
+  for (const scene of ["particle-swarm-3d", "megastructure-3d", "spectral-canyon-3d", "pulse-field-3d", "aurora-ribbons"]) {
+    for (const formation of ["wormhole", "logo-attractor"]) {
+      const p = gh014Preset(scene, formation);
+      for (const c of PARTICLE_ONLY_CONTROLS) assert.equal(controlVisible(c, p), scene === "particle-swarm-3d", `${c} on ${scene}`);
+      assert.equal(controlVisible("logoText", p), scene === "particle-swarm-3d" && formation === "logo-attractor", `logoText ${scene}/${formation}`);
+      assert.equal(controlVisible("pulseLayout", p), scene === "pulse-field-3d", `pulseLayout on ${scene}`);
+      for (const c of ["palette", "reactivityMode", "count", "size", "zoom", "trailLength"]) assert.equal(controlVisible(c, p), true, c);
+    }
+  }
+  const hud = gh014Src("src/controls/ControlHUD.js");
+  assert.match(hud, /controlVisible\(/, "ControlHUD hides rows through controlVisible");
+});
+
+test("ZUR-GH-014 one universal Palette + Hue Shift row drives all 5 engines (Scene Palette row deleted)", () => {
+  const hud = gh014Src("src/controls/ControlHUD.js");
+  assert.match(hud, /universal-palette/);
+  assert.equal((hud.match(/"sel-palette"/g) || []).length, 1);
+  assert.equal((hud.match(/"rng-hue"/g) || []).length, 1);
+  assert.doesNotMatch(hud + gh014Src("src/controls/hudTabs.js"), /scenePalette|sel-scene-palette/);
+  const rows = gh010Tabs.DECK_LAYOUT.map(([name]) => name);
+  assert.equal(rows.filter((r) => /palette/i.test(r)).length, 1, "single palette row");
+  assert.equal(rows.includes("hueShift"), false, "hue shift lives inside the palette row");
+  const host = gh014Src("src/render/RenderHost.js");
+  assert.match(host, /universalPalette\(preset\.particles\?\.colorPalette \|\| "true-neon", visual\.hueShift \|\| 0\)/);
+  assert.equal(typeof gh014Pal.universalPalette, "function");
+  const a = gh014Pal.universalPalette("crimson-pulse", 0);
+  const b = gh014Pal.universalPalette("crimson-pulse", 120);
+  assert.notDeepEqual(a, b, "hue shift changes the scene palette");
+  assert.match(gh014Src("src/shaders/render.frag.glsl"), /uniform float u_hueShift;/);
+  assert.match(gh014Src("src/shaders/core.frag.glsl"), /uniform float u_hueShift;/);
+});
+
+test("ZUR-GH-014 Quick Preset highlight only when sceneId + formation match; taps reset zoom 1.00 / trail 0.08 / physarum", () => {
+  const { quickPresetForState, applyQuickPreset, QUICK_PRESET_RESETS } = gh014App;
+  assert.deepEqual({ ...QUICK_PRESET_RESETS }, { cameraZoom: 1.0, trailLength: 0.08, flowMode: "physarum" });
+  assert.equal(quickPresetForState(gh014Preset("particle-swarm-3d", "supermassive-blackhole")), "gargantua");
+  assert.equal(quickPresetForState(gh014Preset("particle-swarm-3d", "wormhole")), "wormhole");
+  assert.equal(quickPresetForState(gh014Preset("megastructure-3d", "supermassive-blackhole")), "megastructure", "never stuck on Gargantua");
+  assert.equal(quickPresetForState(gh014Preset("pulse-field-3d", "supermassive-blackhole")), null);
+  assert.equal(quickPresetForState(gh014Preset("particle-swarm-3d", "free-3d")), null);
+  for (const id of gh014App.QUICK_PRESET_IDS) {
+    const p = applyQuickPreset(gh014Preset("particle-swarm-3d", "wormhole", { cameraZoom: 0.4, trailLength: 0.6, flowMode: "fluid" }), id);
+    assert.equal(p.particles.cameraZoom, 1.0, id);
+    assert.equal(p.particles.trailLength, 0.08, id);
+    assert.equal(p.particles.flowMode, "physarum", id);
+    assert.equal(quickPresetForState(p), id, `${id} highlights after its own tap`);
+  }
+  assert.match(gh014Src("src/controls/ControlHUD.js"), /quickPresetForState\(/);
+});
+
+test("ZUR-GH-014 ParticleSystem3D sim + draw pause on spectral-canyon-3d / aurora-ribbons; pulse-field sim is paused", () => {
+  const ps = gh014Src("src/render/ParticleSystem3D.js");
+  assert.match(ps, /pause\(\) \{/);
+  assert.match(ps, /simPaused/);
+  const host = gh014Src("src/render/RenderHost.js");
+  assert.match(host, /this\.particleSystem\?\.pause\?\.\(\)/);
+});
+
+test("ZUR-GH-014 crisp-dot is an AA disc smoothstep(1.0, 0.50, r): 1.4 px at 64k -> 0.95 px at 256k, no skirt", () => {
+  assert.equal(gh014Math.CRISP_DOT_RADIUS_64K, 1.4);
+  assert.equal(gh014Math.CRISP_DOT_RADIUS_256K, 0.95);
+  assert.ok(Math.abs(gh014Math.crispDotRadiusPx(65536) - 1.4) < 1e-9);
+  assert.ok(Math.abs(gh014Math.crispDotRadiusPx(262144) - 0.95) < 1e-9);
+  const mid = gh014Math.crispDotRadiusPx(131072);
+  assert.ok(mid < 1.4 && mid > 0.95, "interpolated between the tiers");
+  assert.equal(gh014Math.crispDotDisc(0), 1);
+  assert.equal(gh014Math.crispDotDisc(1.0), 0, "no Gaussian skirt past r = 1");
+  assert.equal(gh014Math.crispDotDisc(1.3), 0);
+  const frag = gh014Src("src/shaders/render.frag.glsl");
+  assert.match(frag, /smoothstep\(1\.0, 0\.50, sqrt\(r2\)\)/);
+  const vert = gh014Src("src/shaders/render.vert.glsl");
+  assert.match(vert, /CRISP_DOT_RADIUS_64K = 1\.4/);
+  assert.match(vert, /CRISP_DOT_RADIUS_256K = 0\.95/);
+});
+
+test("ZUR-GH-014 surface formations cap Flow turbulence at 0.035 surface-tangent drift; spherical containment, no cube", () => {
+  assert.equal(gh014Math.SURFACE_TURBULENCE_CAP, 0.035);
+  assert.deepEqual([...gh014Math.SURFACE_FORMATIONS].sort(), ["harmonic-ferrofluid", "logo-attractor", "neural-brain", "supermassive-blackhole", "wormhole"]);
+  const normal = [0, 1, 0];
+  const capped = gh014Math.capSurfaceTurbulence([3, 9, 4], normal, 2, 7);
+  assert.ok(Math.abs(capped[1]) < 1e-9, "radial (normal) part removed");
+  assert.ok(Math.hypot(...capped) <= 0.035 * 2 * 7 + 1e-9, "tangent drift capped");
+  for (const r of [0, 4, 8, 9, 12, 50, 1e4]) assert.ok(gh014Math.containRadius(r) <= gh014Math.CONTAIN_R_MAX + 1e-9, `r=${r}`);
+  assert.equal(gh014Math.containRadius(5), 5, "inside R_soft untouched");
+  const sim = gh014Src("src/shaders/sim.vert.glsl");
+  assert.match(sim, /const float SURFACE_TURBULENCE_CAP = 0\.035;/);
+  assert.match(sim, /F -= nrm \* dot\(F, nrm\);/);
+  // kinetic modes (synapse-cascade, accretion-warp, ...) also stay on the surface: radial part removed, tangent <= 3x cap
+  assert.match(sim, /const float SURFACE_KINETIC_CAP_SCALE = 3\.0;/);
+  assert.match(sim, /kf -= surfaceNormal \* dot\(kf, surfaceNormal\);/);
+  assert.match(sim, /pos = containRadial\(pos\);/);
+  assert.doesNotMatch(sim, /clamp\(pos, -/, "no cubic clamp");
+  assert.doesNotMatch(sim, /BOUND_RADIUS/);
+  // ball seed: never a cube (corner occupancy of a cube seed would be ~48%)
+  const state = seedParticleState(20000, 7);
+  let corners = 0;
+  let maxR = 0;
+  for (let i = 0; i < 20000; i += 1) {
+    const x = state[i * 8], y = state[i * 8 + 1], z = state[i * 8 + 2];
+    maxR = Math.max(maxR, Math.hypot(x, y, z));
+    if (Math.abs(x) > 0.6 * SPAWN_HALF && Math.abs(y) > 0.6 * SPAWN_HALF && Math.abs(z) > 0.6 * SPAWN_HALF) corners += 1;
+  }
+  assert.ok(maxR <= SPAWN_HALF + 1e-6, "seed inside the spawn ball");
+  assert.ok(corners / 20000 < 0.01, `cube corners ${corners}`);
+});
+
+test("ZUR-GH-014 viewport presence: structured formations scaled to a 68-82% span; R_max and size gates follow", () => {
+  const P = gh014Math.PRESENCE_SCALE;
+  assert.deepEqual([...gh014Math.PRESENCE_SPAN_TARGET], [0.68, 0.82]);
+  assert.deepEqual([...gh014Math.PRESENCE_SPAN_GATE], [0.58, 0.88]);
+  for (const id of ["wormhole", "neural-brain", "logo-attractor"]) assert.ok(P[id] > 1, id);
+  assert.ok(P["supermassive-blackhole"] >= 1, "gargantua already spans ~74% at v6.0 (disc + lensed jets): kept at 1.0");
+  const sim = gh014Src("src/shaders/sim.vert.glsl");
+  assert.match(sim, new RegExp(`const float WORMHOLE_PRESENCE = ${P.wormhole};`));
+  assert.match(sim, new RegExp(`const float BRAIN_PRESENCE = ${P["neural-brain"]};`));
+  assert.match(sim, new RegExp(`const float HOLE_PRESENCE = ${P["supermassive-blackhole"].toFixed(1)};`));
+  assert.match(sim, new RegExp(`const float LOGO_PRESENCE = ${P["logo-attractor"]};`));
+  assert.match(gh014Src("src/shaders/render.vert.glsl"), new RegExp(`BRAIN_SCALE = 3\\.4 \\* ${P["neural-brain"]};`));
+  assert.ok(gh014Math.CONTAIN_R_MAX >= 2.6 * P.wormhole * 0.94 * 2, "R_max keeps the scaled shapes uncompressed");
+  assert.match(read("tests/smoke-zur-gh-010.mjs"), /presence span gate/);
+});
+
+test("ZUR-GH-014 zoom migration: saves older than v6_1 with cameraZoom < 0.75 load at 1.00 (v6_0 keeps style)", () => {
+  assert.equal(gh014App.V61_MIN_ZOOM, 0.75);
+  for (const [key, schema] of [["zur_state_v6_0", 6.0], ["zur_state_v5_3", 5.3], ["zur_state_v4_0", 4.0]]) {
+    for (const [zoom, want] of [[0.2, 1.0], [0.74, 1.0], [0.75, 0.75], [1.4, 1.4]]) {
+      const p = structuredClone(gh014App.STAGE2_DEFAULT_PRESET);
+      if (schema < 6) delete p.deck;
+      p.particles = { ...p.particles, cameraZoom: zoom, particleStyle: "star-streak" };
+      const loaded = loadStoredState(mockStorage({ [key]: JSON.stringify({ storageSchema: schema, preset: p }) }));
+      assert.equal(loaded.migrated, true, key);
+      assert.equal(loaded.preset.particles.cameraZoom, want, `${key} zoom ${zoom}`);
+      assert.equal(loaded.preset.particles.particleStyle, schema >= 6 ? "star-streak" : "crisp-dot", `${key} style`);
+    }
+  }
+  const cur = structuredClone(gh014App.STAGE2_DEFAULT_PRESET);
+  cur.particles = { ...cur.particles, cameraZoom: 0.5 };
+  const kept = loadStoredState(mockStorage({ zur_state_v6_1: serializeStoredState(cur) }));
+  assert.equal(kept.preset.particles.cameraZoom, 0.5, "a v6_1 save keeps the user's own zoom");
+});
+
+test("ZUR-GH-014 geodesic wormhole: 38 deg tilt, 75% of agents on 64 meridian tracks through the polar rims", () => {
+  assert.equal(gh014Math.WORMHOLE_TILT_DEG, 38);
+  assert.equal(gh014Math.WORMHOLE_MERIDIANS, 64);
+  assert.equal(gh014Math.WORMHOLE_TRACK_FRACTION, 0.75);
+  const tracks = new Set();
+  for (let i = 0; i < 5000; i += 1) tracks.add(gh014Math.wormholeMeridian((i + 0.5) / 5000));
+  assert.equal(tracks.size, 64);
+  const sim = gh014Src("src/shaders/sim.vert.glsl");
+  assert.match(sim, /const float WORMHOLE_MERIDIANS = 64\.0;/);
+  assert.match(sim, /const float WORMHOLE_TRACK_FRAC = 0\.75;/);
+  assert.match(sim, /float psi = track \* \(TAU \/ WORMHOLE_MERIDIANS\) \+ spin;/);
+});
+
+test("ZUR-GH-014 true 120 BPM Test Beat (Silence + Hits): 500 ms = 85 ms hit + 415 ms 0.000, kick / snare+arp alternate", () => {
+  assert.equal(gh014Audio.TEST_BEAT_LABEL, "Test Beat (Silence + Hits)");
+  assert.equal(gh014Audio.TEST_BEAT_BPM, 120);
+  assert.equal(gh014Audio.TEST_BEAT_PERIOD_MS, 500);
+  assert.deepEqual(gh014Audio.TEST_BEAT_PATTERN_MS.map((s) => s.ms), [85, 415, 85, 415]);
+  assert.deepEqual(gh014Audio.TEST_BEAT_PATTERN_MS.map((s) => s.kind), ["kick", "silence", "snare-arp", "silence"]);
+  for (let i = 0; i < 4; i += 2) assert.equal(gh014Audio.TEST_BEAT_PATTERN_MS[i].ms + gh014Audio.TEST_BEAT_PATTERN_MS[i + 1].ms, 60000 / 120, "one beat = 500 ms");
+  assert.equal(gh014Audio.TEST_BEAT_LOOP_MS, 1000);
+  const sr = 48000;
+  const data = gh014Audio.renderTestBeat(sr);
+  assert.equal(data.length, 1.0 * sr);
+  const seg = (a, b) => data.subarray(Math.round(a * sr / 1000), Math.round(b * sr / 1000));
+  const peak = (arr) => arr.reduce((m, v) => Math.max(m, Math.abs(v)), 0);
+  assert.ok(peak(seg(0, 85)) > 0.5, "kick hit");
+  assert.equal(peak(seg(85, 500)), 0, "415 ms of pure 0.000 silence");
+  assert.ok(peak(seg(500, 585)) > 0.3, "snare + arp hit");
+  assert.equal(peak(seg(585, 1000)), 0, "415 ms of pure 0.000 silence");
+  const code = gh014Src("src/audio/AudioEngine.js");
+  assert.doesNotMatch(sliceExport(code, "startTestOscillator") + code.slice(code.indexOf("async function finishTestBeat"), code.indexOf("async function finishTestBeat") + 2500), /destination/);
+  const hud = gh014Src("src/controls/ControlHUD.js");
+  assert.match(hud, /TEST_BEAT_LABEL/);
+  assert.doesNotMatch(read("src/controls/ControlHUD.js"), /Test Oscillator/);
+});
+
+test("ZUR-GH-014 digital silence (peak 0 + bands 0) snaps True Gate shut immediately; real noise keeps the hold", () => {
+  const fx = new gh013Fx.FeatureExtractor({ noiseGateThreshold: 0.015 });
+  const loud = { sub: 0.9, bass: 0.8, lowMid: 0.6, highMid: 0.7, treble: 0.6 };
+  const zero = { sub: 0, bass: 0, lowMid: 0, highMid: 0, treble: 0 };
+  for (let i = 0; i < 4; i += 1) fx.updateFromBands({ bands: loud, rms: 0.4, peak: 0.8, deltaSeconds: 0.016, timestampSeconds: i * 0.016 });
+  const snap = fx.updateFromBands({ bands: zero, rms: 0, peak: 0, deltaSeconds: 0.016, timestampSeconds: 0.08 });
+  assert.equal(snap.isSilent, true, "exact zero is silent on the first frame");
+  assert.equal(snap.maxBandEnergy, 0, "every band envelope snapped to 0 (no 180 / 450 ms release tail)");
+  assert.equal(gh013Fx.frameCleanGate(snap), 0, "True Gate shut on the first zero frame");
+  const fx2 = new gh013Fx.FeatureExtractor({ noiseGateThreshold: 0.015 });
+  for (let i = 0; i < 4; i += 1) fx2.updateFromBands({ bands: loud, rms: 0.4, peak: 0.8, deltaSeconds: 0.016, timestampSeconds: i * 0.016 });
+  const hum = fx2.updateFromBands({ bands: { ...zero, sub: 0.001 }, rms: 0.001, peak: 0.002, deltaSeconds: 0.016, timestampSeconds: 0.08 });
+  assert.equal(hum.isSilent, false, "non-zero room noise keeps the 0.25 s hold");
+});
+
+test("ZUR-GH-014 polish: synapse-cascade is a render-only 2.4x v_neuralPulse front (brainstem -> cortex), no outward push", () => {
+  const vert = gh014Src("src/shaders/render.vert.glsl");
+  assert.match(vert, /const float CASCADE_PULSE_GAIN = 2\.4;/);
+  const brain = vert.slice(vert.indexOf("if (u_formationType == 6) {"), vert.indexOf("vec4 clipCenter"));
+  assert.match(brain, /if \(u_kineticMode == 1\) \{/, "cascade lives in the brain block, gated on synapse-cascade");
+  assert.match(brain, /float hit = cleanGate \*/, "fires on hits only (0 in true-gate silence)");
+  assert.match(brain, /float fd = \(travel - front\) \/ CASCADE_WIDTH;/, "front travels from the brainstem base");
+  assert.match(brain, /v_neuralPulse = max\(v_neuralPulse, /);
+  assert.match(vert, /tint \*= 1\.0 \+ \(CASCADE_PULSE_GAIN - 1\.0\) \* cascadePulse;/);
+  assert.doesNotMatch(brain, /center \+=|center =/, "render-only: the cascade never moves the geometry");
+  assert.match(gh014Src("src/render/ParticleSystem3D.js"), /gl\.uniform1i\(R\.u_kineticMode/);
+  const sim = gh014Src("src/shaders/sim.vert.glsl");
+  assert.match(sim, /kf -= surfaceNormal \* dot\(kf, surfaceNormal\);/, "outward push stays removed on surface formations");
+  assert.match(gh014Src("src/shaders/render.frag.glsl"), /v_neuralPulse > 0\.55/, "firing colour path");
+  assert.match(read("tests/smoke-zur-gh-010.mjs"), /brain cascade gate/);
 });
 
 for (const entry of tests) {

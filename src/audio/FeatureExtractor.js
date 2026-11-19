@@ -353,7 +353,7 @@ export class FeatureExtractor {
     });
   }
 
-  updateFromBands({ bands, rms, peak = 0, deltaSeconds = 0, timestampSeconds = 0 }) {
+  updateFromBands({ bands, rms, peak = null, deltaSeconds = 0, timestampSeconds = 0 }) {
     const dt = Number.isFinite(deltaSeconds) && deltaSeconds > 0 ? deltaSeconds : 0;
     const postRms = Number.isFinite(rms) ? Math.max(0, rms) : 0;
     const postPeak = Number.isFinite(peak) ? Math.max(0, peak) : 0;
@@ -374,6 +374,17 @@ export class FeatureExtractor {
       const level = Number.isFinite(bands[name]) ? bands[name] : 0;
       shaped[name] = level * gain * this.masterGain;
       if (shaped[name] > rawPeak) rawPeak = shaped[name];
+    }
+    // ZUR-GH-014: exact digital silence (waveform peak 0.000 and every band 0.000, e.g. the Test Beat gaps or a paused
+    // track) is silence immediately: no 0.25 s hold and the band envelopes snap to 0, so True Gate drops straight to black.
+    // Any non-zero signal (room noise, music) keeps the hold + attack / release envelopes exactly as before.
+    const digitalSilence = peak !== null && postPeak === 0 && rawPeak === 0;  // only a measured waveform (update()) can snap
+    if (digitalSilence) {
+      this.silentFor = Math.max(this.silentFor, SILENCE_HOLD_SECONDS + dt);
+      this.isSilent = true;
+      for (const name of MEDIUM_BANDS) this.medium[name] = 0;
+      for (const name of SLOW_BANDS) this.slow[name] = 0;
+      this.onsetEnv = 0;
     }
     if (this.autoGainEnabled) {
       this.autoGain = autoGainFromPeak(this.rollingPeak.push(rawPeak, dt));

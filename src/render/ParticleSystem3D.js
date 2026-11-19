@@ -79,10 +79,14 @@ export function seedParticleState(count = MAX_PARTICLES, seed = 0x2f981b9d) {
   };
   for (let i = 0; i < count; i += 1) {
     const o = i * FLOATS_PER_AGENT;
-    // Full [-1.25, +1.25] volume (x3.2 world units): no bottom-center funnel.
-    data[o] = (rand() * 2 - 1) * SPAWN_HALF;
-    data[o + 1] = (rand() * 2 - 1) * SPAWN_HALF;
-    data[o + 2] = (rand() * 2 - 1) * SPAWN_HALF;
+    // ZUR-GH-014: uniform ball of radius SPAWN_HALF (never a cube: un-converged 256k agents used to show a square box).
+    const cz = rand() * 2 - 1;
+    const ca = rand() * Math.PI * 2;
+    const cr = SPAWN_HALF * Math.cbrt(Math.max(rand(), 1e-6));
+    const cs = Math.sqrt(Math.max(0, 1 - cz * cz));
+    data[o] = Math.cos(ca) * cs * cr;
+    data[o + 1] = Math.sin(ca) * cs * cr;
+    data[o + 2] = cz * cr;
     data[o + 3] = rand();
     data[o + 4] = (rand() - 0.5) * 0.4;
     data[o + 5] = (rand() - 0.5) * 0.4;
@@ -195,7 +199,7 @@ const RENDER_UNIFORMS = [
   "u_particleSize", "u_activeCount", "u_viewportYOffset", "u_trailEnergyNorm",
   "u_cameraZoom", "u_particleStyle", "u_colorPalette", "u_formationType", "u_reactivityGain",
   "u_bass", "u_onset", "u_treble", "u_spectralCentroid", "u_kineticMode", "u_megastructure",
-  "u_reactivityMode", "u_highMid",
+  "u_reactivityMode", "u_highMid", "u_hueShift",
 ];
 const POST_UNIFORMS = [
   "u_scene", "u_resolution", "u_kaleidoSegments", "u_kaleidoAngle", "u_kaleidoZoom",
@@ -269,7 +273,7 @@ export class ParticleSystem3D {
       this.postLoc = locations(gl, this.postProgram, POST_UNIFORMS);
       this.coreLoc = locations(gl, this.coreProgram, [
         "u_resolution", "u_eye", "u_forward", "u_right", "u_up", "u_palette", "u_time", "u_bass", "u_steps",
-        "u_cameraZoom", "u_colorPalette", "u_spectralCentroid", "u_viewportYOffset", "u_emission",
+        "u_cameraZoom", "u_colorPalette", "u_spectralCentroid", "u_viewportYOffset", "u_emission", "u_hueShift",
       ]);
 
       // Ping-pong interleaved Float32 state: [a_pos vec4 | a_vel vec4] x MAX_PARTICLES.
@@ -403,6 +407,13 @@ export class ParticleSystem3D {
     this.slowWindows = 0;
   }
 
+  /** ZUR-GH-014: RenderHost pauses the swarm completely (no sim step, no draw) on spectral-canyon-3d / aurora-ribbons. */
+  pause() {
+    this.paused = true;
+    this.simPaused = true;
+    this.stepsLastFrame = 0;
+  }
+
   triggerShockwave(rms = 0) {
     this._pushShock(this.simTime, rms);
   }
@@ -429,7 +440,12 @@ export class ParticleSystem3D {
   render(frame, palette, particlesInput, visual, canvasWidth, canvasHeight, extras = {}) {
     if (!this.ready || !this.scene) return;
     const gl = this.gl;
-    const particles = particlesInput || normalizeParticles(null);
+    const inputParticles = particlesInput || normalizeParticles(null);
+    // ZUR-GH-014: Megastructure always flies its own fractal-core orbit swarm, so a stored Brain / Wormhole / Logo /
+    // Ferrofluid formation can never composite on top of the Mandelbulb (the stored formation is kept for later).
+    const particles = extras.megastructure && inputParticles.formationType !== "fractal-core"
+      ? { ...inputParticles, formationType: "fractal-core" } : inputParticles;
+    this.paused = false;
     const dt = Math.min(Math.max(frame.delta || 0, 0), 0.25);
     const modeIndex = Math.max(0, FLOW_MODES.indexOf(particles.flowMode));
     const tierCount = resolveParticleCount(particles.particleCountTier, this.mobile);
@@ -481,9 +497,13 @@ export class ParticleSystem3D {
 
     // ZUR-GH-012: strictly one transform-feedback step per frame, dt = min(frameDt, 1/30). No catch-up accumulator.
     const plan = planSimStep(frame.delta || 0);
-    const steps = Math.min(plan.steps, MAX_STEPS_PER_FRAME);
+    // ZUR-GH-014: pulse-field-3d draws an analytic dot lattice (render.vert.glsl pulseLatticeNode), so the swarm
+    // transform-feedback simulation is paused there; only the lattice clock advances.
+    const steps = pulse ? 0 : Math.min(plan.steps, MAX_STEPS_PER_FRAME);
     const simDt = plan.simDt;
+    if (pulse) this.simTime += simDt;
     this.stepsLastFrame = steps;
+    this.simPaused = pulse;
 
     const useNeighbors = modeIndex >= 2 && modeIndex <= 3 && !pulse ? 1 : 0;
     if (steps > 0) {
@@ -644,6 +664,7 @@ export class ParticleSystem3D {
       // ZUR-GH-007: core, swarm (u_viewportYOffset in render.vert) and kaleido fold share one optical centre.
       gl.uniform1f(C.u_viewportYOffset, viewportYOffset);
       gl.uniform1f(C.u_emission, emission);
+      gl.uniform1f(C.u_hueShift, visual?.hueShift || 0);
       gl.bindVertexArray(this.emptyVao);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     }
@@ -679,6 +700,7 @@ export class ParticleSystem3D {
     gl.uniform1f(R.u_highMid, this.bands[3]);
     gl.uniform1i(R.u_reactivityMode, reactivityIndex);
     gl.uniform1f(R.u_spectralCentroid, centroid);
+    gl.uniform1f(R.u_hueShift, visual?.hueShift || 0);
     gl.uniform1f(R.u_size, particles.particleSize);
     gl.uniform1f(R.u_particleSize, particles.particleSize);
     gl.uniform1f(R.u_activeCount, count);
@@ -765,6 +787,8 @@ export class ParticleSystem3D {
       simTime: this.simTime,
       kaleidoAngle: this.kaleidoAngle,
       readBuffer: this.read,
+      paused: Boolean(this.paused),
+      simPaused: Boolean(this.simPaused),
     };
   }
 

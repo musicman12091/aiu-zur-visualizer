@@ -473,17 +473,78 @@ function startDemoBeat(nextContext, fftSize) {
   };
 }
 
-export function startTestOscillator({
-  frequencies = [40, 120, 500, 2000, 8000],
-  pulseHz = 2,
-  fftSize = 2048,
-} = {}) {
-  const nextContext = new AudioContext({ latencyHint: "interactive" });
-  const resumePromise = nextContext.resume();
-  return enqueue(() => finishTestOscillator(nextContext, resumePromise, { frequencies, pulseHz, fftSize }));
+/**
+ * ZUR-GH-014 staccato "Test Beat (Silence + Hits)" (replaces the pegged 5-sine Test Oscillator drone). One 800 ms
+ * loop at the ticket's 120 BPM label: an 85 ms sub/bass kick, 315 ms of pure 0.000 digital silence, an 80 ms
+ * mid/treble snare + arp hit, then 320 ms of pure 0.000 silence. Rendered once into an AudioBuffer (exact zeros in the
+ * gaps) and looped into the analyser only: like the old oscillator it is never connected to the speakers.
+ */
+export const TEST_BEAT_LABEL = "Test Beat (Silence + Hits)";
+export const TEST_BEAT_BPM = 120;
+export const TEST_BEAT_PATTERN_MS = Object.freeze([
+  // ZUR-GH-014 polish: true 120 BPM = one 500 ms beat = 85 ms hit + 415 ms of pure 0.000 silence; hits alternate
+  // kick / snare+arp (1000 ms loop = 2 beats).
+  Object.freeze({ kind: "kick", ms: 85 }),
+  Object.freeze({ kind: "silence", ms: 415 }),
+  Object.freeze({ kind: "snare-arp", ms: 85 }),
+  Object.freeze({ kind: "silence", ms: 415 }),
+]);
+export const TEST_BEAT_LOOP_MS = TEST_BEAT_PATTERN_MS.reduce((sum, step) => sum + step.ms, 0);
+export const TEST_BEAT_PERIOD_MS = 60000 / TEST_BEAT_BPM;   // 500 ms per hit
+
+/** Pure: renders one loop of the staccato Test Beat as mono Float32 samples (gaps are exactly 0). */
+export function renderTestBeat(sampleRate = 48000) {
+  const total = Math.round((TEST_BEAT_LOOP_MS / 1000) * sampleRate);
+  const data = new Float32Array(total);
+  let seed = 0x9e3779b9;
+  const noise = () => {
+    seed = (Math.imul(seed ^ (seed >>> 15), 0x2c1b3c6d) + 0x6d2b79f5) >>> 0;
+    return (seed / 4294967296) * 2 - 1;
+  };
+  let offset = 0;
+  for (const step of TEST_BEAT_PATTERN_MS) {
+    const n = Math.round((step.ms / 1000) * sampleRate);
+    if (step.kind === "kick") {
+      // 150 -> 45 Hz pitch-swept sine + a 55 Hz sub body, fast attack, clean decay to exactly 0 at the step end
+      let phase = 0;
+      for (let i = 0; i < n; i += 1) {
+        const t = i / sampleRate;
+        const f = 45 + 105 * Math.exp(-t * 38);
+        phase += (2 * Math.PI * f) / sampleRate;
+        const env = Math.min(1, i / (0.002 * sampleRate)) * (1 - i / n) ** 1.5;
+        data[offset + i] = (0.85 * Math.sin(phase) + 0.35 * Math.sin(2 * Math.PI * 55 * t)) * env;
+      }
+    } else if (step.kind === "snare-arp") {
+      // band-limited noise snare + 1.32 / 2.64 / 5.28 kHz square arp, decays to exactly 0 at the step end
+      let prev = 0;
+      const arp = [1320, 2640, 5280];
+      for (let i = 0; i < n; i += 1) {
+        const t = i / sampleRate;
+        const env = Math.min(1, i / (0.0015 * sampleRate)) * (1 - i / n) ** 2;
+        const white = noise();
+        const high = white - prev;           // one-pole high-pass: snare sizzle above ~1 kHz
+        prev = white;
+        const note = arp[Math.min(arp.length - 1, Math.floor((i / n) * arp.length))];
+        const square = Math.sin(2 * Math.PI * note * t) >= 0 ? 1 : -1;
+        const body = Math.sin(2 * Math.PI * 330 * t);
+        data[offset + i] = (0.55 * high + 0.30 * square + 0.30 * body) * env;
+      }
+    }
+    // "silence" steps stay at exactly 0.000
+    offset += n;
+  }
+  return data;
 }
 
-async function finishTestOscillator(nextContext, resumePromise, { frequencies, pulseHz, fftSize }) {
+/** The Test Beat button (kept under its historical startTestOscillator name for the HUD / keyboard wiring). */
+export function startTestOscillator({ fftSize = 2048 } = {}) {
+  const nextContext = new AudioContext({ latencyHint: "interactive" });
+  const resumePromise = nextContext.resume();
+  return enqueue(() => finishTestBeat(nextContext, resumePromise, { fftSize }));
+}
+export const startTestBeat = startTestOscillator;
+
+async function finishTestBeat(nextContext, resumePromise, { fftSize }) {
   await stopCapture();
   const token = ++session;
   try {
@@ -493,32 +554,28 @@ async function finishTestOscillator(nextContext, resumePromise, { frequencies, p
       return null;
     }
     context = nextContext;
+    const samples = renderTestBeat(context.sampleRate);
+    const buffer = context.createBuffer(1, samples.length, context.sampleRate);
+    buffer.copyToChannel(samples, 0);
+    const player = remember(context.createBufferSource());
+    player.buffer = buffer;
+    player.loop = true;
     const master = remember(context.createGain());
-    master.gain.value = 0.8;
+    master.gain.value = 0.9;
     master.channelCount = 1;
     master.channelCountMode = "explicit";
-    for (const frequency of frequencies) {
-      const oscillator = remember(context.createOscillator());
-      oscillator.type = "sine";
-      oscillator.frequency.value = frequency;
-      const gain = remember(context.createGain());
-      gain.gain.value = 0.18;
-      connectNode(oscillator, gain);
-      connectNode(gain, master);
-      oscillator.start();
-    }
-    const pulse = remember(context.createOscillator());
-    pulse.type = "square";
-    pulse.frequency.value = pulseHz;
-    const pulseAmount = remember(context.createGain());
-    pulseAmount.gain.value = 0.35;
-    connectNode(pulse, pulseAmount);
-    pulseAmount.connect(master.gain);
-    pulse.start();
+    connectNode(player, master);
+    player.start();
     source = master;
     attachAnalyser(context, master, fftSize, 1);
     currentMode = "oscillator";
-    return { context, source, analyser, audioSettings: { testOscillator: true, frequencies, pulseHz } };
+    return {
+      context,
+      source,
+      analyser,
+      label: TEST_BEAT_LABEL,
+      audioSettings: { testOscillator: true, testBeat: true, bpm: TEST_BEAT_BPM, loopMs: TEST_BEAT_LOOP_MS, pattern: TEST_BEAT_PATTERN_MS },
+    };
   } catch (error) {
     if (token !== session) throw error;
     return failStart(null, nextContext, error);

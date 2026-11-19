@@ -64,7 +64,19 @@ const float LOGO_MIN_RADIUS_PX = 2.6;
 const float DART_SCALE = 0.55;          // ZUR-GH-013: tighter darts (no furry needles)
 const float CRISP_DOT_MAX_PX = 10.0;
 const float SYNAPSE_SPARK_FRACTION = 0.15;
-const float BRAIN_SCALE = 3.4;
+// ZUR-GH-014 polish: synapse-cascade = render-only 2.4x v_neuralPulse brightness / colour wave
+const float CASCADE_PULSE_GAIN = 2.4;
+const float CASCADE_SPEED = 1.25;      // fronts per second
+const float CASCADE_TRAVEL = 2.2;      // brainstem base -> frontal pole, in brain units
+const float CASCADE_WIDTH = 0.11;      // crisp front half-width (brain units)
+const float CASCADE_HIT_FLOOR = 0.35;  // gate-open (hit) floor; silence: cleanGate = 0 -> no cascade
+const float CASCADE_ONSET_GAIN = 2.5;
+const float BRAIN_SCALE = 3.4 * 1.62;      // sim.vert.glsl BRAIN_SCALE (ZUR-GH-014 BRAIN_PRESENCE 1.62)
+const float HOLE_SCALE = 3.2 * 1.0;        // sim.vert.glsl HOLE_SCALE (ZUR-GH-014 HOLE_PRESENCE 1.0)
+// ZUR-GH-014 crisp-dot: anti-aliased pinpoint disc, base radius 1.4 px @ 64k -> 0.95 px @ 256k (log2 interpolation).
+const float CRISP_DOT_RADIUS_64K = 1.4;
+const float CRISP_DOT_RADIUS_256K = 0.95;
+const float TAU_R = 6.28318530718;
 const float BRAIN_CEREBRUM_FRAC = 0.82;
 const float BRAIN_CEREBELLUM_FRAC = 0.11;
 
@@ -126,6 +138,66 @@ void offscreen() {
   gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
 }
 
+float crispDotRadiusPx(float count) {
+  float t = clamp(log2(max(count, 1.0) / 65536.0) / 2.0, 0.0, 1.0);
+  return mix(CRISP_DOT_RADIUS_64K, CRISP_DOT_RADIUS_256K, t);
+}
+
+// ZUR-GH-014 3D Pulse Field: sharp discrete neon dot-lattice nodes computed analytically per instance (the transform-
+// feedback sim is paused on pulse-field-3d). Returns false for instances beyond the lattice budget (culled).
+//  0 band-clouds:     five 13^3 cubic lattices clipped to a ball, one per band, around a pentagon; level expands them
+//  1 geodesic-sphere: 4000-node Fibonacci (golden-angle) geodesic lattice; each latitude band breathes with its band
+//  2 wave-grid:       72 x 72 node grid whose heights are the summed band waves (no streak / blur)
+bool pulseLatticeNode(uint iid, int latticeLayout, out vec3 p, out int band) {
+  float i = float(iid);
+  if (latticeLayout == 1) {
+    const float N = 4000.0;
+    if (i >= N) return false;
+    float y = 1.0 - 2.0 * (i + 0.5) / N;
+    float rr = sqrt(max(0.0, 1.0 - y * y));
+    float az = (i + 0.5) * 2.39996323 + u_time * 0.10;
+    band = int(clamp(floor((y * 0.5 + 0.5) * 5.0), 0.0, 4.0));
+    float level = clamp(u_bands[band], 0.0, 1.5);
+    p = vec3(cos(az) * rr, y, sin(az) * rr) * 3.4 * (1.0 + 0.16 * level);
+    return true;
+  }
+  if (latticeLayout == 2) {
+    const float G = 72.0;
+    if (i >= G * G) return false;
+    float ix = mod(i, G);
+    float iz = floor(i / G);
+    float x = (ix / (G - 1.0) - 0.5) * 8.0;
+    float z = (iz / (G - 1.0) - 0.5) * 8.0;
+    float h = 0.0;
+    for (int b = 0; b < 5; b++) {
+      float fb = float(b);
+      float dir = fb * 1.2566370614;
+      float k = 0.6 + 0.35 * fb;
+      float w = 0.8 + 0.7 * fb;
+      h += clamp(u_bands[b], 0.0, 1.5) * sin(k * (x * cos(dir) + z * sin(dir)) + u_time * w);
+    }
+    band = int(mod(ix + iz, 5.0));
+    float pitch = 0.5585053606; // 32 degrees
+    p = vec3(x, h * 1.1 * cos(pitch) - z * sin(pitch), h * 1.1 * sin(pitch) + z * cos(pitch));
+    return true;
+  }
+  const float C = 13.0;
+  const float PER = C * C * C;
+  if (i >= PER * 5.0) return false;
+  band = int(floor(i / PER));
+  float k = mod(i, PER);
+  vec3 g = vec3(mod(k, C), mod(floor(k / C), C), floor(k / (C * C))) / (C - 1.0) * 2.0 - 1.0;
+  if (dot(g, g) > 1.0) return false;
+  float fb = float(band);
+  float a = fb * 1.2566370614;
+  vec3 center = vec3(cos(a) * 2.6, sin(a) * 1.7, sin(fb * 1.7) * 1.6);
+  float level = clamp(u_bands[band], 0.0, 1.5);
+  float spin = u_time * (0.15 + 0.1 * fb);
+  vec3 q = vec3(cos(spin) * g.x + sin(spin) * g.z, g.y, -sin(spin) * g.x + cos(spin) * g.z);
+  p = center + q * (0.85 + 0.45 * level);
+  return true;
+}
+
 void main() {
   uint iid = uint(gl_InstanceID);
   v_local = vec2(0.0);
@@ -154,13 +226,22 @@ void main() {
     vec4 bhClip = u_viewProj * vec4(0.0, 0.0, 0.0, 1.0);
     float bhW = max(bhClip.w, 0.05);
     vec2 bhNdc = bhClip.xy / bhW * u_cameraZoom + vec2(0.0, u_viewportYOffset);
-    float bhPx = u_projScale * 0.5 * u_resolution.y / bhW * u_cameraZoom * (0.24 * 3.2 * 1.2);
+    float bhPx = u_projScale * 0.5 * u_resolution.y / bhW * u_cameraZoom * (0.24 * HOLE_SCALE * 1.2);
     v_bh = vec3((bhNdc * 0.5 + 0.5) * u_resolution, bhPx);
   }
 
   vec3 center = a_pos.xyz;
   float seed = a_pos.w;
   vec3 vel = a_vel.xyz;
+  int latticeBand = 0;
+  if (u_pulseLayout >= 0) {
+    // pulse-field-3d: the swarm state is ignored (sim paused); nodes sit exactly on the lattice and never move/streak.
+    if (!pulseLatticeNode(iid, u_pulseLayout, center, latticeBand)) {
+      offscreen();
+      return;
+    }
+    vel = vec3(0.0);
+  }
   float speed = length(vel);
   v_seed = seed;
   v_worldPos = center;
@@ -171,6 +252,7 @@ void main() {
 
   // Audio-only firing wave: amplitude comes strictly from the bands (0 in silence); time only moves the front.
   float audioDrive = clamp(u_bands[0] * 0.5 + u_bass * 0.8 + u_onset * 1.3 + u_treble * 0.6, 0.0, 1.5);
+  float cascadePulse = 0.0;   // ZUR-GH-014 polish: synapse-cascade brightness / colour front (render-only, no geometry)
   float wave = sin(length(center) * 14.0 - u_time * 9.0 - u_onset * 5.0);
   v_neuralPulse = smoothstep(0.72, 0.98, wave) * audioDrive;
   if (u_formationType == 6) {
@@ -183,6 +265,17 @@ void main() {
     float travel = length(center - stemBase) / BRAIN_SCALE;
     float conduction = sin(travel * 11.0 - u_time * 8.0 - u_onset * 4.0);
     v_neuralPulse = smoothstep(0.55, 0.95, conduction) * audioDrive;
+    if (u_kineticMode == 1) {
+      // ZUR-GH-014 polish: kineticMode synapse-cascade no longer pushes agents (sim.vert removes the radial part on
+      // surface formations, so the brain swell stays ~1.00x). Instead a crisp electric front races from the brainstem
+      // base across the cortical folds on every hit: v_neuralPulse fires (cyan-white) and the tint peaks at 2.4x.
+      float hit = cleanGate * clamp(CASCADE_HIT_FLOOR + CASCADE_ONSET_GAIN * u_onset, 0.0, 1.0);
+      float front = fract(u_time * CASCADE_SPEED) * CASCADE_TRAVEL;              // brainstem (0) -> frontal cortex
+      float fd = (travel - front) / CASCADE_WIDTH;
+      float folds = 0.75 + 0.25 * sin(travel * 23.0 + seed * 6.2831853);         // ripple along the gyri
+      cascadePulse = exp(-fd * fd) * folds * hit;
+      v_neuralPulse = max(v_neuralPulse, cascadePulse > 0.02 ? 0.56 + 0.44 * cascadePulse : 0.0);
+    }
     if (u_reactivityMode == 2) {
       // ambient-vj only: the legacy idle thalamic rhythm (a time-only pulse, never used by true-gate / ember-floor)
       float thalamic = sin(length(center) * 6.0 - u_time * 3.8 + seed * 1.7);
@@ -194,7 +287,7 @@ void main() {
   float w = max(clipCenter.w, 0.05);
   float pxPerUnit = u_projScale * 0.5 * u_resolution.y / w * u_cameraZoom;
   bool pulse = u_pulseLayout >= 0;
-  int band = int(iid % 5u);
+  int band = u_pulseLayout >= 0 ? latticeBand : int(iid % 5u);
   float bandLevel = pulse ? clamp(u_bands[band], 0.0, 1.5) : 0.0;
   if (pulse) v_band = float(band);
   float sizePulse = 1.0 + 0.45 * u_reactivityGain * (u_bass * 0.5 + u_onset * 0.5) * cleanGate;
@@ -226,6 +319,7 @@ void main() {
   } else if (u_trailType == 2) {
     tint *= mix(0.35, 1.7, step(0.5, fract(u_time * (3.0 + 5.0 * u_trailLength) + seed)));
   }
+  tint *= 1.0 + (CASCADE_PULSE_GAIN - 1.0) * cascadePulse;   // ZUR-GH-014 polish: 2.4x crisp cascade brightness
   v_tint = tint;
 
   if (u_shape == 0 && u_particleStyle == 1) {
@@ -271,6 +365,12 @@ void main() {
   } else {
     // crisp-dot head shared by every quad style: razor pinpoint radius (exp(-r2 * 16) core, hard cutoff at r = 1)
     float headR = clamp(radius * 1.5, 2.5, CRISP_DOT_MAX_PX);
+    if (u_particleStyle == 0 || pulse) {
+      // ZUR-GH-014 true pinpoint: 1.4 px @ 64k -> 0.95 px @ 256k (x Particle Size, +1 px AA rim on the quad);
+      // the pulse lattice uses the same pinpoint nodes (1.6x so the sparse lattice stays legible).
+      float base = crispDotRadiusPx(u_activeCount) * u_size * (pulse ? 2.0 + 0.6 * bandLevel : 1.0);
+      headR = clamp(base * mix(0.9, 1.15, clamp(sizePulse - 1.0, 0.0, 1.0)), 0.8, CRISP_DOT_MAX_PX);
+    }
     if (u_formationType == 5) headR = max(headR, LOGO_MIN_RADIUS_PX * 1.5);
     bool spark = u_particleStyle == 2 && sparkHash < SYNAPSE_SPARK_FRACTION;
     v_spark = spark ? 1.0 : 0.0;

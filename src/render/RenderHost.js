@@ -1,5 +1,5 @@
 import { clamp01, frameCleanGate } from "../audio/FeatureExtractor.js";
-import { PALETTES, shiftPalette } from "../controls/palettes.js";
+import { universalPalette } from "../controls/palettes.js";
 import {
   PARTICLE_SCENE_IDS, PULSE_SCENE_ID, normalizeParticles, reactivityEmission, resolveFboSize, spectralCentroidFromBands,
 } from "./particleMath.js";
@@ -224,7 +224,9 @@ export class RenderHost {
     const transition = this.transition?.update(deltaSeconds, frame.onset) ?? null;
     const visual = preset.visual;
     const mid = clamp01((frame.lowMid + frame.highMid) * 0.5);
-    const palette = shiftPalette(PALETTES[visual.paletteId] || PALETTES["copper-teal"], visual.hueShift || 0);
+    // ZUR-GH-014 universal palette: particles.colorPalette + visual.hueShift drive aurora, canyon, megastructure, pulse
+    // field and the particle engine (visual.paletteId is a legacy field and no longer selects colours).
+    const palette = universalPalette(preset.particles?.colorPalette || "true-neon", visual.hueShift || 0);
     // ZUR-GH-013 true silence-to-peak gate shared by every engine (aurora / canyon / megastructure / particles).
     const reactivityMode = preset.particles?.reactivityMode || "true-gate";
     const gate = frameCleanGate(frame, preset.particles?.reactivityGain ?? 1);
@@ -260,6 +262,9 @@ export class RenderHost {
       if (PARTICLE_SCENE_IDS.includes(scene) && this.particleSystem) this.particleSystem.resetAuto();
       this.activeScene = scene;
     }
+    // ZUR-GH-014: spectral-canyon-3d / aurora-ribbons pause ParticleSystem3D completely (no sim step, no draw);
+    // pulse-field-3d keeps only the analytic lattice draw (its swarm simulation is paused inside ParticleSystem3D).
+    if (!PARTICLE_SCENE_IDS.includes(scene)) this.particleSystem?.pause?.();
     if (PARTICLE_SCENE_IDS.includes(scene) || scene === "spectral-canyon-3d") {
       const hudOpen = Boolean(this.isHudOpen?.());
       this.viewportYOffset = stepViewportYOffset(

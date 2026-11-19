@@ -8,6 +8,7 @@ import {
   applyEngine,
   applyModeKeepingScene,
   applyQuickPreset,
+  applyParticlePatch,
   engineForScene,
   loadStoredState,
   serializeStoredState,
@@ -157,9 +158,8 @@ function persist() {
 }
 
 function updateParticles(partial) {
-  const result = state.updatePreset((draft) => {
-    draft.particles = normalizeParticles({ ...draft.particles, ...partial });
-  });
+  // ZUR-GH-014: a formationType in the patch also lands on the 3D Particle Engine (no Megastructure photobombing).
+  const result = state.replacePreset(applyParticlePatch(state.preset, partial));
   if (!result.ok) hud.setError(result.errors[0]);
   return result;
 }
@@ -176,7 +176,8 @@ function watchCapture(pending, mode) {
     // ZUR-GH-013: 4 s rolling-peak auto-gain only on the shared Android mic stage.
     extractor.setAutoGain(autoGainEnabledFor(mode === "microphone" ? "mic" : mode, result.micStage));
     state.setStatus({ capture: demo ? "demo-beat" : mode });
-    hud.setMicStatus(mode === "microphone" ? getMicState().label : "");
+    // ZUR-GH-014: the Test Beat shows its label ("Test Beat (Silence + Hits)") in the HUD status line.
+    hud.setMicStatus(mode === "microphone" ? getMicState().label : mode === "oscillator" ? (result.label || "") : "");
     hud.setError("");
     publishDiagnostics();
     if (mode === "microphone") void refreshDevices();

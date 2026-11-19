@@ -28,6 +28,23 @@ export const PALETTES = {
 
 export const PALETTE_IDS = Object.keys(PALETTES);
 
+/**
+ * ZUR-GH-014 universal palette: the single HUD Palette (particles.colorPalette) + Hue Shift drives all 5 engines. The
+ * aurora / canyon / megastructure-rim 5-stop palettes come from this table (the old separate Scene Palette row is gone).
+ */
+export const UNIVERSAL_SCENE_PALETTES = Object.freeze({
+  "true-neon": palette("#00F5FF", "#FF007F", "#8A2BE2", "#00FF66", "#00F5FF"),
+  "full-spectrum": palette("#FF1744", "#FFE600", "#00FF66", "#00B3FF", "#B000FF"),
+  "white-static": palette("#FFFFFF", "#D8ECFF", "#B8D8FF", "#FFFFFF", "#D8ECFF"),
+  "crimson-pulse": palette("#2B0005", "#D90416", "#FF2A38", "#C8000A", "#FF0818"),
+  "golden-cortex": palette("#FFD400", "#FFA800", "#FF7A00", "#00FFFF", "#B8D8FF"),
+});
+
+/** Shifted 5-stop scene palette for a universal colorPalette id (falls back to true-neon). */
+export function universalPalette(colorPalette, hueShift = 0) {
+  return shiftPalette(UNIVERSAL_SCENE_PALETTES[colorPalette] || UNIVERSAL_SCENE_PALETTES["true-neon"], hueShift);
+}
+
 function clampUnit(value) {
   return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0;
 }

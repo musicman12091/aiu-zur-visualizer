@@ -224,6 +224,9 @@
     .track-status { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
     .track-status[data-playing="true"] { color: #9ff5d6; }
     .hud-button:disabled { opacity: 0.45; cursor: not-allowed; }
+    /* ZUR-GH-014 v6.1: one universal Palette row (Palette + Hue Shift); context-hidden rows collapse */
+    .field-group.universal-palette { margin-top: 10px; padding: 2px 8px 8px; border: 1px solid var(--line); border-radius: 10px; }
+    .field-group[hidden] { display: none; }
     @media (max-width: 720px) {
       #hud-root { inset: auto 8px 8px 8px; }
       .hud { width: 100%; max-height: 46dvh; }

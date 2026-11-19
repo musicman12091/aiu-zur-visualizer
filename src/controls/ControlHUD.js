@@ -1,4 +1,3 @@
-import { PALETTE_IDS, PALETTES } from "./palettes.js";
 import { QUALITY_TIERS } from "../render/RenderHost.js";
 import {
   CAMERA_ZOOM_RANGE,
@@ -12,8 +11,10 @@ import {
   TRAIL_LENGTH_RANGE,
 } from "../render/particleMath.js";
 import { DEFAULT_PARTICLES } from "../render/particleMath.js";
-import { ENGINES, PARTICLE_SIZE_HUD_MAX, QUICK_PRESETS, engineForScene } from "../app/AppState.js";
-import { TRACK_ACCEPT } from "../audio/AudioEngine.js";
+import {
+  ENGINES, PARTICLE_SIZE_HUD_MAX, QUICK_PRESETS, controlVisible, engineForScene, quickPresetForState,
+} from "../app/AppState.js";
+import { TEST_BEAT_LABEL, TRACK_ACCEPT } from "../audio/AudioEngine.js";
 import { DECK_LAYOUT, fillSelect, optionsFor } from "./hudTabs.js";
 
 /** Flat read-only view of the preset for the deck (no constraints: what is stored is what is shown). */
@@ -140,7 +141,7 @@ export class ControlHUD {
     promptHint.id = "audio-prompt-hint";
     this.audioPrompt.append(promptHint);
     this.btnMicPrompt = this._button("btn-mic-prompt", "Mic / call speaker", () => this.handlers.mic?.());
-    this.btnOscPrompt = this._button("btn-oscillator-prompt", "Test oscillator", () => this.handlers.oscillator?.());
+    this.btnOscPrompt = this._button("btn-oscillator-prompt", TEST_BEAT_LABEL, () => this.handlers.oscillator?.());
     this.btnMicPrompt.classList.add("audio-prompt-btn");
     this.btnOscPrompt.classList.add("audio-prompt-btn");
     this.audioPrompt.append(this.btnMicPrompt, this.btnOscPrompt);
@@ -208,7 +209,7 @@ export class ControlHUD {
     this._buildRig();
     this.body.append(this.rig);
 
-    this.hint = el("p", "hint", "H hides the panel. 1 / 2 load Mode A / B. T starts the silent test oscillator. P cycles engines, F cycles flow mode, K cycles kaleidoscope.");
+    this.hint = el("p", "hint", "H hides the panel. 1 / 2 load Mode A / B. T starts the silent Test Beat (silence + hits). P cycles engines, F cycles flow mode, K cycles kaleidoscope.");
     this.body.append(this.hint);
     panel.append(this.body);
     this.root.append(panel);
@@ -230,10 +231,15 @@ export class ControlHUD {
       const label = name;
       add(name, this._select(id, label, [], (value) => particles({ [key]: value })));
     }
-    add("palette", this._select("sel-palette", "Palette", [], (value) => particles({ colorPalette: value })));
-    add("scenePalette", this._select("sel-scene-palette", "Scene Palette", [], (value) => {
-      this._commit((draft) => { draft.visual.paletteId = value; });
-    }));
+    // ZUR-GH-014 universal palette: ONE row (Palette + Hue Shift) drives all 5 engines; the Scene Palette row is gone.
+    const paletteSelect = this._select("sel-palette", "Palette", [], (value) => particles({ colorPalette: value }));
+    const hueShift = this._range("rng-hue", "Hue Shift", -1, 1, 0.01, (value) => {
+      this._commit((draft) => { draft.visual.hueShift = value; });
+    });
+    const paletteRow = el("div", "field-group universal-palette");
+    paletteRow.append(paletteSelect.wrap, hueShift.wrap);
+    add("palette", { wrap: paletteRow, select: paletteSelect.select });
+    this.controls.hueShift = hueShift;
     add("cameraMode", this._select("sel-camera-mode", "Camera Mode", optionsFor("cameraMode"), (value) => {
       this._commit((draft) => { draft.visual.cameraMode = value; });
     }));
@@ -258,9 +264,6 @@ export class ControlHUD {
     }));
     add("oscSpeed", this._range("rng-osc-speed", "Oscillation Speed", OSCILLATION_SPEED_RANGE[0], OSCILLATION_SPEED_RANGE[1], 0.05, (value) => {
       particles({ oscillationSpeed: value });
-    }));
-    add("hueShift", this._range("rng-hue", "Hue Shift", -1, 1, 0.01, (value) => {
-      this._commit((draft) => { draft.visual.hueShift = value; });
     }));
     add("chromatic", this._range("rng-chromatic-aberration", "Chromatic Aberration", 0, 1, 0.01, (value) => {
       this._commit((draft) => { draft.visual.chromaticAberration = value; });
@@ -330,7 +333,7 @@ export class ControlHUD {
     const captureRow = el("div", "row");
     captureRow.append(this._button("btn-tab", "Tab capture", () => this.handlers.tab?.()));
     captureRow.append(this._button("btn-mic", "Mic / call speaker", () => this.handlers.mic?.()));
-    captureRow.append(this._button("btn-oscillator", "Test oscillator", () => this.handlers.oscillator?.()));
+    captureRow.append(this._button("btn-oscillator", TEST_BEAT_LABEL, () => this.handlers.oscillator?.()));
     captureRow.append(this._button("btn-stop", "Stop", () => this.handlers.stop?.()));
     capture.append(captureRow);
     this.suppress = this._checkbox("chk-suppress", "Suppress local playback", (checked) => {
@@ -663,8 +666,12 @@ export class ControlHUD {
     this.title.textContent = preset.name || preset.sceneId;
 
     // Quick Presets strip + Engine Selector: highlight only (never re-built, never constraining).
+    // ZUR-GH-014: a pill lights only when the live sceneId + formation really match it (never stuck on Gargantua).
+    const matchedQuick = quickPresetForState(preset);
+    const activeAttr = matchedQuick ?? "";
+    if (this.quickBar.dataset.active !== activeAttr) this.quickBar.dataset.active = activeAttr;
     for (const [id, button] of Object.entries(this.quickButtons)) {
-      const active = id === flat.quickPreset;
+      const active = id === matchedQuick;
       if (button.getAttribute("aria-pressed") !== String(active)) button.setAttribute("aria-pressed", String(active));
       button.classList.toggle("is-active", active);
     }
@@ -682,7 +689,8 @@ export class ControlHUD {
     for (const [name] of DECK_LAYOUT) {
       const control = this.controls[name];
       if (!control) continue;
-      this._setHidden(control.wrap, false);
+      // ZUR-GH-014: only controls wired to the active engine are shown (hidden rows keep their values).
+      this._setHidden(control.wrap, !controlVisible(name, preset));
       if (control.select) this._syncSelect(control, optionsFor(name), this._valueFor(name, flat));
     }
 
@@ -720,7 +728,8 @@ export class ControlHUD {
     this.audioPrompt.classList.toggle("is-idle", captureIdle);
     this._setHidden(this.audioPrompt, !captureIdle);
     this._setPill(this.pills.wakeLock, this.state.status.wakeLock, `Wake ${this.state.status.wakeLock}`);
-    this._setPill(this.pills.capture, this.state.status.capture, `Capture ${this.state.status.capture}`);
+    const capture = this.state.status.capture;
+    this._setPill(this.pills.capture, capture, capture === "oscillator" ? "Test Beat" : `Capture ${capture}`);
     this._setPill(this.pills.webgl, this.state.status.webgl, this.state.status.webgl === "webgl2" ? "WebGL2" : `WebGL ${this.state.status.webgl}`);
   }
 
@@ -739,7 +748,6 @@ export class ControlHUD {
       case "kaleido": return String(flat.kaleidoSegments);
       case "palette": return flat.colorPalette;
       case "reactivityMode": return flat.reactivityMode;
-      case "scenePalette": return PALETTES[flat.paletteId] ? flat.paletteId : PALETTE_IDS[0];
       default: return "";
     }
   }

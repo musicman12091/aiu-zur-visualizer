@@ -211,15 +211,72 @@ export const LOGO_TRAIL_HUD_MAX = 0.35;
 export const LOGO_HUD_TEXTS = Object.freeze(["MON DAAIN", "AI: UNDERGROUND", "TENTH GATE", "ZUR"]);
 export { CAMERA_MODES };
 
+/** ZUR-GH-014: every Quick Preset tap re-frames the shot (zoom 1.00, short 0.08 trail, physarum flow). */
+export const QUICK_PRESET_RESETS = Object.freeze({ cameraZoom: 1.0, trailLength: 0.08, flowMode: "physarum" });
+
 /** Pure: applies a Quick Preset patch to a copy of the preset (particleStyle and the palette are never touched). */
 export function applyQuickPreset(preset, quickPresetId) {
   const entry = QUICK_PRESETS.find((item) => item.id === quickPresetId);
   const next = JSON.parse(JSON.stringify(preset));
   if (!entry) return next;
   next.sceneId = entry.sceneId;
-  next.particles = normalizeParticles({ ...DEFAULT_PARTICLES, ...(next.particles || {}), ...entry.particles });
+  next.particles = normalizeParticles({
+    ...DEFAULT_PARTICLES, ...(next.particles || {}), ...entry.particles, ...QUICK_PRESET_RESETS,
+  });
   next.deck = { ...(isObject(next.deck) ? next.deck : {}), quickPreset: entry.id };
   return next;
+}
+
+/**
+ * ZUR-GH-014: the Quick Preset pill that really matches the live state (sceneId + formation), else null. Particle
+ * presets need the 3D Particle Engine and their formation; Megastructure / Spectral Canyon match on the scene alone.
+ * Nothing is remembered, so a pill can never stay stuck (e.g. on Gargantua) after the scene or formation moved on.
+ */
+export function quickPresetForState(preset) {
+  const sceneId = preset?.sceneId;
+  const formation = preset?.particles?.formationType;
+  const entry = QUICK_PRESETS.find((item) => item.sceneId === sceneId
+    && (item.sceneId !== PARTICLE_SCENE_ID || item.particles.formationType === formation));
+  return entry ? entry.id : null;
+}
+
+/**
+ * ZUR-GH-014: choosing ANY Formation lands on the 3D Particle Engine (sceneId = particle-swarm-3d) so Megastructure /
+ * Canyon / Pulse / Aurora can never composite over Brain, Wormhole, Logo or Ferrofluid. Style / palette / flow and every
+ * other parameter are kept exactly as they were.
+ */
+export function applyFormation(preset, formationType) {
+  const next = JSON.parse(JSON.stringify(preset));
+  if (!FORMATION_TYPES.includes(formationType)) return next;
+  next.sceneId = PARTICLE_SCENE_ID;
+  next.particles = normalizeParticles({ ...(next.particles || {}), formationType });
+  next.deck = { ...(isObject(next.deck) ? next.deck : {}), quickPreset: quickPresetForState(next) };
+  return next;
+}
+
+/** Pure: a particle-parameter patch; a formationType in it routes through applyFormation (scene switch). */
+export function applyParticlePatch(preset, partial) {
+  const patch = isObject(partial) ? partial : {};
+  let next = JSON.parse(JSON.stringify(preset));
+  if (patch.formationType != null) next = applyFormation(next, patch.formationType);
+  const { formationType, ...rest } = patch;
+  next.particles = normalizeParticles({ ...(next.particles || {}), ...rest });
+  return next;
+}
+
+/**
+ * ZUR-GH-014 context HUD: only controls wired to the active engine are shown (values are never reset).
+ * Formation / Particle Style / Flow / Kinetic need the 3D Particle Engine; Logo Text needs the logo-attractor formation
+ * on it; Pulse Field Layout needs pulse-field-3d. Everything else stays visible on every engine.
+ */
+export const PARTICLE_ONLY_CONTROLS = Object.freeze(["formation", "style", "flow", "kinetic"]);
+export function controlVisible(control, preset) {
+  const sceneId = preset?.sceneId;
+  const formation = preset?.particles?.formationType;
+  if (PARTICLE_ONLY_CONTROLS.includes(control)) return sceneId === PARTICLE_SCENE_ID;
+  if (control === "logoText") return sceneId === PARTICLE_SCENE_ID && formation === "logo-attractor";
+  if (control === "pulseLayout") return sceneId === PULSE_SCENE_ID;
+  return true;
 }
 
 /** Pure: Engine Selector switch. Only the scene changes; formation / style / palette are left as they are. */
@@ -295,12 +352,16 @@ function isObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-/** v6.0 persisted state (ZUR-GH-013): `{ storageSchema, preset }` under this key. Older keys are migrated on load. */
-export const STORAGE_KEY = "zur_state_v6_0";
-export const STORAGE_SCHEMA = 6.0;
+/** v6.1 persisted state (ZUR-GH-014): `{ storageSchema, preset }` under this key. Older keys are migrated on load. */
+export const STORAGE_KEY = "zur_state_v6_1";
+export const STORAGE_SCHEMA = 6.1;
+/** v6.0 (ZUR-GH-013) schema: saves older than this get the crisp-dot / true-gate reset; v6.0 saves keep their style. */
+export const V60_STORAGE_SCHEMA = 6.0;
+/** ZUR-GH-014: saves older than v6.1 with a cameraZoom below this snap back to 1.00 (fixes the 20% thumbnails). */
+export const V61_MIN_ZOOM = 0.75;
 export const V4_NEON_FLAG = "zur_v4_neon_forced";
 export const LEGACY_STORAGE_KEYS = Object.freeze([
-  "zur_state_v5_3", "zur_state_v5_2", "zur_state_v5_1", "zur_state_v5_0", "zur_state_v4_0", "zur_state_v3_2", "zur_state_v3",
+  "zur_state_v6_0", "zur_state_v5_3", "zur_state_v5_2", "zur_state_v5_1", "zur_state_v5_0", "zur_state_v4_0", "zur_state_v3_2", "zur_state_v3",
   "zur_state_v2", "zur_state_v1", "zur.preset.v2", "zur.preset.v1",
 ]);
 /** Forced on any cached state older than v3.2 or still on copper-teal (grey-prone, small, dim). */
@@ -379,6 +440,15 @@ export function upgradeToV60(preset, { blood = isLegacyBloodPreset(preset) } = {
   return next;
 }
 
+/** ZUR-GH-014: v6.1 upgrade. Only a tiny saved zoom (< 0.75) is reset to 1.00; style / palette / flow are kept. */
+export function upgradeToV61(preset) {
+  const next = JSON.parse(JSON.stringify(preset));
+  const particles = normalizeParticles(next.particles);
+  if (!(particles.cameraZoom >= V61_MIN_ZOOM)) particles.cameraZoom = 1.0;
+  next.particles = particles;
+  return next;
+}
+
 export function serializeStoredState(preset) {
   return JSON.stringify({ storageSchema: STORAGE_SCHEMA, preset });
 }
@@ -396,7 +466,7 @@ export function migrateStoredPayload(raw) {
   const schema = enveloped && Number.isFinite(parsed.storageSchema) ? parsed.storageSchema : 0;
   const sourcePreset = enveloped ? parsed.preset : parsed;
   // Blood detection runs on the raw save, before normalizeParticles() maps blood-drop / splatter-run away.
-  const blood = schema < STORAGE_SCHEMA && isLegacyBloodPreset(sourcePreset);
+  const blood = schema < V60_STORAGE_SCHEMA && isLegacyBloodPreset(sourcePreset);
   delete sourcePreset.hud;
   if (isObject(sourcePreset.particles)) sourcePreset.particles = normalizeParticles(sourcePreset.particles);
   const checked = validatePreset(sourcePreset);
@@ -410,10 +480,18 @@ export function migrateStoredPayload(raw) {
     if (isCopper) preset.visual.hueShift = 0;
     migrated = true;
   }
-  if (schema < STORAGE_SCHEMA) {
+  if (schema < V60_STORAGE_SCHEMA) {
+    // v5_3 and older: the v6.0 crisp-dot / true-gate reset (ZUR-GH-013), then the v6.1 zoom repair.
     const upgraded = upgradeToV40(preset);
-    preset = upgradeToV60(upgradeToV50(upgraded.preset), { blood });
+    preset = upgradeToV61(upgradeToV60(upgradeToV50(upgraded.preset), { blood }));
     forcedNeon = upgraded.forcedNeon;
+    migrated = true;
+  } else if (schema < STORAGE_SCHEMA) {
+    // v6.0 -> v6.1: particleStyle (and everything else) is kept; only a cameraZoom < 0.75 snaps back to 1.00.
+    preset = upgradeToV61({
+      ...preset,
+      visual: { cameraMode: "orbit-3d", chromaticAberration: 0.30, godRays: 0.35, vjAutopilot: false, ...preset.visual },
+    });
     migrated = true;
   } else {
     preset = {

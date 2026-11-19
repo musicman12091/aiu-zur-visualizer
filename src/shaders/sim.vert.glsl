@@ -42,12 +42,23 @@ uniform float u_reactivityGain;  // ZUR-GH-009: Reactivity Punch 0.5..5.0
 uniform float u_cleanGate;       // ZUR-GH-013: smoothstep(0.018, 0.13, maxBandEnergy * u_reactivityGain), 0 in silence
 uniform int u_reactivityMode;    // ZUR-GH-013: 0 true-gate, 1 ember-floor, 2 ambient-vj
 
-const float BOUND_RADIUS = 7.2;
+// ZUR-GH-014 smooth spherical radial containment (no cubic clamp anywhere): a soft spring from CONTAIN_R_SOFT and a
+// smooth tanh cap so r <= CONTAIN_R_MAX. Both scale with the v6.1 viewport presence (was a 7.2 soft bound).
+const float CONTAIN_R_SOFT = 8.0;
+const float CONTAIN_R_MAX = 9.0;
 // Spawn / formation volume: the normalized [-1.25, +1.25] cube scaled to world units.
 const float VOLUME_HALF = 1.25;
 const float WORLD_SCALE = 3.2;
 const float VOLUME_WORLD = VOLUME_HALF * WORLD_SCALE;
 const float TAU = 6.28318530718;
+// ZUR-GH-014 viewport presence: each structured formation is sized so it spans 68-82% of the 412x915 portrait width at
+// cameraZoom 1.0 (particleMath.js PRESENCE_SCALE mirrors these factors; render.vert.glsl mirrors BRAIN / HOLE).
+const float WORMHOLE_PRESENCE = 1.48;
+const float BRAIN_PRESENCE = 1.62;
+const float HOLE_PRESENCE = 1.0;
+const float FERRO_PRESENCE = 1.0;
+const float GALAXY_PRESENCE = 1.0;
+const float LOGO_PRESENCE = 1.2;
 
 uint hash32(uint x) {
   x ^= x >> 16u;
@@ -241,7 +252,7 @@ vec3 logoAttractorTarget() {
   vec3 right = length(u_billboardRight) > 0.5 ? normalize(u_billboardRight) : vec3(1.0, 0.0, 0.0);
   vec3 up = length(u_billboardUp) > 0.5 ? normalize(u_billboardUp) : vec3(0.0, 1.0, 0.0);
   vec3 toward = cross(right, up); // points back at the camera
-  return right * aLogoTarget.x + up * aLogoTarget.y + toward * aLogoTarget.z;
+  return (right * aLogoTarget.x + up * aLogoTarget.y + toward * aLogoTarget.z) * LOGO_PRESENCE;
 }
 
 // Rodrigues rotation of v about a unit axis.
@@ -343,12 +354,15 @@ vec3 tiltToFormation(vec3 p) {
 
 
 // ---- ZUR-GH-009 Stage 5 formations (ids 6..9). Normalised shapes scaled into the existing +/-4 world volume. ----
-const float BRAIN_SCALE = 3.4;
-const float GALAXY_SCALE = 3.4;
-const float HOLE_SCALE = 3.2;
+const float BRAIN_SCALE = 3.4 * BRAIN_PRESENCE;
+const float GALAXY_SCALE = 3.4 * GALAXY_PRESENCE;
+const float HOLE_SCALE = 3.2 * HOLE_PRESENCE;
 const float FORMATION_TETHER_MIN = 4.2;
 const float FORMATION_CURL_CAP = 0.18;
-const float WORMHOLE_SCALE = 2.6;
+const float WORMHOLE_SCALE = 2.6 * WORMHOLE_PRESENCE;
+// ZUR-GH-014: on surface formations Flow turbulence is only a surface-tangent drift of <= 0.035 x the formation radius.
+const float SURFACE_TURBULENCE_CAP = 0.035;
+const float SURFACE_KINETIC_CAP_SCALE = 3.0;   // kinetic tangent push <= 3 x 0.035 x radius x pull on surface formations
 
 // 80% cortical soma / 20% interior white-matter axon tracts (render.vert.glsl mirrors this split for the gold tint).
 bool isCorticalSoma(uint uid) {
@@ -461,7 +475,7 @@ vec3 neuralBrainTarget(float seed, uint uid) {
 
 // ---- ZUR-GH-013 Harmonic Ferrofluid (replaces Blood): 70% spherical-harmonic spike shell on 5 FFT bands + 30% EQ rings.
 const float FERRO_SHELL_FRAC = 0.70;
-const float FERRO_SCALE = 2.4;
+const float FERRO_SCALE = 2.4 * FERRO_PRESENCE;
 
 vec3 harmonicFerrofluidTarget(float seed, uint uid) {
   vec3 h = hash3(uid ^ 0x51ed270bu);
@@ -627,18 +641,32 @@ vec3 blackHoleExclude(vec3 pos) {
   return pos;
 }
 
-// ZUR-GH-013 Spherical Wormhole — Funnel in Sphere: a closed horned torus. theta = u * TAU sweeps the meridian:
-// theta = 0 is the outer R = 0.94 equator of the dot shell, theta = PI the tight r = 0.08 throat inside it; both poles
-// fold the shell smoothly inward. Streams flow along the meridian (shell -> pole -> throat -> pole -> shell).
-const float WORMHOLE_TILT = 0.3839724354;  // 22 degrees toward the camera
+// ZUR-GH-014 Geodesic Funnel-in-Sphere Wormhole. A transparent outer dot sphere (R = 0.94, 25% of agents, sparse) and
+// 64 crisp geodesic meridian tracks (75%). Each track is the horned-torus meridian at a fixed azimuth psi_k = k TAU / 64:
+// theta = 0 on the outer equator, over the N / S polar rim (theta = PI/2, 3PI/2) and down into the r = 0.08 throat
+// (theta = PI). Agents stream along their track; the whole funnel is tilted 38 degrees toward the camera.
+const float WORMHOLE_TILT = 0.6632251158;  // 38 degrees toward the camera (ZUR-GH-014, was 22)
+const float WORMHOLE_MERIDIANS = 64.0;
+const float WORMHOLE_TRACK_FRAC = 0.75;
 vec3 wormholeTarget(float seed, uint uid) {
   vec3 h = hash3(uid ^ 0x5be0cd19u);
-  float u = fract(h.x + u_time * 0.035);
-  float theta = u * TAU;
-  float rxz = 0.51 + 0.43 * cos(theta);
-  float y = 0.76 * sin(theta) * mix(0.52, 1.0, 0.5 + 0.5 * cos(theta));
-  float psi = h.y * TAU + u_time * 0.12;
-  vec3 p = vec3(cos(psi) * rxz, y, sin(psi) * rxz);
+  float spin = u_time * 0.12;
+  vec3 p;
+  if (hashf(uid ^ 0x7a3c19e5u) < WORMHOLE_TRACK_FRAC) {
+    float u = fract(h.x + u_time * 0.035);
+    float theta = u * TAU;
+    float rxz = 0.51 + 0.43 * cos(theta);
+    float y = 0.76 * sin(theta) * mix(0.52, 1.0, 0.5 + 0.5 * cos(theta));
+    float track = min(floor(h.y * WORMHOLE_MERIDIANS), WORMHOLE_MERIDIANS - 1.0);
+    float psi = track * (TAU / WORMHOLE_MERIDIANS) + spin;   // discrete azimuth: one crisp geodesic line per track
+    p = vec3(cos(psi) * rxz, y, sin(psi) * rxz);
+  } else {
+    // transparent outer sphere: sparse dots on the R = 0.94 shell that the tracks plunge out of
+    p = unitSphere(h.xy) * 0.94;
+    float c0 = cos(spin);
+    float s0 = sin(spin);
+    p = vec3(c0 * p.x + s0 * p.z, p.y, -s0 * p.x + c0 * p.z);
+  }
   float c = cos(WORMHOLE_TILT);
   float s = sin(WORMHOLE_TILT);
   p = vec3(p.x, p.y * c - p.z * s, p.y * s + p.z * c);
@@ -649,6 +677,25 @@ vec3 wormholeTarget(float seed, uint uid) {
 const float STRUCTURED_ONSET_PULSE = 0.08;  // max transient radial scale 1.08x (onset only, never bass / RMS)
 bool structuredFormation() {
   return u_formationType == 5 || u_formationType == 6 || u_formationType == 8 || u_formationType == 9;
+}
+// ZUR-GH-014 surface formations (wormhole, neural-brain, logo-attractor, supermassive-blackhole, harmonic-ferrofluid):
+// any Flow mode only adds a <= SURFACE_TURBULENCE_CAP surface-tangent drift, so glyphs and sulci stay razor sharp.
+bool surfaceFormation() {
+  return u_pulseLayout < 0 && (structuredFormation() || u_formationType == 10);
+}
+
+// Smooth spherical containment: radius r > CONTAIN_R_SOFT is compressed with tanh so it never exceeds CONTAIN_R_MAX.
+vec3 containRadial(vec3 p) {
+  float r = length(p);
+  if (r <= CONTAIN_R_SOFT) return p;
+  float band = CONTAIN_R_MAX - CONTAIN_R_SOFT;
+  return p * ((CONTAIN_R_SOFT + band * tanh((r - CONTAIN_R_SOFT) / band)) / r);
+}
+
+// Uniform point in a ball (spherical reseed: never a cube).
+vec3 ballPoint(uint key, float radius) {
+  vec3 h = hash3(key);
+  return unitSphere(h.xy) * radius * pow(max(h.z, 1e-4), 1.0 / 3.0);
 }
 
 // Stage 3 formation target for one agent. free-3d returns pos (no pull).
@@ -841,12 +888,15 @@ void main() {
     F += normalize(pos + 1e-4) * u_high * u_high * 18.0 * step(0.45, seed);
     F -= pos * 0.06 * smoothstep(4.0, 6.0, length(pos));      // soft spherical bound
     phase -= dt / (2.8 + 2.2 * seed);
-    if (pos.y > GAS_WRAP_Y) {
+    // ZUR-GH-014: surface formations never teleport (no Y / spherical wrap, no reseed) so their silhouette holds.
+    if (surfaceFormation()) {
+      phase = max(phase, 0.05);
+    } else if (pos.y > GAS_WRAP_Y) {
       pos.y -= 2.0 * GAS_WRAP_Y;                               // toroidal Y wrap: re-enter underneath, same column
     } else if (pos.y < -GAS_WRAP_Y) {
       pos.y += 2.0 * GAS_WRAP_Y;
     }
-    if (length(pos) > 6.5) pos *= -0.85;                       // spherical wrap through the opposite side
+    if (!surfaceFormation() && length(pos) > 6.5) pos *= -0.85;  // spherical wrap through the opposite side
     if (phase <= 0.0) {
       vec3 h = hash3(uid ^ hash32(uint(u_time * 60.0) + 7u));
       float a = h.x * 6.2831853;
@@ -930,6 +980,8 @@ void main() {
     phase = fract(phase + dt * (0.5 + 2.0 * u_onset));
   }
 
+  vec3 surfaceNormal = vec3(0.0);   // ZUR-GH-014: set for surface formations (kinetic forces stay on the surface too)
+  float surfaceDriftMax = 0.0;
   if (u_pulseLayout >= 0) {
     // Stage 3 pulse-field: spring to the layout target, swirl speed driven by the agent's band.
     float stiff;
@@ -969,6 +1021,19 @@ void main() {
       float fl = length(F);
       if (fl > curlMax) F *= curlMax / fl;
     }
+    if (surfaceFormation()) {
+      // ZUR-GH-014: Fluid / Gas / any flow becomes a surface-tangent drift: the normal (radial) part is removed and the
+      // tangent part is capped at 0.035 x formationRadius x pull (equilibrium drift <= 0.035 x radius).
+      vec3 nrm = normalize(target + vec3(1e-5));
+      F -= nrm * dot(F, nrm);
+      float driftMax = SURFACE_TURBULENCE_CAP * formationRadius * pull;
+      surfaceNormal = nrm;
+      surfaceDriftMax = driftMax;
+      float ft = length(F);
+      if (ft > driftMax) F *= driftMax / ft;
+      lo = 0.0;                     // no minimum-speed orbiting around the target (murmuration / fish / physarum)
+      hi = min(hi, 6.0);
+    }
     float damp = u_formationType == 0 ? 0.0 : (u_formationType == 5 ? 5.5 : 2.6);
     F += (target - pos) * pull - vel * damp;
     if (u_formationType == 1) F += tiltToWorld(vec3(0.0, 0.0, 1.8 + 3.0 * u_rms + 2.0 * u_bass));
@@ -978,10 +1043,21 @@ void main() {
   }
 
   // Soft spherical boundary keeps every agent in the camera volume.
-  float over = max(length(pos) - BOUND_RADIUS, 0.0);
+  float over = max(length(pos) - CONTAIN_R_SOFT, 0.0);
   F += -normalize(pos + 1e-5) * over * over * 6.0;
 
-  if (u_kineticMode >= 1) F += kineticForce(pos, vel, seed, uid);
+  if (u_kineticMode >= 1) {
+    vec3 kf = kineticForce(pos, vel, seed, uid);
+    if (surfaceDriftMax > 0.0) {
+      // ZUR-GH-014: on surface formations a kinetic mode (e.g. synapse-cascade) fires ALONG the surface only: the
+      // radial part is removed and the tangent push is capped at 3x the flow drift cap, so the silhouette never balloons.
+      kf -= surfaceNormal * dot(kf, surfaceNormal);
+      float kl = length(kf);
+      float kMax = SURFACE_KINETIC_CAP_SCALE * surfaceDriftMax;
+      if (kl > kMax) kf *= kMax / kl;
+    }
+    F += kf;
+  }
   // ZUR-GH-009: onset velocity impulse (kept even when Oscillation amount == 0); glyph targets only feel 15%.
   float onsetKick = u_onset * 2.2 * u_reactivityGain * (u_formationType == 5 ? 0.15 : 1.0);
   vec3 kickDir = normalize(radial + (hash3(uid ^ 0x7f4a7c15u) - 0.5) * 0.9 + vec3(1e-4));
@@ -1039,9 +1115,12 @@ void main() {
     }
   }
 
-  // NaN / runaway guard.
+  // ZUR-GH-014 smooth spherical containment (r <= CONTAIN_R_MAX); there is no cubic box clamp anywhere.
+  if (u_pulseLayout < 0 && u_formationType != 1) pos = containRadial(pos);
+
+  // NaN / runaway guard (spherical reseed).
   if (any(isnan(pos)) || any(isinf(pos)) || length(pos) > 40.0) {
-    pos = (hash3(uid + 17u) - 0.5) * 4.0;
+    pos = ballPoint(uid + 17u, 2.0);
     vel = vec3(0.0);
   }
   if (any(isnan(vel)) || any(isinf(vel))) vel = vec3(0.0);

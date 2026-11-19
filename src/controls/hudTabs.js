@@ -1,4 +1,3 @@
-import { PALETTE_IDS } from "./palettes.js";
 import {
   COLOR_PALETTES,
   COLOR_PALETTE_LABELS,
@@ -79,7 +78,11 @@ export function fillSelect(select, options) {
 
 const pairs = (ids, labels) => ids.map((id) => ({ value: id, label: labels[id] || id }));
 
-/** `[control, label]` rows of the unlocked deck, in on-screen order. Every row is always visible. */
+/**
+ * `[control, label]` rows of the unlocked deck, in on-screen order. ZUR-GH-014: rows are shown only when wired to the
+ * active engine (AppState.controlVisible) and the single universal Palette row (Palette + Hue Shift) drives all 5
+ * engines; the duplicate Scene Palette row was deleted.
+ */
 export const DECK_LAYOUT = Object.freeze([
   ["formation", "Formation"], ["style", "Particle Style"], ["palette", "Palette"],
   ["reactivityMode", "Reactivity Mode"], ["reactivity", "Reactivity Punch"],
@@ -87,8 +90,7 @@ export const DECK_LAYOUT = Object.freeze([
   ["zoom", "Camera Zoom"], ["cameraMode", "Camera Mode"], ["trailType", "Trail Type"], ["trailLength", "Trail Length"],
   ["oscillation", "Oscillation"], ["oscAmount", "Oscillation Amount"], ["oscSpeed", "Oscillation Speed"],
   ["logoText", "Logo Text"], ["pulseLayout", "Pulse Field Layout"], ["kaleido", "Kaleidoscope Mirrors"],
-  ["kaleidoSpin", "Beat Spin"], ["scenePalette", "Scene Palette (Aurora / Canyon)"], ["hueShift", "Hue Shift"],
-  ["chromatic", "Chromatic Aberration"], ["godRays", "God Rays"],
+  ["kaleidoSpin", "Beat Spin"], ["chromatic", "Chromatic Aberration"], ["godRays", "God Rays"],
 ]);
 
 /** Raw option list for a select control (full lists, never filtered). */
@@ -100,7 +102,6 @@ export function optionsFor(control) {
     case "kinetic": return pairs(KINETIC_MODES, KINETIC_LABELS);
     case "palette": return pairs(COLOR_PALETTES, COLOR_PALETTE_LABELS);
     case "reactivityMode": return pairs(REACTIVITY_MODES, REACTIVITY_MODE_LABELS);
-    case "scenePalette": return PALETTE_IDS.map((id) => ({ value: id, label: id }));
     case "oscillation": return pairs(OSCILLATION_TYPES, OSC_LABELS);
     case "logoText": return LOGO_HUD_TEXTS.map((text) => ({ value: text, label: text }));
     case "pulseLayout": return pairs(PULSE_LAYOUTS, LAYOUT_LABELS);
@@ -113,7 +114,7 @@ export function optionsFor(control) {
 }
 
 export const SELECT_CONTROL_NAMES = Object.freeze([
-  "formation", "flow", "style", "kinetic", "palette", "reactivityMode", "scenePalette", "oscillation", "logoText",
+  "formation", "flow", "style", "kinetic", "palette", "reactivityMode", "oscillation", "logoText",
   "pulseLayout", "count", "cameraMode", "trailType", "kaleido",
 ]);
 

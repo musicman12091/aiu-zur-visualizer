@@ -17,6 +17,19 @@ uniform float u_cameraZoom;   // ZUR-GH-009: pinch / wheel zoom 0.35..3.50 (scal
 uniform int u_colorPalette;   // 0 true-neon, 1 full-spectrum, 2 white-static, 3 crimson-pulse, 4 golden-cortex
 uniform float u_spectralCentroid;
 uniform float u_emission;       // ZUR-GH-013 reactivity emission (0.00 = true-gate silence, black)
+uniform float u_hueShift;       // ZUR-GH-014 universal palette Hue Shift (turns), same as render.frag.glsl
+
+vec3 hueRotate(vec3 c, float turns) {
+  if (abs(turns) < 1e-4) return c;
+  float a = turns * 6.28318530718;
+  float y = dot(c, vec3(0.2126, 0.7152, 0.0722));
+  float cb = c.b - y;
+  float cr = c.r - y;
+  float nr = y + (cb * sin(a) + cr * cos(a));
+  float nb = y + (cb * cos(a) - cr * sin(a));
+  float ng = (y - 0.2126 * nr - 0.0722 * nb) / 0.7152;
+  return max(vec3(nr, ng, nb), vec3(0.0));
+}
 
 out vec4 fragColor;
 
@@ -99,6 +112,7 @@ void main() {
     vec3 c1 = mix(c0, vec3(0.2542, 0.0242, 0.7605), smoothstep(0.34, 0.67, ramp));
     color = mix(c1, vec3(0.0, 1.0, 0.1329), smoothstep(0.67, 1.0, ramp));
   }
+  color = hueRotate(color, u_hueShift);
   color *= 0.35 + 0.8 * diffuse + 0.4 * u_bass;
   color += u_palette[4] * (rim * (0.25 + 0.5 * u_bass));
   float alpha = clamp(0.55 + rim * 0.35 + u_bass * 0.1, 0.0, 1.0);

@@ -38,6 +38,7 @@ uniform float u_highMid;
 uniform float u_bass;
 uniform float u_onset;
 uniform float u_spectralCentroid;
+uniform float u_hueShift;        // ZUR-GH-014 universal palette: Hue Shift (turns) applied to every engine
 
 out vec4 fragColor;
 
@@ -48,6 +49,8 @@ const float CORTEX_PULSE_BOOST = 3.2;
 const float LOGO_NEON_RADIANCE = 1.9;
 const float MEGA_SWARM_ALPHA = 0.35;
 const float CRISP_DOT_GAIN = 2.4;
+const float CRISP_DISC_GAIN = 0.55;     // ZUR-GH-014: the solid AA disc carries ~2.5x the energy of the old exp(-16 r2) core
+const float PULSE_NODE_GAIN = 1.3;     // ZUR-GH-014: pulse lattice nodes are sharp neon points (full-energy disc)
 const vec3 BRAIN_CRIMSON = vec3(1.0, 0.0024, 0.0090);       // #FF0818 in linear light
 const vec3 BRAIN_CRIMSON_DEEP = vec3(0.578, 0.0, 0.0030);   // #C8000A in linear light
 const vec3 BRAIN_SCARLET_FLASH = vec3(1.0, 0.0908, 0.1329); // #FF5566 in linear light (peak synapse flash only)
@@ -144,8 +147,11 @@ void shade() {
     vec2 p = v_local / headR;                    // head-normalised, +x = travel direction
     float r2 = dot(p, p);
     float head = r2 < 1.0 ? exp(-r2 * 16.0) : 0.0;
+    // ZUR-GH-014 crisp-dot (and the pulse lattice nodes): anti-aliased pinpoint disc, no Gaussian fog skirt.
+    bool disc = u_particleStyle == 0 || v_band >= 0.0;
+    if (disc) head = smoothstep(1.0, 0.50, sqrt(r2)) * (v_band >= 0.0 ? PULSE_NODE_GAIN : CRISP_DISC_GAIN);
     float tail = 0.0;
-    if (tailPx > 0.5 && p.x < 0.0) {
+    if (!disc && tailPx > 0.5 && p.x < 0.0) {
       float along = clamp(-v_local.x / tailPx, 0.0, 1.0);
       float across = p.y / 0.6;
       tail = (1.0 - along) * (1.0 - along) * exp(-across * across * 16.0) * step(-v_local.x, tailPx);
@@ -164,7 +170,7 @@ void shade() {
       outC = mix(base, flashC, 0.6) * shape * lum * sparkGate * 1.6;
     }
     // pinpoint hot centre (tiny white core, no blow-out)
-    outC += vec3(1.0) * exp(-r2 * 64.0) * step(r2, 1.0) * lum * 0.18 * sizeNorm * (v_spark > 0.5 ? 0.0 : 1.0);
+    if (!disc) outC += vec3(1.0) * exp(-r2 * 64.0) * step(r2, 1.0) * lum * 0.18 * sizeNorm * (v_spark > 0.5 ? 0.0 : 1.0);
     if (max(max(outC.r, outC.g), outC.b) < 1e-4) discard;
     fragColor = vec4(outC, 1.0);
     return;
@@ -204,8 +210,22 @@ void shade() {
   fragColor = vec4((dartColor * (0.4 + 0.6 * halo) + hot) * u_radianceScale * 4.0 * sqrt(crowdNorm) * energyNorm * logoBoost, 1.0);
 }
 
+// Luma-preserving hue rotation (turns), identical to palettes.js shiftPalette().
+vec3 hueRotate(vec3 c, float turns) {
+  if (abs(turns) < 1e-4) return c;
+  float a = turns * TAU;
+  float y = dot(c, vec3(0.2126, 0.7152, 0.0722));
+  float cb = c.b - y;
+  float cr = c.r - y;
+  float nr = y + (cb * sin(a) + cr * cos(a));
+  float nb = y + (cb * cos(a) - cr * sin(a));
+  float ng = (y - 0.2126 * nr - 0.0722 * nb) / 0.7152;
+  return max(vec3(nr, ng, nb), vec3(0.0));
+}
+
 void main() {
   shade();
+  fragColor.rgb = hueRotate(fragColor.rgb, u_hueShift);
   // ZUR-GH-012: the orbit swarm is a faint halo around the Mandelbulb core, never a fog bank in front of it.
   if (u_megastructure == 1) fragColor *= MEGA_SWARM_ALPHA;
 }

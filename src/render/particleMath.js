@@ -943,7 +943,7 @@ export const SYNAPSE_SPARK_FRACTION = 0.15;
 /** Spherical wormhole horn torus (sim.vert.glsl wormholeTarget). */
 export const WORMHOLE_SHELL_R = 0.94;
 export const WORMHOLE_THROAT_R = 0.08;
-export const WORMHOLE_TILT_DEG = 22;
+export const WORMHOLE_TILT_DEG = 38;  // ZUR-GH-014: 38 degrees toward the camera (was 22)
 export const WORMHOLE_SCALE = 2.6;
 export function wormholePoint(u, v) {
   const theta = u * Math.PI * 2;
@@ -982,3 +982,73 @@ export function paletteGradientT(radialNorm, depthNorm, speedNorm, centroid, jit
 export function cosinePalette(t, a, b, c, d) {
   return [0, 1, 2].map((i) => a[i] + b[i] * Math.cos(Math.PI * 2 * (c[i] * t + d[i])));
 }
+
+// ---- ZUR-GH-014 (v6.1) pinpoint clarity, viewport presence, geodesic wormhole (mirrors sim.vert / render.vert) ----
+
+/** Wormhole: 75% of agents ride 64 crisp geodesic meridian tracks over the N / S polar rims into the throat. */
+export const WORMHOLE_MERIDIANS = 64;
+export const WORMHOLE_TRACK_FRACTION = 0.75;
+/** Meridian track index for an agent hash h in [0, 1) (sim.vert.glsl wormholeTarget). */
+export function wormholeMeridian(h) {
+  return Math.min(WORMHOLE_MERIDIANS - 1, Math.floor(Math.max(0, h) * WORMHOLE_MERIDIANS));
+}
+
+/**
+ * Viewport presence: structured formations are scaled so that, at cameraZoom 1.0 on the 412x915 portrait, each spans
+ * 68-82% of the width (measured p1..p99 of the projected agents). The ticket's nominal 1.80x was measured against the
+ * live v6.0 baseline (51-92% at zoom 1.0, the 20% thumbnails came from saved zooms < 0.75), so each factor is sized
+ * to the target span instead of a flat 1.80x (which would push wormhole / brain to ~95% and gargantua off-screen).
+ */
+export const PRESENCE_SCALE = Object.freeze({
+  wormhole: 1.48,
+  "neural-brain": 1.62,
+  "supermassive-blackhole": 1.0,
+  "harmonic-ferrofluid": 1.0,
+  "living-galaxy": 1.0,
+  "logo-attractor": 1.2,
+});
+export const PRESENCE_SPAN_TARGET = Object.freeze([0.68, 0.82]);
+export const PRESENCE_SPAN_GATE = Object.freeze([0.58, 0.88]);
+export function presenceScale(formationType) {
+  return PRESENCE_SCALE[formationType] ?? 1;
+}
+
+/** Smooth spherical containment (sim.vert.glsl containRadial): soft spring from R_SOFT, hard smooth cap at R_MAX. */
+export const CONTAIN_R_SOFT = 8.0;
+export const CONTAIN_R_MAX = 9.0;
+export function containRadius(r) {
+  if (!(r > CONTAIN_R_SOFT)) return r;
+  const band = CONTAIN_R_MAX - CONTAIN_R_SOFT;
+  return CONTAIN_R_SOFT + band * Math.tanh((r - CONTAIN_R_SOFT) / band);
+}
+
+/** Surface formations: Flow turbulence becomes a <= 0.035 x radius surface-tangent drift (any Flow mode). */
+export const SURFACE_FORMATIONS = Object.freeze([
+  "wormhole", "neural-brain", "logo-attractor", "supermassive-blackhole", "harmonic-ferrofluid",
+]);
+export const SURFACE_TURBULENCE_CAP = 0.035;
+/** Caps a flow force F (vec3) to its tangent part with |F_t| <= cap * radius * pull; returns the capped vector. */
+export function capSurfaceTurbulence(force, normal, radius, pull) {
+  const n = Math.hypot(normal[0], normal[1], normal[2]) || 1;
+  const nx = normal[0] / n; const ny = normal[1] / n; const nz = normal[2] / n;
+  const d = force[0] * nx + force[1] * ny + force[2] * nz;
+  const t = [force[0] - d * nx, force[1] - d * ny, force[2] - d * nz];
+  const len = Math.hypot(t[0], t[1], t[2]);
+  const max = SURFACE_TURBULENCE_CAP * Math.max(radius, 1) * pull;
+  return len > max ? t.map((v) => (v * max) / len) : t;
+}
+
+/** crisp-dot: anti-aliased disc smoothstep(1.0, 0.50, r) (no Gaussian skirt), 1.4 px @ 64k -> 0.95 px @ 256k. */
+export const CRISP_DOT_RADIUS_64K = 1.4;
+export const CRISP_DOT_RADIUS_256K = 0.95;
+export function crispDotRadiusPx(activeCount) {
+  const t = Math.min(1, Math.max(0, Math.log2(Math.max(activeCount, 1) / 65536) / 2));
+  return CRISP_DOT_RADIUS_64K + (CRISP_DOT_RADIUS_256K - CRISP_DOT_RADIUS_64K) * t;
+}
+export function crispDotDisc(r) {
+  const t = Math.min(1, Math.max(0, (r - 1.0) / (0.5 - 1.0)));
+  return t * t * (3 - 2 * t);
+}
+
+/** Pulse Field lattice node budgets (render.vert.glsl pulseLatticeNode); extra instances are culled. */
+export const PULSE_LATTICE = Object.freeze({ cloudGrid: 13, sphereNodes: 4000, waveGrid: 72 });
